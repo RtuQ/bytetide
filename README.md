@@ -8,6 +8,13 @@
 
 Tauri 2 + Vue 3 + Rust 构建：安装包小、启动快、内存占用低，完全离线运行，不依赖任何云服务。
 
+## 预览
+
+<p align="center">
+  <img src="docs/preview-light.png" alt="ByteTide 浅色主题" width="49%" />
+  <img src="docs/preview-dark.png" alt="ByteTide 深色主题" width="49%" />
+</p>
+
 ---
 
 ## 它能帮你做什么？

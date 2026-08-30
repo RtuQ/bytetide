@@ -8,6 +8,13 @@ A **serial / network log debugging workbench** for embedded developers. Every li
 
 Built with Tauri 2 + Vue 3 + Rust: small binaries, fast startup, low memory, fully offline — no cloud services involved.
 
+## Preview
+
+<p align="center">
+  <img src="docs/preview-light.png" alt="ByteTide light theme" width="49%" />
+  <img src="docs/preview-dark.png" alt="ByteTide dark theme" width="49%" />
+</p>
+
 ---
 
 ## What can it do for you?
