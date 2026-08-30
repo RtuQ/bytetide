@@ -8,9 +8,8 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    # 当前仅发免安装版（裸 exe + zip）；安装版稳定后：
-    # 1) 去掉 --no-bundle   2) 收集产物里加 bundle/nsis/*.exe   3) files: 里追加安装包
+  build-windows:
+    # Windows：裸 exe 直接挂到 release，不打包 zip
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,10 +35,9 @@ jobs:
       - name: Build app
         run: npx tauri build --no-bundle
 
-      - name: Collect artifacts
+      - name: Collect artifact
         shell: pwsh
         run: |
-          $v = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
           # 裸 exe 名称取决于 Cargo 包名或 productName，两个都探一下
           $exe = if (Test-Path "src-tauri/target/release/ByteTide.exe") {
             "src-tauri/target/release/ByteTide.exe"
@@ -47,12 +45,60 @@ jobs:
             "src-tauri/target/release/serial_tool.exe"
           }
           Copy-Item $exe ByteTide.exe
-          Copy-Item scripts/portable-README.txt README.txt
-          Compress-Archive -Path ByteTide.exe, README.txt -DestinationPath "ByteTide_${v}_x64-portable.zip"
-          Remove-Item ByteTide.exe, README.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: ByteTide.exe
+          if-no-files-found: error
+
+  build-macos:
+    # macOS：仅 Apple Silicon（arm64）版——macos-15 运行器本身就是 aarch64，
+    # 不做 universal 双架构；产物为 DMG（非 zip）
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+
+      - name: Install JS deps
+        run: npm ci
+
+      - name: Build app
+        run: npx tauri build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64-dmg
+          path: src-tauri/target/release/bundle/dmg/ByteTide_*_aarch64.dmg
+          if-no-files-found: error
+
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
 
       - name: Create draft release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          files: ByteTide_*_x64-portable.zip
+          files: dist/*
