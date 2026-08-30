@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/icon.png" />
+    <link rel="apple-touch-icon" href="/icon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ByteTide · 字节潮</title>
+    <script>
+      // 在 CSS 加载前根据持久化主题设置 data-theme，避免首屏主题闪烁
+      // 默认浅色（白）；仅当显式存过 dark 才用深色
+      (function () {
+        try {
+          var t = localStorage.getItem('serialtool.theme');
+          document.documentElement.dataset.theme = t === 'dark' ? 'dark' : 'light';
+        } catch (e) {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script>
+    <style>
+      html[data-theme='light'] body { background: #f1f5f9; margin: 0; }
+      html:not([data-theme='light']) body { background: #0b1220; margin: 0; }
+    </style>
+  </head>
+
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

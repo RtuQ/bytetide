@@ -1,0 +1,9 @@
+# Normalize line endings: text files use LF in the repo and working tree
+* text=auto eol=lf
+
+# Treat these as binary (never diff/normalize)
+*.png binary
+*.ico binary
+*.icns binary
+*.exe binary
+*.msi binary

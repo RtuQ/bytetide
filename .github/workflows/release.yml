@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # 当前仅发免安装版（裸 exe + zip）；安装版稳定后：
+    # 1) 去掉 --no-bundle   2) 收集产物里加 bundle/nsis/*.exe   3) files: 里追加安装包
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+
+      - name: Install JS deps
+        run: npm ci
+
+      # --no-bundle：跳过 NSIS/MSI 打包，只编译裸 exe
+      - name: Build app
+        run: npx tauri build --no-bundle
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          $v = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          # 裸 exe 名称取决于 Cargo 包名或 productName，两个都探一下
+          $exe = if (Test-Path "src-tauri/target/release/ByteTide.exe") {
+            "src-tauri/target/release/ByteTide.exe"
+          } else {
+            "src-tauri/target/release/serial_tool.exe"
+          }
+          Copy-Item $exe ByteTide.exe
+          Copy-Item scripts/portable-README.txt README.txt
+          Compress-Archive -Path ByteTide.exe, README.txt -DestinationPath "ByteTide_${v}_x64-portable.zip"
+          Remove-Item ByteTide.exe, README.txt
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: ByteTide_*_x64-portable.zip

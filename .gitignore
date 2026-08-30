@@ -1,0 +1,61 @@
+# Logs
+logs
+*.log
+# 演示样例日志是交付物，不随 *.log 忽略
+!sample-data/*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Dependencies & build output
+node_modules
+dist
+dist-ssr
+*.local
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+*.tsbuildinfo
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor / IDE
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Local AI assistant tool configs (personal, not part of the project)
+.agent/
+.claude/
+.codebuddy/
+.codex/
+.continue/
+.cursor/
+.gemini/
+.kiro/
+.opencode/
+.qoder/
+.roo/
+.trae/
+.windsurf/
+.github/prompts/
+
+# ZCode workspace config (local only; the bridge skill deliverable lives in skills/)
+.zcode/*
+
+# Internal planning docs (not for public release)
+docs/*-plan.md
+
+# 源码打包产物
+serial-tool-*-src.zip

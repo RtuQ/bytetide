@@ -1,0 +1,156 @@
+mod bridge;
+mod commands;
+mod logfmt;
+mod serial;
+mod session;
+mod state;
+
+use single_instance::SingleInstance;
+use tauri::Manager;
+
+use crate::state::AppState;
+
+/// Windows：显式退出进程级能效限流（EcoQoS）。
+/// 后台/锁屏时系统默认把窗口化进程降入节能队列，IPC/事件派发会被推迟到
+/// 数十秒级——长挂监控场景表现为“日志不实时”。StateMask=0 即禁用该限流。
+#[cfg(windows)]
+fn disable_power_throttling() -> bool {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, SetProcessInformation, ProcessPowerThrottling,
+        PROCESS_POWER_THROTTLING_STATE,
+    };
+    const CURRENT_VERSION: u32 = 1;
+    const EXECUTION_SPEED: u32 = 0x1;
+    let mut info = PROCESS_POWER_THROTTLING_STATE {
+        Version: CURRENT_VERSION,
+        ControlMask: EXECUTION_SPEED,
+        StateMask: 0,
+    };
+    unsafe {
+        SetProcessInformation(
+            GetCurrentProcess(),
+            ProcessPowerThrottling,
+            &mut info as *mut _ as *mut core::ffi::c_void,
+            std::mem::size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
+        ) != 0
+    }
+}
+
+#[cfg(not(windows))]
+fn disable_power_throttling() -> bool {
+    true
+}
+
+/// WebView2（Chromium）对“无交互页面”有独立于 EcoQoS 的深度节流：
+/// 数分钟无输入后 timer/task 降到约每分钟一次（实测前端每 60s 醒一次、
+/// 每批只处理 1-5 行，而后端 ring 同期正常推进）。必须在 WebView2
+/// 环境创建前设 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS 才能生效。
+fn disable_webview_background_throttle() {
+    #[cfg(windows)]
+    {
+        // intensive-wake-up-throttling=5 分钟级节流；CalculateNativeWinOcclusion
+        // 会把被遮挡窗口当不可见再叠加冻结。都不影响前台性能。
+        let args = "--disable-intensive-wake-up-throttling --disable-features=CalculateNativeWinOcclusion";
+        // 已有用户参数时追加，不覆盖外部诊断配置
+        let prev = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default();
+        let merged = if prev.is_empty() {
+            args.to_string()
+        } else if prev.contains("intensive-wake-up-throttling") {
+            prev
+        } else {
+            format!("{prev} {args}")
+        };
+        std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", merged);
+    }
+    #[cfg(not(windows))]
+    {}
+}
+
+/// 后端诊断心跳：每 10s 把各 live 会话 ring 末行时间戳落后墙钟的毫秒数
+/// 追加到 app_data/perf-heartbeat.log。完全在后端线程，不依赖前端事件循环--
+/// 前端卡死时仍能持续记录“后端视角的滞后”，事后直接看文件即可定位
+/// （分界：后端滞后=读线程/IO 被节流；后端 0 滞后而前端滞后=WebView 积压）。
+/// 启动即调用，内部同时完成 EcoQoS 限流的退出并把结果写进首行。
+fn start_perf_heartbeat(app: &tauri::AppHandle) {
+    use std::io::Write as _;
+
+    let ecoqos_off = disable_power_throttling();
+    let Ok(dir) = app.path().app_data_dir() else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("perf-heartbeat.log");
+    let Ok(mut w) = std::fs::OpenOptions::new().create(true).append(true).open(&path) else {
+        return;
+    };
+    let _ = writeln!(
+        w,
+        "# heartbeat start {} ecoqos_disabled={}",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+        ecoqos_off
+    );
+
+    let app = app.clone();
+    std::thread::Builder::new()
+        .name("perf-heartbeat".into())
+        .spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            let Some(state) = app.try_state::<AppState>() else { continue };
+            let now = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
+            for (id, lag_ms, len, rx_lines) in state.manager.perf_snapshot() {
+                let _ = writeln!(w, "{now} s={id} lag={lag_ms}ms ring={len} rx={rx_lines}");
+            }
+            let _ = w.flush();
+        })
+        .expect("spawn perf-heartbeat thread");
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    // 必须在任何窗口/WebView 创建之前：关闭 WebView2 后台深度节流
+    disable_webview_background_throttle();
+
+    // 单实例：若已有实例运行则静默退出；锁创建失败则放行，不阻断启动
+    let instance = SingleInstance::new("serial_tool-single-instance-lock");
+    if let Ok(ref i) = instance {
+        if !i.is_single() {
+            return;
+        }
+    }
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
+        .manage(AppState {
+            manager: serial::PortManager::new(),
+        })
+        .setup(|app| {
+            let handle = app.handle().clone();
+            serial::hotplug::start_hotplug(handle);
+            start_perf_heartbeat(app.handle());
+            // REST 分析桥：按持久化配置自启（默认关，需在前端启用）
+            app.manage(bridge::BridgeController::init(app.handle().clone()));
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::list_ports_cmd,
+            commands::connect_cmd,
+            commands::disconnect_cmd,
+            commands::send_cmd,
+            commands::clear_log_cmd,
+            commands::session_log_path_cmd,
+            commands::export_text_cmd,
+            commands::append_perf_diag_cmd,
+            commands::ring_lines_cmd,
+            commands::read_text_file_cmd,
+            commands::create_offline_session_cmd,
+            commands::bridge_get_config_cmd,
+            commands::bridge_set_config_cmd,
+            commands::bridge_regen_token_cmd,
+            commands::set_plot_config_cmd,
+            commands::bridge_sync_bookmarks_cmd,
+            commands::bridge_sync_alerts_cmd,
+            commands::bridge_sync_annotations_cmd,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}

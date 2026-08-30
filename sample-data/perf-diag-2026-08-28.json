@@ -1,0 +1,104 @@
+{
+  "exportedAt": 1787910565560,
+  "entries": [
+    {
+      "at": 1787910549909,
+      "kind": "lag",
+      "sessionId": "s2",
+      "lagMs": 95072,
+      "batchMs": 4,
+      "lines": 1,
+      "vis": "visible"
+    },
+    {
+      "at": 1787910489834,
+      "kind": "lag",
+      "sessionId": "s2",
+      "lagMs": 90010,
+      "batchMs": 5,
+      "lines": 1,
+      "vis": "visible"
+    },
+    {
+      "at": 1787910429654,
+      "kind": "lag",
+      "sessionId": "s2",
+      "lagMs": 83328,
+      "batchMs": 5,
+      "lines": 1,
+      "vis": "visible"
+    },
+    {
+      "at": 1787910369587,
+      "kind": "lag",
+      "sessionId": "s2",
+      "lagMs": 73853,
+      "batchMs": 4,
+      "lines": 1,
+      "vis": "visible"
+    },
+    {
+      "at": 1787910309493,
+      "kind": "lag",
+      "sessionId": "s2",
+      "lagMs": 74018,
+      "batchMs": 5,
+      "lines": 3,
+      "vis": "visible"
+    },
+    {
+      "at": 1787910249431,
+      "kind": "lag",
+      "sessionId": "s2",
+      "lagMs": 64308,
+      "batchMs": 17,
+      "lines": 1,
+      "vis": "visible"
+    },
+    {
+      "at": 1787910189316,
+      "kind": "lag",
+      "sessionId": "s2",
+      "lagMs": 44959,
+      "batchMs": 6,
+      "lines": 1,
+      "vis": "visible"
+    },
+    {
+      "at": 1787910129232,
+      "kind": "lag",
+      "sessionId": "s2",
+      "lagMs": 25097,
+      "batchMs": 5,
+      "lines": 2,
+      "vis": "visible"
+    },
+    {
+      "at": 1787910069119,
+      "kind": "lag",
+      "sessionId": "s2",
+      "lagMs": 16490,
+      "batchMs": 3,
+      "lines": 1,
+      "vis": "visible"
+    },
+    {
+      "at": 1787910009073,
+      "kind": "lag",
+      "sessionId": "s2",
+      "lagMs": 10433,
+      "batchMs": 5,
+      "lines": 1,
+      "vis": "visible"
+    },
+    {
+      "at": 1787909948943,
+      "kind": "lag",
+      "sessionId": "s2",
+      "lagMs": 2096,
+      "batchMs": 4,
+      "lines": 5,
+      "vis": "visible"
+    }
+  ]
+}
