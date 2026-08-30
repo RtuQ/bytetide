@@ -103,6 +103,39 @@ fn start_perf_heartbeat(app: &tauri::AppHandle) {
         .expect("spawn perf-heartbeat thread");
 }
 
+/// macOS：无边框窗口（decorations:false）不走系统窗口框，四角是直角。
+/// 给 contentView 的 layer 设圆角裁剪，并把窗口背景置透明，
+/// 直角外区域透出桌面；窗口阴影仍由系统按内容形状绘制。
+#[cfg(target_os = "macos")]
+fn round_window_corners(window: &tauri::WebviewWindow) {
+    use objc2::{class, msg_send, runtime::AnyObject};
+
+    const CORNER_RADIUS: f64 = 16.0; // 比系统默认（约 10）更明显
+
+    let Ok(ns_window) = window.ns_window() else {
+        return;
+    };
+    unsafe {
+        let win = ns_window as *mut AnyObject;
+        let content: *mut AnyObject = msg_send![win, contentView];
+        if content.is_null() {
+            return;
+        }
+        // contentView 走 layer-backed 渲染，圆角由 layer 裁剪生效
+        let () = msg_send![content, setWantsLayer: true];
+        let layer: *mut AnyObject = msg_send![content, layer];
+        if layer.is_null() {
+            return;
+        }
+        let () = msg_send![layer, setCornerRadius: CORNER_RADIUS];
+        let () = msg_send![layer, setMasksToBounds: true];
+        // 窗口背景透明，圆角外不再是窗口底色方块
+        let clear: *mut AnyObject = msg_send![class!(NSColor), clearColor];
+        let () = msg_send![win, setBackgroundColor: clear];
+        let () = msg_send![win, setOpaque: false];
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 必须在任何窗口/WebView 创建之前：关闭 WebView2 后台深度节流
@@ -129,6 +162,11 @@ pub fn run() {
             start_perf_heartbeat(app.handle());
             // REST 分析桥：按持久化配置自启（默认关，需在前端启用）
             app.manage(bridge::BridgeController::init(app.handle().clone()));
+            // macOS 无边框窗口补系统级圆角（仅主窗口，应用为单窗口结构）
+            #[cfg(target_os = "macos")]
+            if let Some(win) = app.get_webview_window("main") {
+                round_window_corners(&win);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
