@@ -96,6 +96,20 @@ describe('appendMissing 补拉去重', () => {
     expect(store.sessions[id]!.pulledThrough).toBe(0)
   })
 
+  it('clearLog 归零 droppedLines（清屏后旧缺口已无意义）', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('local-drop', CFG)
+    // 超出前端缓冲上限（50000），制造 10 行丢弃
+    const batch = Array.from({ length: 50010 }, (_, i) => mkRaw(i + 1))
+    store.appendLines(id, batch)
+    expect(store.sessions[id]!.droppedLines).toBe(10)
+    await store.clearLog(id)
+    expect(store.sessions[id]!.droppedLines).toBe(0)
+    // 清屏后继续写入，重新从 0 累计
+    store.appendLines(id, [mkRaw(99999)])
+    expect(store.sessions[id]!.droppedLines).toBe(0)
+  })
+
   it('建账竞态：会话未落账时的状态先暂存、落账后回放', () => {
     const store = useSessionStore()
     // 模拟后端线程抢先：connected 在会话存在前到达

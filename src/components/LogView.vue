@@ -357,7 +357,7 @@ onBeforeUnmount(() => {
       <span
         v-if="session.droppedLines"
         class="drop-note"
-        title="前端缓冲上限 50000 行，超出即从最旧行开始丢弃（本会话累计）"
+        title="前端缓冲上限 50000 行，超出即从最旧行开始丢弃（自连接或上次清屏起累计）"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 20h16a2 2 0 0 0 1.73-2Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
         已丢弃 {{ session.droppedLines.toLocaleString() }} 行

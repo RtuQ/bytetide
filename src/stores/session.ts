@@ -540,8 +540,11 @@ export const useSessionStore = defineStore('session', {
       s.lines = []
       s.lineCounter = 0
       s.pulledThrough = 0
-      // 行号已从 1 重新计数，旧书签全部失义，一并清空（droppedLines 为累计语义，保留）
+      // 行号已从 1 重新计数，旧书签全部失义，一并清空
       s.bookmarks = []
+      // 丢弃计数与"当前视图缺口"绑定：清屏后缓冲从头开始，旧缺口已无意义，
+      // 归零避免让人误以为当前日志仍缺数据（重连迁移保留，因日志行本身被带走）
+      s.droppedLines = 0
       // AI 批注锚定行号，同样失义：本地清空并同步后端镜像
       s.aiNotes = []
       invoke('bridge_sync_annotations_cmd', { sessionId: id, annotations: [] }).catch(() => {})
