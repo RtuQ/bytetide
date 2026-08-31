@@ -6,6 +6,7 @@ import { save } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore } from '../stores/session'
 import { HIGHLIGHTER_KEY, buildTestMatcher, hlStyle } from '../composables/useHighlighter'
+import { parseAnsi, stripAnsi, type AnsiStyle } from '../composables/useAnsi'
 import { useRate, humanizeBytes, humanizeMs } from '../composables/useRate'
 import type { LogLine } from '../types'
 
@@ -14,6 +15,34 @@ const store = useSessionStore()
 const session = computed(() => store.sessions[props.sessionId] ?? null)
 
 const { stats, segmentsFor } = inject(HIGHLIGHTER_KEY)!
+
+// 行渲染分段：先按 ANSI SGR 样式切游程，游程内再叠加搜索/关键词高亮
+// （高亮优先：hlStyle 自带前景+背景+加粗；无高亮时用 ANSI 的 fg/bg/bold）
+interface RowSeg {
+  text: string
+  hl: string | null
+  ansi: AnsiStyle | null
+}
+function rowSegments(text: string): RowSeg[] {
+  const runs = parseAnsi(text)
+  const out: RowSeg[] = []
+  for (const run of runs) {
+    for (const cs of segmentsFor(run.text)) {
+      out.push({ text: cs.text, hl: cs.color, ansi: run.style })
+    }
+  }
+  return out
+}
+function segStyle(seg: RowSeg) {
+  if (seg.hl) return hlStyle(seg.hl)
+  const a = seg.ansi
+  if (!a) return undefined
+  const st: Record<string, string | number> = {}
+  if (a.fg) st.color = a.fg
+  if (a.bg) st.background = a.bg
+  if (a.bold) st.fontWeight = 700
+  return Object.keys(st).length ? st : undefined
+}
 const matchSet = computed(() => new Set(stats.value.matchLines))
 // 显示行集：先过过滤链（include/exclude 与“搜索”独立），再叠加“只看命中”
 const viewItems = computed(() => {
@@ -61,7 +90,9 @@ const recomputeRowMinWidth = useThrottleFn(
     let m = 0
     const items = viewItems.value
     for (let i = 0; i < items.length; i++) {
-      const len = items[i]!.text.length
+      const t = items[i]!.text
+      // 含 ANSI 序列的行按剥离后的显示长度估宽（守卫先行走快速路径，避免全量正则）
+      const len = t.indexOf('\x1b') === -1 ? t.length : stripAnsi(t).length
       if (len > m) m = len
     }
     const chars = Math.min(hexView.value ? m * 3 + 2 : m, 20000)
@@ -340,9 +371,9 @@ onBeforeUnmount(() => {
           <span v-if="hexView" class="hex">{{ hexDump(item.text) }}</span>
           <template v-else>
             <span
-              v-for="(seg, i) in segmentsFor(item.text)"
+              v-for="(seg, i) in rowSegments(item.text)"
               :key="i"
-              :style="seg.color ? hlStyle(seg.color) : undefined"
+              :style="segStyle(seg)"
               >{{ seg.text }}</span
             >
           </template>
