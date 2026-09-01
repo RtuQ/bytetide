@@ -763,6 +763,20 @@ struct FilterSpec {
     until_ms: Option<u64>,
 }
 
+impl FilterSpec {
+    /// 请求未携带任何过滤字段：/follow 据此走旧行为路径（不加 filterLimit）。
+    fn is_noop(&self) -> bool {
+        self.dir.is_none()
+            && self.qs.is_empty()
+            && self.re.is_none()
+            && self.hex.is_empty()
+            && self.mask.is_empty()
+            && self.exclude.is_none()
+            && self.since_ms.is_none()
+            && self.until_ms.is_none()
+    }
+}
+
 fn build_filter(f: &FilterFields) -> Result<FilterSpec, (StatusCode, String)> {
     let dir = match f.dir.as_deref() {
         Some("rx") => Some(Dir::Rx),
@@ -1141,11 +1155,44 @@ fn select_lines<'a>(filt: &'a [BridgeLine], p: &LinesParams) -> Vec<&'a BridgeLi
 
 // =============================== /follow ===============================
 
+/// follow 过滤批次：施加 FilterSpec 与 filterLimit，返回 (返回行, truncated, lastNo)。
+/// - 未截断：lastNo = high（扫描高水位，**含未匹配行**——客户端 sinceNo 据此前进过
+///   不匹配行，否则游标永不前进会无限重扫同一段）
+/// - 截断：lastNo = 最后一条**返回行**的 no，未消费区间留给下一轮
+fn filter_follow_batch(
+    lines: Vec<BridgeLine>,
+    f: &FilterSpec,
+    limit: usize,
+    high: u64,
+) -> (Vec<BridgeLine>, bool, u64) {
+    let mut matched = Vec::new();
+    for l in lines {
+        if let Some(hit) = apply_filter(&l, f) {
+            let mut bl = l;
+            bl.r#match = hit;
+            matched.push(bl);
+        }
+    }
+    if matched.len() <= limit {
+        return (matched, false, high);
+    }
+    let last_no = matched[limit - 1].no;
+    matched.truncate(limit);
+    (matched, true, last_no)
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FollowParams {
     since_no: Option<u64>,
     timeout_ms: Option<u64>,
+    /// 服务端过滤：与 /lines 同一套 FilterFields（re/q/dir/exclude/hex/mask/ci/时间窗）。
+    /// 无任何过滤字段时走旧行为（响应逐字节不变，不施加 filterLimit）。
+    #[serde(flatten)]
+    filter: FilterFields,
+    /// 单次响应最多返回的匹配行数（默认 500，上限同 /lines 的 MAX_LIMIT）；
+    /// 截断时 truncated=true 且 lastNo=最后一条返回行的 no。
+    filter_limit: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -1154,6 +1201,7 @@ struct FollowPage {
     lines: Vec<BridgeLine>,
     last_no: u64,
     timed_out: bool,
+    truncated: bool,
 }
 
 async fn follow(
@@ -1162,27 +1210,56 @@ async fn follow(
     Query(p): Query<FollowParams>,
 ) -> Response {
     let since = p.since_no.unwrap_or(0);
+    let f = match build_filter(&p.filter) {
+        Ok(x) => x,
+        Err(e) => return e.into_response(),
+    };
+    // 无过滤字段：旧行为逐字节不变（含不施加 filterLimit）
+    let noop = f.is_noop();
+    let limit = p.filter_limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let timeout = std::time::Duration::from_millis(p.timeout_ms.unwrap_or(5000).min(30_000));
     let deadline = tokio::time::Instant::now() + timeout;
+    // 本地扫描游标：过滤路径下每轮空转后推进到高水位、只扫增量。
+    // 若固定 since 每 50ms 重扫全窗口，高吞吐下 15s 超时最多 20k 行 × 数百次迭代。
+    // 单调推进（不回退）：ring 清空后 lastNo 归 0 的瞬间不丢游标。
+    let mut scanned = since;
     loop {
-        if let Some((lines, last_no)) = ctx.app.state::<AppState>().manager.bridge_follow(&id, since) {
-            if !lines.is_empty() {
-                return Json(FollowPage {
-                    lines,
-                    last_no,
-                    timed_out: false,
-                })
-                .into_response();
+        if let Some((lines, high)) = ctx.app.state::<AppState>().manager.bridge_follow(&id, scanned) {
+            if noop {
+                if !lines.is_empty() {
+                    return Json(FollowPage {
+                        lines,
+                        last_no: high,
+                        timed_out: false,
+                        truncated: false,
+                    })
+                    .into_response();
+                }
+            } else {
+                let (batch, truncated, last_no) = filter_follow_batch(lines, &f, limit, high);
+                if !batch.is_empty() {
+                    return Json(FollowPage {
+                        lines: batch,
+                        last_no,
+                        timed_out: false,
+                        truncated,
+                    })
+                    .into_response();
+                }
+            }
+            if high > scanned {
+                scanned = high;
             }
         } else {
             return (StatusCode::NOT_FOUND, "session not found").into_response();
         }
         if tokio::time::Instant::now() >= deadline {
-            let last_no = ctx.app.state::<AppState>().manager.bridge_follow(&id, since).map(|(_, n)| n).unwrap_or(0);
+            let last_no = ctx.app.state::<AppState>().manager.bridge_follow(&id, scanned).map(|(_, n)| n).unwrap_or(0);
             return Json(FollowPage {
                 lines: vec![],
                 last_no,
                 timed_out: true,
+                truncated: false,
             })
             .into_response();
         }
@@ -2606,5 +2683,105 @@ mod tests {
         assert_eq!(all.len(), 5);
         assert_eq!(all[0].id, "o2"); // 7 条裁到 5：最旧的 o0、o1 被丢弃
         assert_eq!(all.last().unwrap().id, "n13");
+    }
+
+    // ---------------- /follow 服务端过滤 ----------------
+
+    fn mk_ff(re: Option<&str>, dir: Option<&str>, exclude: Option<&str>) -> FilterFields {
+        FilterFields {
+            re: re.map(Into::into),
+            dir: dir.map(Into::into),
+            exclude: exclude.map(Into::into),
+            ..Default::default()
+        }
+    }
+
+    fn mk_batch(nos: &[u64], text: &str) -> Vec<BridgeLine> {
+        nos.iter()
+            .map(|&n| mk_line(n, Dir::Rx, text, None, n * 1000))
+            .collect()
+    }
+
+    #[test]
+    fn follow_filter_noop_passes_all_and_keeps_high() {
+        // 用例 1 的纯函数投影：无过滤字段 → 全行返回、lastNo=高水位、不截断
+        let spec = build_filter(&FilterFields::default()).ok().unwrap();
+        assert!(spec.is_noop());
+        let (batch, truncated, last_no) =
+            filter_follow_batch(mk_batch(&[3, 4, 5], "any"), &spec, 500, 5);
+        assert_eq!(batch.len(), 3);
+        assert!(!truncated);
+        assert_eq!(last_no, 5);
+    }
+
+    #[test]
+    fn follow_filter_zero_match_returns_empty_but_advances() {
+        // 用例 2：零匹配 → 空行集，lastNo 仍推进到高水位（防 livelock）
+        let spec = build_filter(&mk_ff(Some("error"), None, None)).ok().unwrap();
+        assert!(!spec.is_noop());
+        let (batch, truncated, last_no) =
+            filter_follow_batch(mk_batch(&[3, 4, 5], "heartbeat ok"), &spec, 500, 5);
+        assert!(batch.is_empty());
+        assert!(!truncated);
+        assert_eq!(last_no, 5);
+    }
+
+    #[test]
+    fn follow_filter_truncated_lastno_is_last_returned_line() {
+        // 用例 3：全匹配超 filterLimit → truncated、lastNo=最后一条返回行的 no
+        let spec = build_filter(&mk_ff(Some("beat"), None, None)).ok().unwrap();
+        let (batch, truncated, last_no) =
+            filter_follow_batch(mk_batch(&[1, 2, 3, 4, 5], "heartbeat"), &spec, 2, 5);
+        assert_eq!(batch.iter().map(|l| l.no).collect::<Vec<_>>(), vec![1, 2]);
+        assert!(truncated);
+        assert_eq!(last_no, 2); // 未消费的 3..=5 留给下一轮
+    }
+
+    #[test]
+    fn follow_filter_exactly_at_limit_not_truncated() {
+        // 边界：匹配数 == limit → 不截断，lastNo = 高水位
+        let spec = build_filter(&mk_ff(Some("beat"), None, None)).ok().unwrap();
+        let (batch, truncated, last_no) =
+            filter_follow_batch(mk_batch(&[1, 2], "heartbeat"), &spec, 2, 2);
+        assert_eq!(batch.len(), 2);
+        assert!(!truncated);
+        assert_eq!(last_no, 2);
+    }
+
+    #[test]
+    fn follow_filter_regex_inline_case_insensitive() {
+        // 用例 5：(?i) 行内 flag 对 text 生效（小写 error 命中大写 ERROR）
+        let spec = build_filter(&mk_ff(Some("(?i)error"), None, None)).ok().unwrap();
+        let lines = vec![
+            mk_line(1, Dir::Rx, "ERROR found", None, 1000),
+            mk_line(2, Dir::Rx, "all good", None, 2000),
+        ];
+        let (batch, _, _) = filter_follow_batch(lines, &spec, 500, 2);
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].no, 1);
+    }
+
+    #[test]
+    fn follow_filter_dir_and_exclude_vocabulary() {
+        // 全套词汇：dir 定向 + exclude 排噪（OTA 场景：只要 tx 且排除心跳）
+        let spec = build_filter(&mk_ff(None, Some("tx"), Some("HEARTBEAT")))
+            .ok()
+            .unwrap();
+        let mut lines = vec![
+            mk_line(1, Dir::Tx, "OTA chunk 12", None, 1000),
+            mk_line(2, Dir::Tx, "HEARTBEAT 3000ms", None, 2000),
+            mk_line(3, Dir::Rx, "OTA chunk ack", None, 3000),
+        ];
+        let (batch, _, last_no) = filter_follow_batch(std::mem::take(&mut lines), &spec, 500, 3);
+        assert_eq!(batch.iter().map(|l| l.no).collect::<Vec<_>>(), vec![1]);
+        assert_eq!(last_no, 3); // 未匹配行 2/3 也计入高水位
+    }
+
+    #[test]
+    fn follow_filter_bad_regex_rejected_by_build_filter() {
+        // 用例 4：非法正则在 build_filter 即被拒（handler 转 400 + 编译错误）
+        let err = build_filter(&mk_ff(Some("(unclosed"), None, None)).err().unwrap();
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(err.1.contains("invalid regex"));
     }
 }
