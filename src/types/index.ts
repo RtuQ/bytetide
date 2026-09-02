@@ -79,11 +79,6 @@ export interface AutoReplyState {
   rules: AutoReplyRule[]
 }
 
-export interface LogPayload {
-  sessionId: string
-  lines: RawLogLine[]
-}
-
 /** 离线日志解析结果：成功行 + 统计 */
 export interface ParsedLog {
   lines: RawLogLine[]

@@ -7,102 +7,124 @@ import type {
   AiAnnotation,
   ErrorPayload,
   LogLine,
-  LogPayload,
   PlotConfig,
   PortInfo,
   StatusPayload,
 } from '../types'
 
-/** 自愈补拉：事件派发被深度节流推迟时（后端正常、前端滞后），直接从后端
- *  ring 拉缺失行补齐，不等事件补投。仅真饿死（滞后>30s）才拉--普通赤字
- *  （GC/瞬时负载/搜索扫描吃掉部分吞吐）事件队列会自行排空，提前拉只会
- *  引入迟到重复行（虽有水位去重兜底）；带 5s 冷却。失败静默。 */
-const PULL_LAG_MS = 30_000
-const PULL_COOLDOWN_MS = 5000
-let lastPullAt = 0
+/**
+ * 拉模型视图通道：后端 ring 是唯一真相（`no` 游标单调递增、清屏不回退），
+ * 前端按固定节奏拉 delta 入表。渲染进程不再需要"跟上"任何事件流——
+ * 被节流/被调度饥饿时，醒来一次拉齐即收敛，滞后上限=一个拉取周期。
+ *
+ * 历史：曾用 40ms 推事件流，WebView2 渲染进程被高频小事件挤占调度后，
+ * 消费速率跌破生产速率形成死亡螺旋（实测积压 15 分钟、tick 饿到 48s），
+ * 故整体倒转为拉（取证数据见 perf-frontend.log seg/tick 探针）。
+ */
+const PULL_INTERVAL_MS = 200
+const PULL_PAGE_MAX = 5000
+/** 单次 drain 最多翻页数：8×5000=4 万行 > ring 容量 2 万，一轮必收敛 */
+const PULL_MAX_PAGES = 8
 
-async function selfHealPull(sessionId: string, lastEpoch: number) {
-  const store = useSessionStore()
-  try {
-    const pulled = await invoke<{ epochMillis: number; dir: LogLine['dir']; ts: string; text: string; bytes?: number[] | null }[]>(
-      'ring_lines_cmd',
-      { sessionId, sinceEpoch: lastEpoch, max: 2000 },
-    )
-    if (pulled.length === 0) return
-    const inserted = store.appendMissing(
-      sessionId,
-      pulled.map((l) => ({ ts: l.ts, dir: l.dir, text: l.text, bytes: l.bytes ?? null, epochMillis: l.epochMillis })),
-    )
-    if (inserted.length > 0) {
-      store.tallyBytes(
-        sessionId,
-        inserted.map((l) => ({ ts: l.ts, dir: l.dir, text: l.text, bytes: l.bytes, epochMillis: l.epochMillis })),
-      )
-      console.info(`[perf] 自愈补拉 ${inserted.length} 行 (session ${sessionId})`)
-    }
-  } catch {
-    /* 浏览器冒烟环境无 Tauri 后端，静默 */
-  }
+interface PulledLine {
+  no: number
+  ts: string
+  dir: LogLine['dir']
+  text: string
+  bytes: number[] | null
+  epochMillis: number
 }
 
-/** 注册后端事件监听并分发到 store；返回取消监听函数列表 */
-export async function setupEvents(): Promise<UnlistenFn[]> {
-  const store = useSessionStore()
-  const unlistens: UnlistenFn[] = []
+/** 正在拉取的会话集合（防同会话并发 drain 导致游标回退覆盖） */
+const draining = new Set<string>()
 
-  unlistens.push(
-    await listen<LogPayload>('log', (e) => {
+async function drainSession(sessionId: string): Promise<void> {
+  if (draining.has(sessionId)) return
+  draining.add(sessionId)
+  try {
+    const store = useSessionStore()
+    for (let page = 0; page < PULL_MAX_PAGES; page++) {
+      const s = store.sessions[sessionId]
+      // 会话没了/已停止（后端句柄移除，invoke 会报"会话不存在"）就停
+      if (!s || s.kind !== 'live') return
+      if (s.status !== 'connected' && s.status !== 'connecting') return
+      let pulled: PulledLine[]
+      try {
+        pulled = await invoke<PulledLine[]>('ring_lines_no_cmd', {
+          sessionId,
+          sinceNo: s.pullNo,
+          max: PULL_PAGE_MAX,
+        })
+      } catch {
+        return // 无后端（浏览器冒烟）或会话已断开，静默
+      }
+      if (pulled.length === 0) return
       const t0 = performance.now()
-      const fresh = store.appendLines(e.payload.sessionId, e.payload.lines)
-      const tAppend = performance.now()
-      store.tallyBytes(e.payload.sessionId, e.payload.lines)
-      const tTally = performance.now()
-      store.processAutoReply(e.payload.sessionId, e.payload.lines)
-      const tReply = performance.now()
+      const fresh = store.appendPulled(
+        sessionId,
+        pulled.map((l) => ({
+          ts: l.ts,
+          dir: l.dir,
+          text: l.text,
+          bytes: l.bytes,
+          epochMillis: l.epochMillis,
+          ringNo: l.no,
+        })),
+      )
+      if (fresh.length === 0) return // 游标已到最新
+      store.tallyBytes(sessionId, fresh)
+      store.processAutoReply(sessionId, fresh)
       // 告警用带行号的新行：历史条目可跳转回日志
-      store.processAlerts(e.payload.sessionId, fresh)
-      const tHandler = performance.now()
-      // 性能哨兵：滞后=墙钟−最新行后端时间戳（覆盖事件队列等待），批耗时=本处理段
-      recordBatch(e.payload.sessionId, fresh, tHandler - t0)
-      // 深度节流自愈：本批滞后>1s 时从后端 ring 拉齐（事件循环活着才走得到这里）
-      const s = store.sessions[e.payload.sessionId]
-      const last = s?.lines[s.lines.length - 1]
-      // 取证探针：分段耗时落盘（seg），附会话总行数做「成本 ∝ 行数」相关轴；
-      // 渲染 flush 用 rAF 估测（raf），延迟>50ms 才记。确认热点后移除。
-      const lag = last ? Date.now() - last.epochMillis : 0
-      const handlerMs = tHandler - t0
-      if (handlerMs > 5 || lag > 2000) {
-        const seg = `a=${(tAppend - t0).toFixed(1)},t=${(tTally - tAppend).toFixed(1)},r=${(tReply - tTally).toFixed(1)},al=${(tHandler - tReply).toFixed(1)}`
+      store.processAlerts(sessionId, fresh)
+      // 性能哨兵：滞后=墙钟−最新行后端时间戳，批耗时=本处理段
+      recordBatch(sessionId, fresh, performance.now() - t0)
+      // 取证探针（seg/raf）：保留至热点确认后移除
+      const handlerMs = performance.now() - t0
+      if (handlerMs > 5) {
+        const s2 = store.sessions[sessionId]
         void invoke('append_perf_diag_cmd', {
           kind: 'seg',
-          sessionId: e.payload.sessionId,
-          lagMs: Math.min(lag, 4_000_000),
+          sessionId,
+          lagMs: Math.min(Date.now() - fresh[fresh.length - 1]!.epochMillis, 4_000_000),
           batchMs: Math.round(handlerMs * 10) / 10,
-          lines: s?.lines.length ?? 0,
-          vis: seg,
+          lines: s2?.lines.length ?? 0,
+          vis: `a=${fresh.length},pg=${page + 1}`,
         }).catch(() => {})
         requestAnimationFrame(() => {
           void invoke('append_perf_diag_cmd', {
             kind: 'raf',
-            sessionId: e.payload.sessionId,
-            lagMs: Math.round(performance.now() - tHandler),
+            sessionId,
+            lagMs: Math.round(performance.now() - t0),
             batchMs: 0,
-            lines: s?.lines.length ?? 0,
+            lines: s2?.lines.length ?? 0,
             vis: '',
           }).catch(() => {})
         })
       }
-      if (last) {
-        if (lag > PULL_LAG_MS && Date.now() - lastPullAt > PULL_COOLDOWN_MS) {
-          lastPullAt = Date.now()
-          void selfHealPull(e.payload.sessionId, last.epochMillis)
-        }
-      }
-    }),
-  )
+      if (pulled.length < PULL_PAGE_MAX) return // 拉空，已到最新
+    }
+  } finally {
+    draining.delete(sessionId)
+  }
+}
+
+/** 注册后端事件监听与拉取循环；返回取消函数列表 */
+export async function setupEvents(): Promise<UnlistenFn[]> {
+  const store = useSessionStore()
+  const unlistens: UnlistenFn[] = []
+
+  // 拉取循环：所有 live 会话按 PULL_INTERVAL_MS 拉自己的游标 delta。
+  // 低频 IPC（每会话 5 次/秒、空转返回空），渲染进程调度不再被事件洪水挤占。
+  const timer = window.setInterval(() => {
+    for (const id of Object.keys(store.sessions)) void drainSession(id)
+  }, PULL_INTERVAL_MS)
+  unlistens.push(() => window.clearInterval(timer))
+
+  // 会话停止时立即拉最后一波（disconnect 前后端已 flush 完 ring）
   unlistens.push(
     await listen<StatusPayload>('session-status', (e) => {
       store.setStatus(e.payload.sessionId, e.payload.status)
+      if (e.payload.status === 'disconnected') void drainSession(e.payload.sessionId)
     }),
   )
   unlistens.push(

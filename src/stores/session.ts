@@ -49,6 +49,9 @@ export interface Session {
   /** 补拉水位（epochMillis）：自愈补拉插入到过的最新时刻。迟到事件中
    *  epoch <= 水位的行已被补拉过，appendLines 直接丢弃防重复。0=从未补拉。 */
   pulledThrough: number
+  /** 后端 ring 游标（`no`，单调递增、清屏不回退）：拉模型视图通道的拉取位点。
+   *  只随 appendPulled 前进；重连=新会话新 ring，随 makeSession 归零。 */
+  pullNo: number
   /** 前端缓冲上限裁剪掉的累计行数（clearLog 不清零，暴露给 UI 明示） */
   droppedLines: number
   /** 书签行号（升序；随 lines 环形淘汰自然失效——跳转前由 UI 校验行仍存在） */
@@ -90,6 +93,7 @@ function makeSession(id: string, config: PortConfig): Session {
     lines: [],
     lineCounter: 0,
     pulledThrough: 0,
+    pullNo: 0,
     droppedLines: 0,
     bookmarks: [],
     aiNotes: [],
@@ -580,33 +584,29 @@ export const useSessionStore = defineStore('session', {
       }
       return fresh
     },
-    /** 补拉追加：仅插入缓冲里还没有的行（按 epochMillis+dir 去重），返回真正插入的行。
-     *  自愈兜底用：深度节流导致事件丢失/延迟时，从后端 ring 拉齐；迟到的事件
-     *  补投时已存在的行会被这里跳过，不产生重复。不改变 appendLines 行为。 */
-    appendMissing(id: string, raw: RawLogLine[]): LogLine[] {
+    /** 拉模型摄取：后端 ring 按 `no` 游标拉到的行一次性入表。
+     *  游标（pullNo）是不重不漏的唯一真相——调用方（拉取循环）保证行序按 no
+     *  升序；防御性过滤 ringNo <= pullNo 的重复行，其余全部入表并推进游标。
+     *  返回本次插入的行（供 autoReply/alerts/tally 拿 no 与内容）。 */
+    appendPulled(
+      id: string,
+      lines: (RawLogLine & { ringNo: number })[],
+    ): LogLine[] {
       const s = this.sessions[id]
-      if (!s || raw.length === 0) return []
-      const have = new Set<number>()
-      for (const l of s.lines) have.add(l.epochMillis * 2 + (l.dir === 'tx' ? 1 : 0))
-      const fresh: LogLine[] = []
-      for (const r of raw) {
-        // 水位以下的行必然已在（本就是补拉插入的），双保险跳过
-        if (r.epochMillis <= s.pulledThrough) continue
-        const k = r.epochMillis * 2 + (r.dir === 'tx' ? 1 : 0)
-        if (have.has(k)) continue
-        have.add(k)
-        fresh.push(markRaw({ no: ++s.lineCounter, ...r }))
-      }
-      if (fresh.length === 0) return []
+      if (!s || lines.length === 0) return []
+      const arr = lines.filter((l) => l.ringNo > s.pullNo)
+      if (arr.length === 0) return []
+      // 用 concat 产生新数组引用，保证虚拟滚动器感知变化
+      const fresh: LogLine[] = arr.map((r) =>
+        markRaw({ no: ++s.lineCounter, ts: r.ts, dir: r.dir, text: r.text, bytes: r.bytes, epochMillis: r.epochMillis }),
+      )
       const total = s.lines.length + fresh.length
       s.lines = s.lines.concat(fresh)
       if (total > MAX_LINES) {
         s.lines = s.lines.slice(total - MAX_LINES)
         s.droppedLines += total - MAX_LINES
       }
-      // 推进水位：此后迟到的同批事件行将被 appendLines 按水位丢弃
-      const newest = fresh[fresh.length - 1]!.epochMillis
-      if (newest > s.pulledThrough) s.pulledThrough = newest
+      s.pullNo = arr[arr.length - 1]!.ringNo
       return fresh
     },
     /** 累计 RX/TX 字节与行数（lifetime，随缓冲裁剪不回退）；与 appendLines 分离，不改其行为 */

@@ -99,8 +99,9 @@ body 用 `.panel-body`；需限高滚动的用 `.kw-body` / `.ar-body`（已带 
 - 会话级 UI 偏好字段（showLineNo/showDir/droppedLines/bookmarks/aiNotes/alerts/filters…）**必须同时**改三处：`makeSession` 默认值、`reconnectSession` 的 carried 迁移清单、相关 actions。clearLog 会重置 lineCounter 并清空 bookmarks 与 aiNotes（aiNotes 同时回写后端镜像清空）。
 - localStorage 键：`serialtool.theme/.lastPortConfig/.logConfig/.searchHistory/.portPresets/.configPresets/.alertSound/.update.lastCheck/.update.dismissedVersion`。预设库 payload 各类别形状校验在 `applyConfigPreset/importConfigPresets`。
 - 更新检查（`useUpdateChecker`）：启动延迟 5s 静默查 GitHub Releases API（24h 节流，失败也记间隔）；`UPDATE_REPO` 常量已定 `RtuQ/bytetide`（与 scripts/portable-README.txt 主页链接联动，改一处必改另一处）。免安装版策略 = 只提示 + 跳转下载页，不做自更新；TitleBar 版本徽标在 `status==='available'` 时亮起，「忽略此版本」按 tag 记忆。
-- **长跑性能红线**：`lines` 元素必须在 `appendLines` 处 `markRaw`（日志行不可变，禁 Proxy 开销）；侧栏折叠面板 body 仍处于挂载态，**禁止无守卫的全量行 computed**——折叠/空态必须早退或停算（参考 SearchPanel 命中节 hitsOpen、BookmarkPanel 空书签早退）。
-- **后台/锁屏不实时根因 = Windows EcoQoS**：进程后台化或锁屏时系统把窗口化进程降入节能队列，IPC 派发被推迟到数十秒级（症状：`batchMs` 仅 2-6ms 但 `lagMs` 飙到 30s）。治本在 `lib.rs::disable_power_throttling()`，进程启动即调 `SetProcessInformation(ProcessPowerThrottling, StateMask=0)` 退出限流；`windows-sys` 仅 Windows target 引入。哨兵 `usePerfWatch` 的 `DiagEntry.vis` 记录每条滞后发生时的窗口可见性，`hidden` 时滞后=系统限流，`visible` 时滞后=真积压，一眼可辨。
+- **长跑性能红线**：`lines` 元素必须在 `appendLines`/`appendPulled` 处 `markRaw`（日志行不可变，禁 Proxy 开销）；侧栏折叠面板 body 仍处于挂载态，**禁止无守卫的全量行 computed**——折叠/空态必须早退或停算（参考 SearchPanel 命中节 hitsOpen、BookmarkPanel 空书签早退）。
+- **数据流 = 拉模型（feat/pull-based-view 起）**：后端 ring 是唯一真相（`no` 游标单调递增、清屏不回退）；前端 `useTauriEvents` 每 200ms 按会话 `pullNo` 调 `ring_lines_no_cmd` 拉 delta（`appendPulled` 入表），**不再有 `log` 事件流**（40ms 推事件曾把 WebView2 渲染进程调度饿死成死亡螺旋，实测积压 15 分钟、1s 定时器饿到 48s 才醒）。渲染进程被节流时最坏滞后=一个拉取周期，醒来一次拉齐即收敛。新增实时数据通道时走游标拉取，勿回加高频 emit。
+- **后台/锁屏不实时根因 = Windows EcoQoS**：进程后台化或锁屏时系统把窗口化进程降入节能队列，IPC 派发被推迟到数十秒级（症状：`batchMs` 仅 2-6ms 但 `lagMs` 飙到 30s）。治本在 `lib.rs::disable_power_throttling()`，进程启动即调 `SetProcessInformation(ProcessPowerThrottling, StateMask=0)` 退出限流；`windows-sys` 仅 Windows target 引入。哨兵 `usePerfWatch` 的 `DiagEntry.vis` 记录每条滞后发生时的窗口可见性，`hidden` 时滞后=系统限流，`visible` 时滞后=真积压，一眼可辨。注意：`--disable-features=CalculateNativeWinOcclusion` 生效时被遮挡窗口也报 `visible`，此时 vis 判读失效，需以后端 `perf-heartbeat.log` 对照。
 
 ### 后续迭代计划（未排期）
 - AI 分析入口：前端内嵌调用 REST 桥的对话式分析（离线选区→“让 AI 解释”）

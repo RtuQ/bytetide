@@ -100,18 +100,18 @@ pub fn append_perf_diag_cmd(app: AppHandle, kind: String, session_id: String, la
     .map_err(|e| e.to_string())
 }
 
-/// 前端自愈补拉：取 ring 中 epochMillis > sinceEpoch 的行（封顶 2000）。
-/// 深度节流/事件丢失导致前端滞后时，前端检测到后直接拉齐，不等事件补投。
+/// 视图拉模型数据通道：取 ring 中 `no > sinceNo` 的行（封顶 20000=ring 容量）。
+/// `no` 单调递增且清屏不回退，游标语义下不重不漏。
 #[tauri::command]
-pub fn ring_lines_cmd(
+pub fn ring_lines_no_cmd(
     session_id: String,
-    since_epoch: u64,
+    since_no: u64,
     max: Option<usize>,
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::serial::manager::BridgeLine>, String> {
     state
         .manager
-        .ring_lines_since(&session_id, since_epoch, max.unwrap_or(2000))
+        .ring_lines_after_no(&session_id, since_no, max.unwrap_or(5000))
         .map_err(|e| e.to_string())
 }
 

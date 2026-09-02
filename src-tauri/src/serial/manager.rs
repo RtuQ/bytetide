@@ -17,13 +17,6 @@ use crate::session::SessionLog;
 /// 批量日志事件载荷（按会话路由，单事件名 `log`）。
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct LogPayload {
-    pub session_id: String,
-    pub lines: Vec<LogLine>,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
 pub struct StatusPayload {
     pub session_id: String,
     pub status: String,
@@ -235,6 +228,13 @@ impl RingBuf {
             .filter(|l| l.no > since)
             .cloned()
             .collect()
+    }
+
+    /// 游标拉取：`no > since_no` 的最旧 max 行（no 单调递增，二分定位）。
+    pub fn lines_after_no(&self, since_no: u64, max: usize) -> Vec<BridgeLine> {
+        let ring = self.ring.lock();
+        let from = ring.partition_point(|l| l.no <= since_no);
+        ring.iter().skip(from).take(max).cloned().collect()
     }
 
     /// 当前末行 `no`（空环返回 0）。
@@ -497,20 +497,20 @@ impl PortManager {
         .collect()
 }
 
-    /// 补拉：返回 ring 中 epochMillis > since_epoch 的行（前端自愈兜底用，
-    /// 深度节流/事件丢失时按时间戳对齐补齐，与行号体系无关）。封顶 2000 行。
-    pub fn ring_lines_since(&self, id: &str, since_epoch: u64, max: usize) -> anyhow::Result<Vec<BridgeLine>> {
+    /// 游标补拉：返回 ring 中 `no > since_no` 的行（前端视图拉模型的数据通道）。
+    /// `no` 单调递增且 clear 不回退——游标语义下不重不漏；二分定位 O(log n)。
+    pub fn ring_lines_after_no(
+        &self,
+        id: &str,
+        since_no: u64,
+        max: usize,
+    ) -> anyhow::Result<Vec<BridgeLine>> {
         let sessions = self.sessions.read();
         let h = sessions
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
-        let all = h.buf.snapshot();
-        let from = all
-            .iter()
-            .position(|l| l.epoch_millis > since_epoch)
-            .unwrap_or(all.len());
-        let max = max.clamp(1, 2000);
-        Ok(all[from..].iter().take(max).cloned().collect())
+        let max = max.clamp(1, RING_CAP);
+        Ok(h.buf.lines_after_no(since_no, max))
     }
 
     /// 会话日志文件完整路径（导出/打开日志位置用）。
@@ -712,17 +712,6 @@ fn reader_loop(
     );
 }
 
-fn emit_batch(app: &AppHandle, session_id: &str, batch: &mut Vec<LogLine>) {
-    if batch.is_empty() {
-        return;
-    }
-    let payload = LogPayload {
-        session_id: session_id.to_string(),
-        lines: std::mem::take(batch),
-    };
-    let _ = app.emit("log", payload);
-}
-
 fn emit_status(app: &AppHandle, session_id: &str, status: &str) {
     let _ = app.emit(
         "session-status",
@@ -772,26 +761,14 @@ fn make_rx_line(raw: &[u8], ts_fmt: &str) -> LogLine {
     }
 }
 
-fn sink_line(
-    line: LogLine,
-    session_log: &mut Option<SessionLog>,
-    ring: &RingBuf,
-    batch: &mut Vec<LogLine>,
-) {
+fn sink_line(line: LogLine, session_log: &mut Option<SessionLog>, ring: &RingBuf) {
     if let Some(w) = session_log.as_mut() {
         w.append(&line);
     }
     ring.push(&line);
-    batch.push(line);
 }
 
-fn finish_loop(
-    session_log: Option<SessionLog>,
-    batch: &mut Vec<LogLine>,
-    app: &AppHandle,
-    session_id: &str,
-) {
-    emit_batch(app, session_id, batch);
+fn finish_loop(session_log: Option<SessionLog>, app: &AppHandle, session_id: &str) {
     if let Some(mut w) = session_log {
         let _ = w.flush();
     }
@@ -828,8 +805,9 @@ fn open_session_log(
     (session_log, ts_fmt)
 }
 
-/// 串口与 TCP/UDP 共用的读循环：行切分、TX 回显、空闲半行刷出、40ms 批量回推。
-/// 序列化语义与旧 reader_loop 完全一致（读取超时由 IO 源自行设定为 200ms）。
+/// 串口与 TCP/UDP 共用的读循环：行切分、TX 回显、空闲半行刷出。
+/// 数据不再经事件推给前端（IPC 洪水会把渲染进程调度饿死）：行进 ring（前端
+/// 按 `no` 游标拉取）与落盘文件；只有状态/错误/低频事件走 emit。
 #[allow(clippy::too_many_arguments)]
 fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
     io: &mut T,
@@ -845,8 +823,6 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
 ) {
     let mut buf = vec![0u8; 65536];
     let mut line_buf: Vec<u8> = Vec::new();
-    let mut batch: Vec<LogLine> = Vec::new();
-    let mut last_flush = Instant::now();
     let mut last_idle_flush = Instant::now();
 
     while !stop.load(Ordering::Relaxed) {
@@ -868,7 +844,6 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
                             },
                             &mut session_log,
                             &ring,
-                            &mut batch,
                         ),
                         Err(_) => emit_error(app, session_id, write_err_msg),
                     }
@@ -895,7 +870,7 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
                             raw.pop();
                         }
                         line_buf.clear();
-                        sink_line(make_rx_line(&raw, ts_fmt), &mut session_log, &ring, &mut batch);
+                        sink_line(make_rx_line(&raw, ts_fmt), &mut session_log, &ring);
                     } else {
                         line_buf.push(b);
                     }
@@ -912,7 +887,7 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
                         raw.pop();
                     }
                     line_buf.clear();
-                    sink_line(make_rx_line(&raw, ts_fmt), &mut session_log, &ring, &mut batch);
+                    sink_line(make_rx_line(&raw, ts_fmt), &mut session_log, &ring);
                     last_idle_flush = Instant::now();
                 }
             }
@@ -921,18 +896,9 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
                 break;
             }
         }
-
-        // 批量回推，防止 IPC 风暴
-        let now = Instant::now();
-        if (!batch.is_empty() && now.duration_since(last_flush) > Duration::from_millis(40))
-            || batch.len() >= 64
-        {
-            emit_batch(app, session_id, &mut batch);
-            last_flush = now;
-        }
     }
 
-    finish_loop(session_log, &mut batch, app, session_id);
+    finish_loop(session_log, app, session_id);
 }
 
 // ---------- 网络数据源（TCP client/server / UDP 监听）----------
@@ -1110,6 +1076,40 @@ mod tests {
         assert_eq!(s1, vec![2, 3, 4, 5]);
         let s0: Vec<u64> = buf.lines_since(0).iter().map(|l| l.no).collect();
         assert_eq!(s0, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn lines_after_no_cursor_pages() {
+        // 拉模型游标：no>since 的最旧 max 行；游标推进不重不漏；翻页到拉空
+        let buf = RingBuf::new();
+        for i in 0..10 {
+            buf.push(&mk_log("t", Dir::Rx, "x", None, i));
+        }
+        let p1 = buf.lines_after_no(0, 4);
+        assert_eq!(p1.iter().map(|l| l.no).collect::<Vec<_>>(), vec![1, 2, 3, 4]);
+        let p2 = buf.lines_after_no(4, 4);
+        assert_eq!(p2.iter().map(|l| l.no).collect::<Vec<_>>(), vec![5, 6, 7, 8]);
+        let p3 = buf.lines_after_no(8, 4);
+        assert_eq!(p3.iter().map(|l| l.no).collect::<Vec<_>>(), vec![9, 10]);
+        // 拉空：游标已到最新
+        assert!(buf.lines_after_no(10, 4).is_empty());
+        // 游标超前（ring 淘汰/新会话）也安全
+        assert!(buf.lines_after_no(999, 4).is_empty());
+    }
+
+    #[test]
+    fn lines_after_no_survives_clear() {
+        // 清屏 seq 单调不回退：游标保持原位，只拉新行
+        let buf = RingBuf::new();
+        for i in 0..5 {
+            buf.push(&mk_log("t", Dir::Rx, "x", None, i));
+        }
+        buf.clear();
+        assert!(buf.lines_after_no(5, 4).is_empty());
+        buf.push(&mk_log("t", Dir::Rx, "new", None, 100));
+        let after = buf.lines_after_no(5, 4);
+        assert_eq!(after.iter().map(|l| l.no).collect::<Vec<_>>(), vec![6]);
+        assert_eq!(after[0].text, "new");
     }
 
     #[test]
