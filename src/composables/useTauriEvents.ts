@@ -1,10 +1,14 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore } from '../stores/session'
+import { useAlertStore } from '../stores/alerts'
+import { playAlertBeep } from './useAlertBeep'
+import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
 import { recordBatch } from './usePerfWatch'
 import { setupBridgeSync } from './useBridgeSync'
 import type {
   AiAnnotation,
+  AlertLevel,
   ErrorPayload,
   LogLine,
   PlotConfig,
@@ -73,9 +77,6 @@ async function drainSession(sessionId: string): Promise<void> {
       )
       if (fresh.length === 0) return // 游标已到最新
       store.tallyBytes(sessionId, fresh)
-      store.processAutoReply(sessionId, fresh)
-      // 告警用带行号的新行：历史条目可跳转回日志
-      store.processAlerts(sessionId, fresh)
       // 性能哨兵：滞后=墙钟−最新行后端时间戳，批耗时=本处理段
       recordBatch(sessionId, fresh, performance.now() - t0)
       // 取证探针（seg/raf）：保留至热点确认后移除
@@ -155,5 +156,57 @@ export async function setupEvents(): Promise<UnlistenFn[]> {
   // 书签/告警历史推送到后端桥镜像（REST /bookmarks、/alerts 只读）
   unlistens.push(...setupBridgeSync())
 
+  // 告警命中（后端读线程评估，稀疏事件）：通知 + 提示音 + 历史入表
+  const alertStore = useAlertStore()
+  alertStore.load()
+  unlistens.push(
+    await listen<{ sessionId: string; hits: { ruleId: string; pattern: string; level: string; no: number; ts: string; text: string; at: number }[] }>(
+      'alert-hit',
+      (e) => {
+        for (const h of e.payload.hits) {
+          // ring no -> UI 行号（拉模型下两者不同；rn 由 appendPulled 携带）
+          const s = store.sessions[e.payload.sessionId]
+          const uiNo = s?.lines.find((l) => l.rn === h.no)?.no ?? null
+          const title = `${ALERT_LEVEL_LABEL[h.level] ?? h.level} · ${s?.config.name ?? e.payload.sessionId}`
+          const body = `[${h.pattern}] ${alertSnippet(h.text)}`
+          void ensureNotify(title, body)
+          if (alertStore.sound) playAlertBeep()
+          alertStore.push({
+            sessionId: e.payload.sessionId,
+            sessionName: s?.config.name ?? '',
+            ruleId: h.ruleId,
+            pattern: h.pattern,
+            level: h.level as AlertLevel,
+            no: uiNo ?? 0,
+            ts: h.ts,
+            text: alertSnippet(h.text),
+            at: h.at,
+          })
+        }
+      },
+    ),
+  )
+
   return unlistens
+}
+
+const ALERT_LEVEL_LABEL: Record<string, string> = {
+  info: '提示',
+  warn: '警告',
+  err: '错误',
+}
+
+function alertSnippet(text: string): string {
+  const t = text.replace(/\s+/g, ' ').trim()
+  return t.length > 100 ? `${t.slice(0, 100)}…` : t || '(空行)'
+}
+
+async function ensureNotify(title: string, body: string) {
+  try {
+    let granted = await isPermissionGranted()
+    if (!granted) granted = (await requestPermission()) === 'granted'
+    if (granted) sendNotification({ title, body })
+  } catch {
+    /* 通知不可用时静默 */
+  }
 }

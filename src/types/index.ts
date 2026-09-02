@@ -40,6 +40,8 @@ export interface RawLogLine {
 
 export interface LogLine extends RawLogLine {
   no: number
+  /** 后端 ring no（拉模型摄取时携带；告警命中事件回查 UI 行号用，不入显示列） */
+  rn?: number
 }
 
 /** 搜索状态：仅驱动“只看命中 / 次数 / 命中行列表”（与高亮关键词分离） */

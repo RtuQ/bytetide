@@ -17,7 +17,8 @@
         "height": 780,
         "minWidth": 880,
         "minHeight": 560,
-        "decorations": false
+        "decorations": false,
+        "additionalBrowserArgs": "--disable-features=IntensiveWakeUpThrottling,CalculateNativeWinOcclusion,--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-intensive-wake-up-throttling"
       }
     ],
     "security": {

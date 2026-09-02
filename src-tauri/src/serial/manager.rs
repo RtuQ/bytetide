@@ -13,6 +13,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use super::port::{open_port, Dir, LogLine, PortConfig};
 use crate::logfmt;
 use crate::session::SessionLog;
+use crate::serial::rules::{alert_eval, auto_reply_payload, AlertCfg, AlertWinState, AutoReplyCfg};
 
 /// 批量日志事件载荷（按会话路由，单事件名 `log`）。
 #[derive(Serialize, Clone)]
@@ -141,6 +142,14 @@ pub struct BridgeAlert {
     pub at: u64,
 }
 
+/// 告警命中事件载荷（稀疏：仅命中时发；通知与提示音在 UI 侧执行）
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AlertHitPayload {
+    pub session_id: String,
+    pub hits: Vec<BridgeAlert>,
+}
+
 /// AI 批注（REST 写入，事件推送到前端界面；`no` 为行号——
 /// 桥与 UI 行号在会话内 1:1，除非用户清屏重计数）。
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -178,7 +187,7 @@ impl RingBuf {
     }
 
     /// 推入一行（分配单调 `no`、更新计数器、超容淘汰最旧）。不改 emit/盘写/批。
-    pub fn push(&self, line: &LogLine) {
+    pub fn push(&self, line: &LogLine) -> u64 {
         let no = self.seq.fetch_add(1, Ordering::Relaxed) + 1;
         let bl = BridgeLine {
             no,
@@ -209,6 +218,7 @@ impl RingBuf {
         while r.len() > RING_CAP {
             r.pop_front();
         }
+        no
     }
 
     /// 清屏：清空环形（不重置 `seq`，保持 `no` 单调，避免 REST 引用碰撞）。
@@ -316,6 +326,10 @@ struct SessionHandle {
     alerts: Arc<RwLock<Vec<BridgeAlert>>>,
     /// AI 批注（REST 写入 + 前端同步的双向镜像）。
     annotations: Arc<RwLock<Vec<BridgeAnnotation>>>,
+    /// 自动回复规则（前端推送；读线程内评估并直接回写设备）
+    auto_reply: Arc<RwLock<AutoReplyCfg>>,
+    /// 告警规则（前端推送；读线程内评估，命中走 mirror + alert-hit 事件）
+    alert_cfg: Arc<RwLock<AlertCfg>>,
 }
 
 pub struct PortManager {
@@ -367,6 +381,12 @@ impl PortManager {
         let app2 = app.clone();
         let stop2 = stop.clone();
         let buf2 = buf.clone();
+        let auto_reply_cfg = Arc::new(RwLock::new(AutoReplyCfg::default()));
+        let alert_cfg = Arc::new(RwLock::new(AlertCfg::default()));
+        let alerts_mirror = Arc::new(RwLock::new(Vec::new()));
+        let ar2 = auto_reply_cfg.clone();
+        let al2 = alert_cfg.clone();
+        let am2 = alerts_mirror.clone();
         let lp = log_path.clone();
 
         let handle = thread::Builder::new()
@@ -374,9 +394,15 @@ impl PortManager {
             .spawn(move || {
                 // 串口与 TCP/UDP 源共用同一装配路径，按传输类型选择循环
                 if is_net_transport(&cfg) {
-                    net_loop(cfg, id2, app2, stop2, write_rx, lp, ts_format, custom_path, buf2)
+                    net_loop(
+                        cfg, id2, app2, stop2, write_rx, lp, ts_format, custom_path, buf2, ar2,
+                        al2, am2,
+                    )
                 } else {
-                    reader_loop(cfg, id2, app2, stop2, write_rx, lp, ts_format, custom_path, buf2)
+                    reader_loop(
+                        cfg, id2, app2, stop2, write_rx, lp, ts_format, custom_path, buf2, ar2,
+                        al2, am2,
+                    )
                 }
             })
             .map_err(|e| anyhow::anyhow!("spawn reader thread failed: {e}"))?;
@@ -393,8 +419,10 @@ impl PortManager {
                 buf,
                 plot,
                 bookmarks: Arc::new(RwLock::new(Vec::new())),
-                alerts: Arc::new(RwLock::new(Vec::new())),
+                alerts: alerts_mirror.clone(),
                 annotations: Arc::new(RwLock::new(Vec::new())),
+                auto_reply: auto_reply_cfg.clone(),
+                alert_cfg: alert_cfg.clone(),
             },
         );
         Ok(id)
@@ -430,6 +458,8 @@ impl PortManager {
                 bookmarks: Arc::new(RwLock::new(Vec::new())),
                 alerts: Arc::new(RwLock::new(Vec::new())),
                 annotations: Arc::new(RwLock::new(Vec::new())),
+                auto_reply: Arc::new(RwLock::new(AutoReplyCfg::default())),
+                alert_cfg: Arc::new(RwLock::new(AlertCfg::default())),
             },
         );
         id
@@ -511,6 +541,23 @@ impl PortManager {
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
         let max = max.clamp(1, RING_CAP);
         Ok(h.buf.lines_after_no(since_no, max))
+    }
+
+    /// 前端推送实时规则（自动回复/告警）：拉模型下评估在后端读线程，
+    /// 规则变更与连接建立时由前端整体覆盖推送。
+    pub fn set_live_rules(
+        &self,
+        id: &str,
+        auto_reply: AutoReplyCfg,
+        alerts: AlertCfg,
+    ) -> anyhow::Result<()> {
+        let sessions = self.sessions.read();
+        let h = sessions
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        *h.auto_reply.write() = auto_reply;
+        *h.alert_cfg.write() = alerts;
+        Ok(())
     }
 
     /// 会话日志文件完整路径（导出/打开日志位置用）。
@@ -670,6 +717,7 @@ fn session_log_path(app: &AppHandle, id: &str) -> PathBuf {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn reader_loop(
     config: PortConfig,
     session_id: String,
@@ -680,6 +728,9 @@ fn reader_loop(
     ts_format: Option<String>,
     custom_path: bool,
     ring: Arc<RingBuf>,
+    auto_reply: Arc<RwLock<AutoReplyCfg>>,
+    alert_cfg: Arc<RwLock<AlertCfg>>,
+    alerts_mirror: Arc<RwLock<Vec<BridgeAlert>>>,
 ) {
     let (session_log, ts_fmt) =
         open_session_log(&app, &session_id, &log_path, custom_path, ts_format);
@@ -709,6 +760,9 @@ fn reader_loop(
         &ts_fmt,
         session_log,
         ring,
+        auto_reply,
+        alert_cfg,
+        alerts_mirror,
     );
 }
 
@@ -761,11 +815,11 @@ fn make_rx_line(raw: &[u8], ts_fmt: &str) -> LogLine {
     }
 }
 
-fn sink_line(line: LogLine, session_log: &mut Option<SessionLog>, ring: &RingBuf) {
+fn sink_line(line: &LogLine, session_log: &mut Option<SessionLog>, ring: &RingBuf) -> u64 {
     if let Some(w) = session_log.as_mut() {
-        w.append(&line);
+        w.append(line);
     }
-    ring.push(&line);
+    ring.push(line)
 }
 
 fn finish_loop(session_log: Option<SessionLog>, app: &AppHandle, session_id: &str) {
@@ -820,10 +874,16 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
     ts_fmt: &str,
     mut session_log: Option<SessionLog>,
     ring: Arc<RingBuf>,
+    auto_reply: Arc<RwLock<AutoReplyCfg>>,
+    alert_cfg: Arc<RwLock<AlertCfg>>,
+    alerts_mirror: Arc<RwLock<Vec<BridgeAlert>>>,
 ) {
     let mut buf = vec![0u8; 65536];
     let mut line_buf: Vec<u8> = Vec::new();
     let mut last_idle_flush = Instant::now();
+    // 告警窗口/冷却状态（每会话独占，随读线程生灭）与待上报命中
+    let mut alert_states: HashMap<String, AlertWinState> = HashMap::new();
+    let mut fired_alerts: Vec<BridgeAlert> = Vec::new();
 
     while !stop.load(Ordering::Relaxed) {
         while let Ok(cmd) = write_rx.try_recv() {
@@ -834,17 +894,19 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
                         SendMode::Hex => decode_hex(&req.text),
                     };
                     match io.write_all(&bytes) {
-                        Ok(()) => sink_line(
-                            LogLine {
-                                ts: logfmt::format_ts(ts_fmt),
-                                dir: Dir::Tx,
-                                text: req.text.clone(),
-                                bytes: None,
-                                epoch_millis: now_ms(),
-                            },
-                            &mut session_log,
-                            &ring,
-                        ),
+                        Ok(()) => {
+                            sink_line(
+                                &LogLine {
+                                    ts: logfmt::format_ts(ts_fmt),
+                                    dir: Dir::Tx,
+                                    text: req.text.clone(),
+                                    bytes: None,
+                                    epoch_millis: now_ms(),
+                                },
+                                &mut session_log,
+                                &ring,
+                            );
+                        }
                         Err(_) => emit_error(app, session_id, write_err_msg),
                     }
                 }
@@ -870,7 +932,13 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
                             raw.pop();
                         }
                         line_buf.clear();
-                        sink_line(make_rx_line(&raw, ts_fmt), &mut session_log, &ring);
+                        let line = make_rx_line(&raw, ts_fmt);
+                        let ring_no = sink_line(&line, &mut session_log, &ring);
+                        apply_rx_rules(
+                            &line, ring_no, io, &mut session_log, &ring, ts_fmt,
+                            &auto_reply.read().clone(), &alert_cfg.read().clone(),
+                            &mut alert_states, &mut fired_alerts, app, session_id, write_err_msg,
+                        );
                     } else {
                         line_buf.push(b);
                     }
@@ -887,7 +955,13 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
                         raw.pop();
                     }
                     line_buf.clear();
-                    sink_line(make_rx_line(&raw, ts_fmt), &mut session_log, &ring);
+                    let line = make_rx_line(&raw, ts_fmt);
+                    let ring_no = sink_line(&line, &mut session_log, &ring);
+                    apply_rx_rules(
+                        &line, ring_no, io, &mut session_log, &ring, ts_fmt,
+                        &auto_reply.read().clone(), &alert_cfg.read().clone(), &mut alert_states,
+                        &mut fired_alerts, app, session_id, write_err_msg,
+                    );
                     last_idle_flush = Instant::now();
                 }
             }
@@ -896,9 +970,92 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
                 break;
             }
         }
+
+        // 命中上报：写 mirror（REST /alerts 只读）+ 稀疏事件通知前端（通知/提示音在 UI 侧）
+        if !fired_alerts.is_empty() {
+            {
+                let mut m = alerts_mirror.write();
+                m.splice(0..0, fired_alerts.iter().cloned());
+                let n = m.len();
+                if n > 100 {
+                    m.drain(..n - 100);
+                }
+            }
+            let _ = app.emit(
+                "alert-hit",
+                AlertHitPayload {
+                    session_id: session_id.to_string(),
+                    hits: std::mem::take(&mut fired_alerts),
+                },
+            );
+        }
     }
 
     finish_loop(session_log, app, session_id);
+}
+
+/// 逐 RX 行规则评估：自动回复（读线程内直接回写设备，不依赖前端存活）
+/// 与告警（命中攒批上报）。仅 RX 参与；TX 回显不受规则影响。
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
+fn apply_rx_rules<T: std::io::Write + ?Sized>(
+    line: &LogLine,
+    ring_no: u64,
+    io: &mut T,
+    session_log: &mut Option<SessionLog>,
+    ring: &RingBuf,
+    ts_fmt: &str,
+    auto_reply: &AutoReplyCfg,
+    alert_cfg: &AlertCfg,
+    alert_states: &mut HashMap<String, AlertWinState>,
+    fired_alerts: &mut Vec<BridgeAlert>,
+    app: &AppHandle,
+    session_id: &str,
+    write_err_msg: &str,
+) {
+    if line.dir != Dir::Rx {
+        return;
+    }
+    // 自动回复：首条命中规则即回
+    if let Some((payload, mode)) = auto_reply_payload(auto_reply, &line.text) {
+        let bytes = if mode == "hex" {
+            decode_hex(&payload)
+        } else {
+            payload.clone().into_bytes()
+        };
+        if !bytes.is_empty() {
+            match io.write_all(&bytes) {
+                Ok(()) => {
+                    sink_line(
+                        &LogLine {
+                            ts: logfmt::format_ts(ts_fmt),
+                            dir: Dir::Tx,
+                            text: payload,
+                            bytes: None,
+                            epoch_millis: now_ms(),
+                        },
+                        session_log,
+                        ring,
+                    );
+                }
+                Err(_) => emit_error(app, session_id, write_err_msg),
+            }
+        }
+    }
+    // 告警：攒批（命中事件稀疏，不会形成 IPC 洪水）
+    let now = now_ms();
+    for rule in alert_eval(alert_cfg, alert_states, &line.text, now) {
+        fired_alerts.push(BridgeAlert {
+            id: format!("a{:x}-{:x}", now, ring_no),
+            rule_id: rule.id.clone(),
+            pattern: rule.pattern.clone(),
+            level: rule.level.clone(),
+            no: ring_no,
+            ts: line.ts.clone(),
+            text: line.text.clone(),
+            at: now,
+        });
+    }
 }
 
 // ---------- 网络数据源（TCP client/server / UDP 监听）----------
@@ -1011,6 +1168,9 @@ fn net_loop(
     ts_format: Option<String>,
     custom_path: bool,
     ring: Arc<RingBuf>,
+    auto_reply: Arc<RwLock<AutoReplyCfg>>,
+    alert_cfg: Arc<RwLock<AlertCfg>>,
+    alerts_mirror: Arc<RwLock<Vec<BridgeAlert>>>,
 ) {
     let desc = describe_transport(&config);
     let (session_log, ts_fmt) = open_session_log(&app, &session_id, &log_path, custom_path, ts_format);
@@ -1036,6 +1196,9 @@ fn net_loop(
         &ts_fmt,
         session_log,
         ring,
+        auto_reply,
+        alert_cfg,
+        alerts_mirror,
     );
 }
 
@@ -1156,6 +1319,8 @@ mod tests {
             SessionHandle {
                 config: PortConfig::default(),
                 kind: SessionKind::Live,
+                auto_reply: Arc::new(RwLock::new(AutoReplyCfg::default())),
+                alert_cfg: Arc::new(RwLock::new(AlertCfg::default())),
                 stop,
                 write_tx: tx,
                 log_path: PathBuf::from("x.log"),

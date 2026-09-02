@@ -41,31 +41,6 @@ fn disable_power_throttling() -> bool {
     true
 }
 
-/// WebView2（Chromium）对“无交互页面”有独立于 EcoQoS 的深度节流：
-/// 数分钟无输入后 timer/task 降到约每分钟一次（实测前端每 60s 醒一次、
-/// 每批只处理 1-5 行，而后端 ring 同期正常推进）。必须在 WebView2
-/// 环境创建前设 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS 才能生效。
-fn disable_webview_background_throttle() {
-    #[cfg(windows)]
-    {
-        // intensive-wake-up-throttling=5 分钟级节流；CalculateNativeWinOcclusion
-        // 会把被遮挡窗口当不可见再叠加冻结。都不影响前台性能。
-        let args = "--disable-intensive-wake-up-throttling --disable-features=CalculateNativeWinOcclusion";
-        // 已有用户参数时追加，不覆盖外部诊断配置
-        let prev = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default();
-        let merged = if prev.is_empty() {
-            args.to_string()
-        } else if prev.contains("intensive-wake-up-throttling") {
-            prev
-        } else {
-            format!("{prev} {args}")
-        };
-        std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", merged);
-    }
-    #[cfg(not(windows))]
-    {}
-}
-
 /// 后端诊断心跳：每 10s 把各 live 会话 ring 末行时间戳落后墙钟的毫秒数
 /// 追加到 app_data/perf-heartbeat.log。完全在后端线程，不依赖前端事件循环--
 /// 前端卡死时仍能持续记录“后端视角的滞后”，事后直接看文件即可定位
@@ -138,9 +113,6 @@ fn round_window_corners(window: &tauri::WebviewWindow) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 必须在任何窗口/WebView 创建之前：关闭 WebView2 后台深度节流
-    disable_webview_background_throttle();
-
     // 单实例：若已有实例运行则静默退出；锁创建失败则放行，不阻断启动
     let instance = SingleInstance::new("serial_tool-single-instance-lock");
     if let Ok(ref i) = instance {
@@ -179,6 +151,7 @@ pub fn run() {
             commands::export_text_cmd,
             commands::append_perf_diag_cmd,
             commands::ring_lines_no_cmd,
+            commands::set_live_rules_cmd,
             commands::read_text_file_cmd,
             commands::create_offline_session_cmd,
             commands::bridge_get_config_cmd,

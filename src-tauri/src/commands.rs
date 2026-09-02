@@ -100,6 +100,20 @@ pub fn append_perf_diag_cmd(app: AppHandle, kind: String, session_id: String, la
     .map_err(|e| e.to_string())
 }
 
+/// 前端推送实时规则（自动回复/告警）到会话：拉模型下评估在后端读线程。
+#[tauri::command]
+pub fn set_live_rules_cmd(
+    session_id: String,
+    auto_reply: crate::serial::rules::AutoReplyCfg,
+    alerts: crate::serial::rules::AlertCfg,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .manager
+        .set_live_rules(&session_id, auto_reply, alerts)
+        .map_err(|e| e.to_string())
+}
+
 /// 视图拉模型数据通道：取 ring 中 `no > sinceNo` 的行（封顶 20000=ring 容量）。
 /// `no` 单调递增且清屏不回退，游标语义下不重不漏。
 #[tauri::command]

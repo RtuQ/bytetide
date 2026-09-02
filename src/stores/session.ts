@@ -27,15 +27,7 @@ import {
   type SessionStatus,
   type Keyword,
 } from '../types'
-import { buildTestMatcher } from '../composables/useHighlighter'
 import { parseLogFile } from '../composables/useLogParser'
-import { playAlertBeep } from '../composables/useAlertBeep'
-import { useAlertStore } from './alerts'
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from '@tauri-apps/plugin-notification'
 
 export interface Session {
   id: string
@@ -124,75 +116,10 @@ function newKeywordId(): string {
   return `k${Date.now().toString(36)}${kwSeq}`
 }
 
-/** 告警窗口/冷却状态（sessionId:ruleId -> 态）；非响应式，容量封顶防泄漏 */
-interface AlertWinState {
-  winStart: number
-  count: number
-  lastFire: number
-}
-const alertWinStates = new Map<string, AlertWinState>()
-
-// 会话建账竞态缓冲：后端读线程可能在前端把会话落账（openTab/reconnect 的
-// 赋值语句执行）之前就发出 connected/error--虚拟串口打开瞬时完成，竞态
-// 高发。此处暂存、落账后回放，否则状态点永远卡在 connecting。
+/** 建账竞态缓冲：状态事件先于会话落账到达时暂存（落账后回放） */
 const pendingStatus = new Map<string, string>()
 const pendingError = new Map<string, string>()
 const PENDING_CAP = 64
-function pruneAlertWinStates() {
-  // Map 保持插入序，淘汰最早的 1/4
-  const drop = Math.ceil(alertWinStates.size / 4)
-  let n = 0
-  for (const k of alertWinStates.keys()) {
-    if (n++ >= drop) break
-    alertWinStates.delete(k)
-  }
-}
-
-const ALERT_LEVEL_LABEL: Record<string, string> = {
-  info: '提示',
-  warn: '警告',
-  err: '错误',
-}
-
-function alertSnippet(text: string): string {
-  const t = text.replace(/\s+/g, ' ').trim()
-  return t.length > 100 ? `${t.slice(0, 100)}…` : t || '(空行)'
-}
-
-async function ensureNotify(title: string, body: string) {
-  try {
-    let granted = await isPermissionGranted()
-    if (!granted) granted = (await requestPermission()) === 'granted'
-    if (granted) sendNotification({ title, body })
-  } catch {
-    /* 通知不可用时静默 */
-  }
-}
-
-function fireAlert(
-  alertStore: ReturnType<typeof useAlertStore>,
-  sessionName: string,
-  sessionId: string,
-  ln: LogLine,
-  rule: AlertRule,
-) {
-  const title = `${ALERT_LEVEL_LABEL[rule.level] ?? rule.level} · ${sessionName}`
-  const body = `[${rule.pattern}] ${alertSnippet(ln.text)}`
-  // 未授权时首次静默请求权限，本次仅入历史（避免弹权限框打断扫描）
-  void ensureNotify(title, body)
-  if (alertStore.sound) playAlertBeep()
-  alertStore.push({
-    sessionId,
-    sessionName,
-    ruleId: rule.id,
-    pattern: rule.pattern,
-    level: rule.level,
-    no: ln.no,
-    ts: ln.ts,
-    text: alertSnippet(ln.text),
-    at: Date.now(),
-  })
-}
 
 let ruleSeq = 0
 function newRuleId(): string {
@@ -415,6 +342,7 @@ export const useSessionStore = defineStore('session', {
       this.order.push(id)
       this.activeId = id
       this.flushPending(id)
+      this.pushLiveRules(id)
       return id
     },
     /** 建本地会话（不经 invoke/后端）：测试与无后端冒烟环境用。
@@ -531,6 +459,7 @@ export const useSessionStore = defineStore('session', {
       pendingStatus.delete(id)
       pendingError.delete(id)
       this.flushPending(newId)
+      this.pushLiveRules(newId)
     },
     async send(id: string, text: string, mode: 'ascii' | 'hex') {
       const s = this.sessions[id]
@@ -554,6 +483,16 @@ export const useSessionStore = defineStore('session', {
       } catch {
         /* ignore */
       }
+    },
+    /** 推送实时规则到后端（拉模型：评估在读线程，规则变更/重连后整体覆盖） */
+    pushLiveRules(id: string) {
+      const s = this.sessions[id]
+      if (!s || s.kind !== 'live') return
+      invoke('set_live_rules_cmd', {
+        sessionId: id,
+        autoReply: { enabled: s.autoReply.enabled, rules: s.autoReply.rules },
+        alerts: { enabled: s.alerts.enabled, rules: s.alerts.rules },
+      }).catch(() => {})
     },
     async openLogPath(id: string) {
       try {
@@ -597,8 +536,9 @@ export const useSessionStore = defineStore('session', {
       const arr = lines.filter((l) => l.ringNo > s.pullNo)
       if (arr.length === 0) return []
       // 用 concat 产生新数组引用，保证虚拟滚动器感知变化
+      // rn=后端 ring no（告警命中事件回查 UI 行号用；不入显示列）
       const fresh: LogLine[] = arr.map((r) =>
-        markRaw({ no: ++s.lineCounter, ts: r.ts, dir: r.dir, text: r.text, bytes: r.bytes, epochMillis: r.epochMillis }),
+        markRaw({ no: ++s.lineCounter, ts: r.ts, dir: r.dir, text: r.text, bytes: r.bytes, epochMillis: r.epochMillis, rn: r.ringNo }),
       )
       const total = s.lines.length + fresh.length
       s.lines = s.lines.concat(fresh)
@@ -804,6 +744,7 @@ export const useSessionStore = defineStore('session', {
     setAutoReplyEnabled(id: string, v: boolean) {
       const s = this.sessions[id]
       if (s) s.autoReply.enabled = v
+      this.pushLiveRules(id)
     },
     addAutoReplyRule(id: string) {
       const s = this.sessions[id]
@@ -819,21 +760,25 @@ export const useSessionStore = defineStore('session', {
         replyMode: 'ascii',
         enabled: true,
       })
+      this.pushLiveRules(id)
     },
     updateAutoReplyRule(id: string, rid: string, patch: Partial<AutoReplyRule>) {
       const s = this.sessions[id]
       if (!s) return
       const r = s.autoReply.rules.find((x) => x.id === rid)
       if (r) Object.assign(r, patch)
+      this.pushLiveRules(id)
     },
     removeAutoReplyRule(id: string, rid: string) {
       const s = this.sessions[id]
       if (!s) return
       s.autoReply.rules = s.autoReply.rules.filter((x) => x.id !== rid)
+      this.pushLiveRules(id)
     },
     setAlertsEnabled(id: string, v: boolean) {
       const s = this.sessions[id]
       if (s) s.alerts.enabled = v
+      this.pushLiveRules(id)
     },
     addAlertRule(id: string) {
       const s = this.sessions[id]
@@ -850,17 +795,20 @@ export const useSessionStore = defineStore('session', {
         level: 'warn',
         enabled: true,
       })
+      this.pushLiveRules(id)
     },
     updateAlertRule(id: string, rid: string, patch: Partial<AlertRule>) {
       const s = this.sessions[id]
       if (!s) return
       const r = s.alerts.rules.find((x) => x.id === rid)
       if (r) Object.assign(r, patch)
+      this.pushLiveRules(id)
     },
     removeAlertRule(id: string, rid: string) {
       const s = this.sessions[id]
       if (!s) return
       s.alerts.rules = s.alerts.rules.filter((x) => x.id !== rid)
+      this.pushLiveRules(id)
     },
 
     /** 过滤链：添加一级（默认 include 单行匹配） */
@@ -984,94 +932,6 @@ export const useSessionStore = defineStore('session', {
      * 命中则直接调 send_cmd 回复（TX，仅匹配 RX 故不会循环）。
      * 一条 RX 行最多命中第一条匹配规则，避免一收多发。
      */
-    processAutoReply(sessionId: string, lines: RawLogLine[]) {
-      const s = this.sessions[sessionId]
-      if (!s || !s.autoReply.enabled || s.status !== 'connected') return
-      const matchers: { rule: AutoReplyRule; re: RegExp | null }[] = []
-      for (const r of s.autoReply.rules) {
-        if (r.enabled && r.trigger) {
-          matchers.push({
-            rule: r,
-            re: buildTestMatcher({
-              pattern: r.trigger,
-              useRegex: r.useRegex,
-              caseSensitive: r.caseSensitive,
-              wholeWord: r.wholeWord,
-            }),
-          })
-        }
-      }
-      if (matchers.length === 0) return
-      for (const ln of lines) {
-        if (ln.dir !== 'rx') continue
-        for (const { rule, re } of matchers) {
-          if (re && re.test(ln.text)) {
-            const payload =
-              rule.replyMode === 'ascii' && rule.appendNewline
-                ? rule.reply + '\n'
-                : rule.reply
-            if (payload) {
-              invoke('send_cmd', {
-                sessionId,
-                mode: rule.replyMode,
-                text: payload,
-              }).catch(() => {})
-            }
-            break
-          }
-        }
-      }
-    },
-    /**
-     * 告警扫描：对每条 RX 行依序尝试启用的规则；规则含窗口计数阈值与触发冷却，
-     * 触发后发系统通知（首次自动请求权限）、可选提示音，并写入告警历史。
-     * 窗口/冷却状态存于模块级 Map（非响应式），容量封顶防泄漏。
-     */
-    processAlerts(sessionId: string, lines: LogLine[]) {
-      const s = this.sessions[sessionId]
-      if (!s || !s.alerts.enabled || lines.length === 0) return
-      const matchers: { rule: AlertRule; re: RegExp | null }[] = []
-      for (const r of s.alerts.rules) {
-        if (!r.enabled || !r.pattern) continue
-        matchers.push({
-          rule: r,
-          re: buildTestMatcher({
-            pattern: r.pattern,
-            useRegex: r.useRegex,
-            caseSensitive: r.caseSensitive,
-            wholeWord: r.wholeWord,
-          }),
-        })
-      }
-      if (matchers.length === 0) return
-      const alertStore = useAlertStore()
-      const now = Date.now()
-      for (const ln of lines) {
-        if (ln.dir !== 'rx') continue
-        for (const { rule, re } of matchers) {
-          if (!re || !re.test(ln.text)) continue
-          const key = `${sessionId}:${rule.id}`
-          let st = alertWinStates.get(key)
-          if (!st) {
-            st = { winStart: now, count: 0, lastFire: 0 }
-            alertWinStates.set(key, st)
-          }
-          if (alertWinStates.size > 500) pruneAlertWinStates()
-          const winMs = Math.max(0, rule.windowSec) * 1000
-          if (winMs === 0 || now - st.winStart > winMs) {
-            st.winStart = now
-            st.count = 0
-          }
-          st.count += 1
-          const need = Math.max(1, rule.minCount)
-          if (st.count < need) continue
-          if (rule.cooldownSec > 0 && now - st.lastFire < rule.cooldownSec * 1000) continue
-          st.lastFire = now
-          st.count = 0
-          fireAlert(alertStore, s.config.name, sessionId, ln, rule)
-        }
-      }
-    },
     requestJump(id: string, no: number) {
       const s = this.sessions[id]
       if (s) s.jump = { no, token: Date.now() }
