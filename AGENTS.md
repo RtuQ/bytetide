@@ -68,8 +68,9 @@
 
 ```
 .app (column, 100vh)
- ├─ PortBar     ← 端口配置 + “连接”启动新标签页（常驻顶部；右侧全局区：
- │                打开日志/日志设置/REST 桥接弹层 BridgePopover/连接预设/分屏/主题）
+ ├─ PortBar     ← 常驻单行：＋新建连接(弹层：数据源+参数+从预设) / 打开日志 / 设置
+ │                （SettingsPopover 弹层按 日志/集成/视图 分组，二级视图同浮层切换；
+ │                上次连接参数 localStorage 记忆，预设从设置或新建弹层应用）
  ├─ TabBar      ← 串口会话标签
  └─ .app-main (row, flex:1)
      ├─ .app-center (column)
