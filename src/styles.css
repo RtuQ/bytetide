@@ -892,13 +892,17 @@ input[type="color"]:focus-visible {
 
 /* ---------- Port bar ---------- */
 .portbar {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 14px;
-  align-items: flex-end;
-  padding: 10px 12px;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 12px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
+}
+.portbar .sp {
+  flex: 1;
 }
 .field {
   display: flex;
@@ -919,10 +923,110 @@ input[type="color"]:focus-visible {
 .portbar-spacer {
   flex: 1 1 auto;
 }
-.portbar-actions {
+/* PortBar 弹层（新建连接 / 设置）：锚定 portbar 下缘，单浮层无嵌套 */
+.portbar-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  z-index: 50;
+  width: 340px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  padding: 12px;
   display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.portbar-pop.left {
+  left: 12px;
+}
+.portbar-pop.right {
+  right: 12px;
+}
+.portbar-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.03em;
+}
+.nc-port-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.nc-port-row .select {
+  flex: 1;
+}
+.row2,
+.row3 {
+  display: grid;
   gap: 8px;
-  align-items: flex-end;
+}
+.row2 {
+  grid-template-columns: 1fr 1fr;
+}
+.row3 {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+.pop-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* 设置弹层菜单（日志/集成/视图 分组） */
+.sm-sec {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 2px 8px 0;
+}
+.sm-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-family: var(--font-ui);
+  text-align: left;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.sm-item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.sm-item svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+.sm-sub {
+  display: block;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  margin-top: 1px;
+}
+.sm-sep {
+  height: 1px;
+  background: var(--border);
+}
+.sm-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 .err-msg {
   display: inline-flex;
@@ -1655,22 +1759,11 @@ input[type="color"]:focus-visible {
   padding: 6px 10px 8px;
   border-top: 1px solid var(--border);
 }
-/* AI 批注面板 */
-.ai-sect {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-.ai-sect-head {
+/* AI 批注面板（独立侧栏面板） */
+.ai-sect-foot {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
-}
-.ai-clear {
-  margin-left: auto;
-  padding: 0 6px;
-  height: 20px;
+  justify-content: flex-end;
+  margin-top: 6px;
 }
 .ai-list {
   overflow-y: auto;
@@ -1962,39 +2055,7 @@ input[type="color"]:focus-visible {
   line-height: 1.55;
 }
 
-/* ---------- Log settings popover (port bar) ---------- */
-.logcfg {
-  position: relative;
-}
-.logcfg-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-}
-.logcfg-pop {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 50;
-  width: 320px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-md);
-  padding: 10px 12px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.logcfg-pop-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text);
-  letter-spacing: 0.03em;
-}
+/* ---------- 日志设置内容（由设置弹层承载） ---------- */
 .logcfg-tokens {
   display: flex;
   flex-wrap: wrap;
@@ -2014,13 +2075,6 @@ input[type="color"]:focus-visible {
   font-family: var(--font-mono);
   font-size: 10.5px;
 }
-.logcfg-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
 /* ---------- Split view (多端口分屏) ---------- */
 .split-cols {
   flex: 1;
@@ -2271,10 +2325,7 @@ input[type="color"]:focus-visible {
   flex: 0 0 auto;
 }
 
-/* ---------- 连接配置预设 popover ---------- */
-.preset-pop {
-  width: 340px;
-}
+/* ---------- 连接配置预设内容（由设置弹层承载） ---------- */
 .preset-save-row {
   display: flex;
   gap: 6px;
@@ -2430,7 +2481,7 @@ input[type="color"]:focus-visible {
   grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
-/* REST 桥接面板 */
+/* REST 桥接内容（由设置弹层承载） */
 .bridge-dot {
   flex: none;
   width: 7px;
@@ -2438,8 +2489,6 @@ input[type="color"]:focus-visible {
   border-radius: 50%;
   background: var(--ok);
   box-shadow: 0 0 6px var(--ok);
-  align-self: center;
-  margin-left: 2px;
 }
 .bridge-url {
   font-family: var(--font-mono);

@@ -21,7 +21,7 @@ import AlertPanel from './components/AlertPanel.vue'
 import ConfigPresetsPanel from './components/ConfigPresetsPanel.vue'
 import ComparePanel from './components/ComparePanel.vue'
 import PlotConfigPanel from './components/PlotConfigPanel.vue'
-import BridgePanel from './components/BridgePanel.vue'
+import AiNotesPanel from './components/AiNotesPanel.vue'
 import MatchStats from './components/MatchStats.vue'
 import SendPanel from './components/SendPanel.vue'
 import SplitView from './components/SplitView.vue'
@@ -185,7 +185,7 @@ const sidebarStyle = computed(() =>
         <ConfigPresetsPanel />
         <ComparePanel />
         <PlotConfigPanel />
-        <BridgePanel />
+        <AiNotesPanel />
         <MatchStats />
       </aside>
     </div>
