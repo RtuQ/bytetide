@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, provide, ref } from 'vue'
-import type { UnlistenFn } from '@tauri-apps/api/event'
+import { emit, type UnlistenFn } from '@tauri-apps/api/event'
 import { useSessionStore } from './stores/session'
 import { useBridgeStore } from './stores/bridge'
 import { setupEvents } from './composables/useTauriEvents'
@@ -54,6 +54,8 @@ onMounted(async () => {
   unlistens.value = await setupEvents()
   await store.refreshPorts()
   await bridge.load()
+  // 首帧就绪：通知 Rust 显示窗口（防白屏；浏览器冒烟无后端时静默）
+  emit('app-ready').catch(() => {})
 })
 onBeforeUnmount(() => {
   unlistens.value.forEach((f) => f())

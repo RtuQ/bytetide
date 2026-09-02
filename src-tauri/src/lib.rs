@@ -6,7 +6,7 @@ mod session;
 mod state;
 
 use single_instance::SingleInstance;
-use tauri::Manager;
+use tauri::{Manager, Listener};
 
 use crate::state::AppState;
 
@@ -138,6 +138,16 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             if let Some(win) = app.get_webview_window("main") {
                 round_window_corners(&win);
+            }
+            // 防启动白屏：窗口以 visible:false 创建（tauri.conf.json），
+            // 前端挂载完成 emit app-ready 后才显示，首帧即完整 UI
+            // （v2 listen 返回 EventId，监听器随应用存活，无需保活）
+            #[cfg(not(target_os = "macos"))]
+            if let Some(win) = app.get_webview_window("main") {
+                let w = win.clone();
+                app.listen("app-ready", move |_| {
+                    let _ = w.show();
+                });
             }
             Ok(())
         })
