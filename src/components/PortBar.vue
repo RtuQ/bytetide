@@ -5,6 +5,7 @@ import { useSessionStore } from '../stores/session'
 import { theme, toggleTheme } from '../composables/useTheme'
 import LogSettingsPanel from './LogSettingsPanel.vue'
 import PresetsPanel from './PresetsPanel.vue'
+import BridgePopover from './BridgePopover.vue'
 import type { PortConfig } from '../types'
 
 const store = useSessionStore()
@@ -242,6 +243,7 @@ function onApplyPreset(c: PortConfig) {
         <span>{{ opening ? '打开中…' : '打开日志' }}</span>
       </button>
       <LogSettingsPanel />
+      <BridgePopover />
       <PresetsPanel :current="cfg" @apply="onApplyPreset" />
       <button
         class="btn btn-ghost"

@@ -1,25 +1,17 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useBridgeStore } from '../stores/bridge'
-import { useSessionStore } from '../stores/session'
 import type { BridgeConfig } from '../types'
 
 const bridge = useBridgeStore()
 const cfg = computed(() => bridge.config)
+const open = ref(false)
 
-// AI 批注小节：跟随活动会话（REST 桥写入 → 事件实时同步）
-const store = useSessionStore()
-const active = computed(() => store.active)
-const aiNotes = computed(() => active.value?.aiNotes ?? [])
-
-function jumpToNote(no: number) {
-  if (active.value) store.requestJump(active.value.id, no)
+function toggle() {
+  open.value = !open.value
 }
-function removeNote(id: string) {
-  if (active.value) store.removeAiNote(active.value.id, id)
-}
-function clearNotes() {
-  if (active.value) store.clearAiNotes(active.value.id)
+function close() {
+  open.value = false
 }
 
 function patch(p: Partial<BridgeConfig>) {
@@ -41,14 +33,28 @@ function onPort(e: Event) {
 </script>
 
 <template>
-  <details class="panel">
-    <summary class="panel-head">
-      <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-      <span class="panel-title">REST 桥接</span>
+  <div class="logcfg bridgecfg">
+    <button
+      class="btn btn-ghost btn-icon"
+      type="button"
+      :class="{ 'is-active': open, 'is-on': bridge.running }"
+      title="REST 桥接：外部 AI 经 HTTP 读取/分析日志"
+      aria-label="REST 桥接"
+      @click="toggle"
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
       <span v-if="bridge.running" class="bridge-dot" title="桥服务运行中"></span>
-      <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-    </summary>
-    <div class="panel-body">
+    </button>
+
+    <div v-if="open" class="logcfg-backdrop" @click="close"></div>
+    <div v-if="open" class="logcfg-pop bridgecfg-pop" @click.stop>
+      <div class="logcfg-pop-head">
+        <span>REST 桥接</span>
+        <button class="btn btn-ghost btn-icon btn-sm" type="button" title="关闭" aria-label="关闭" @click="close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </div>
+
       <label class="check">
         <input type="checkbox" :checked="cfg.enabled" @change="onEnabled" />
         <span class="box">
@@ -111,40 +117,6 @@ function onPort(e: Event) {
         远程/虚拟机：把地址与令牌复制到 AI 机器，设置环境变量 SERIALTOOL_URL / SERIALTOOL_TOKEN。
       </p>
       <p v-if="bridge.lastError" class="panel-hint hint-warn">{{ bridge.lastError }}</p>
-
-      <!-- AI 批注：AI 经 REST 桥对可疑行留言，日志行标记 + 此处列表实时显示 -->
-      <div class="ai-sect">
-        <div class="ai-sect-head">
-          <span class="field-label">AI 批注</span>
-          <span v-if="aiNotes.length" class="badge">{{ aiNotes.length }}</span>
-          <button
-            v-if="aiNotes.length"
-            class="btn btn-ghost btn-sm ai-clear"
-            @click="clearNotes()"
-          >
-            清空
-          </button>
-        </div>
-        <div v-if="aiNotes.length" class="ai-list">
-          <div v-for="n in aiNotes" :key="n.id" class="ai-item" @click="jumpToNote(n.no)">
-            <div class="ai-meta">
-              <span class="ms-no">{{ n.no }}</span>
-              <span class="ms-ts">{{ n.ts }}</span>
-              <button
-                class="ai-x"
-                title="删除此批注"
-                aria-label="删除此批注"
-                @click.stop="removeNote(n.id)"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-              </button>
-            </div>
-            <div class="ai-note">{{ n.note }}</div>
-            <div v-if="n.text" class="ai-excerpt">{{ n.text }}</div>
-          </div>
-        </div>
-        <p v-else class="panel-hint">暂无批注。AI 分析时可对可疑行写入批注，此处与日志行标记实时显示。</p>
-      </div>
     </div>
-  </details>
+  </div>
 </template>

@@ -1618,22 +1618,11 @@ input[type="color"]:focus-visible {
   padding: 6px 10px 8px;
   border-top: 1px solid var(--border);
 }
-/* AI 批注面板 */
-.ai-sect {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-.ai-sect-head {
+/* AI 批注面板（独立侧栏面板） */
+.ai-sect-foot {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
-}
-.ai-clear {
-  margin-left: auto;
-  padding: 0 6px;
-  height: 20px;
+  justify-content: flex-end;
+  margin-top: 6px;
 }
 .ai-list {
   overflow-y: auto;
@@ -2393,16 +2382,18 @@ input[type="color"]:focus-visible {
   grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
-/* REST 桥接面板 */
-.bridge-dot {
-  flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--ok);
-  box-shadow: 0 0 6px var(--ok);
-  align-self: center;
-  margin-left: 2px;
+/* REST 桥接弹层（PortBar 全局区；容器复用 .logcfg-* 浮层结构） */
+.bridgecfg .btn {
+  position: relative;
+}
+.bridgecfg-pop {
+  width: 340px;
+}
+.bridgecfg .bridge-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  margin-left: 0;
 }
 .bridge-url {
   font-family: var(--font-mono);

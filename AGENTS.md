@@ -68,7 +68,8 @@
 
 ```
 .app (column, 100vh)
- ├─ PortBar     ← 端口配置 + “连接”启动新标签页（常驻顶部）
+ ├─ PortBar     ← 端口配置 + “连接”启动新标签页（常驻顶部；右侧全局区：
+ │                打开日志/日志设置/REST 桥接弹层 BridgePopover/连接预设/分屏/主题）
  ├─ TabBar      ← 串口会话标签
  └─ .app-main (row, flex:1)
      ├─ .app-center (column)
@@ -83,7 +84,7 @@
          ├─ ConfigPresetsPanel 预设库(四类+JSON导入导出)
          ├─ ComparePanel       双会话时间对齐对比
          ├─ PlotConfigPanel
-         ├─ BridgePanel        REST 桥接（面板底部内嵌「AI 批注」小节：REST 写入→事件实时显示，可删/清空）
+         ├─ AiNotesPanel       AI 批注（REST 写入→事件实时显示，可删/清空；跟随活动会话）
          └─ MatchStats         (显示名「监控」，纯流量迷你图，flex:1 内部滚动；
                                 收起时 :not([open]) 回退 flex:0 0 auto 不占位)
 ```
