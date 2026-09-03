@@ -124,30 +124,31 @@ export function recordBatch(
   }
 }
 
-// ===== 临时取证探针（验证 WebView2 唤醒节流，确认后移除） =====
-// tick：1s 心跳。正常节拍 gap≈1000ms；若被深度节流，gap 会呈 ~60s 级跳变。
-// gap>1.5s 才落盘（kind=tick，lagMs 字段记 gap），正常时零噪音。
-// consume：滞后(>2s)批次逐批记录（不受 60s 心跳门控），还原唤醒后的排空模式。
-let lastTickAt = 0
-setInterval(() => {
-  const now = Date.now()
-  const gap = lastTickAt ? now - lastTickAt : 1000
-  lastTickAt = now
-  console.log('tick', now, `gap=${gap}ms`)
-  if (gap > 1500) {
-    const vis: DiagEntry['vis'] =
-      typeof document !== 'undefined' && document.visibilityState === 'visible'
-        ? 'visible'
-        : typeof document === 'undefined'
-          ? 'unknown'
-          : 'hidden'
-    void invoke('append_perf_diag_cmd', {
-      kind: 'tick',
-      sessionId: '-',
-      lagMs: gap,
-      batchMs: 0,
-      lines: 0,
-      vis,
-    }).catch(() => {})
-  }
-}, 1000)
+// ===== 取证探针（仅 DEV 构建；release 由 Vite tree-shake 移除） =====
+// tick：1s 心跳测真实唤醒间隔。健康时 gap≈1000ms（仅 console）；被深度
+// 节流时 gap 呈秒级~分钟级跳变，>1.5s 落盘（kind=tick，lagMs 记 gap）。
+if (import.meta.env.DEV) {
+  let lastTickAt = 0
+  setInterval(() => {
+    const now = Date.now()
+    const gap = lastTickAt ? now - lastTickAt : 1000
+    lastTickAt = now
+    console.log('tick', now, `gap=${gap}ms`)
+    if (gap > 1500) {
+      const vis: DiagEntry['vis'] =
+        typeof document !== 'undefined' && document.visibilityState === 'visible'
+          ? 'visible'
+          : typeof document === 'undefined'
+            ? 'unknown'
+            : 'hidden'
+      void invoke('append_perf_diag_cmd', {
+        kind: 'tick',
+        sessionId: '-',
+        lagMs: gap,
+        batchMs: 0,
+        lines: 0,
+        vis,
+      }).catch(() => {})
+    }
+  }, 1000)
+}

@@ -80,29 +80,34 @@ const showDir = computed(() => session.value?.showDir ?? true)
 // 日志区最小宽度：等宽字体按最长行字符数×ch 估宽，超出视口时 scroller 横向滚动。
 // 宽度经 --log-min-w 撑在库的 item-wrapper 上（其自带 overflow:hidden 会裁掉
 // 行级溢出，行本身无法产生滚动范围），全部行共用保证滚动条稳定不跳。
-// 固定列预算：252px 覆盖 gutter(12)/no(66)/ts(~70)/dir(30)/Δ(~45)+内边距；随列隐藏扣减；
+// 估算口径与实际渲染对齐（styles.css 列宽）：ts 与 text 同为等宽字体，
+// 一并按字符数计入（自定义长时间戳模板自动跟随）；像素列只含
+// gutter(12) + padding(20) + no(66) + dir(30)，Δ 列(66) 仅打开时计入；
 // HEX 视图每字节 "XX " 约 ×3；封顶防极端长行。
 // 行最小宽度与日志区统计一样走 300ms 节流：每批次 O(n) 扫描在持续高吞吐下
 // 会累积成吞吐赤字（积压数小时仍在不实时），不能挂在每批都变的 computed 上。
-const rowMinWidth = ref('calc(40ch + 252px)')
+const rowMinWidth = ref('calc(40ch + 128px)')
 const recomputeRowMinWidth = useThrottleFn(
   () => {
+    // 每行占宽 = (ts 字符 + text 字符(+hex 放大)) × ch + 像素列
     let m = 0
     const items = viewItems.value
     for (let i = 0; i < items.length; i++) {
-      const t = items[i]!.text
+      const it = items[i]!
+      const t = it.text
       // 含 ANSI 序列的行按剥离后的显示长度估宽（守卫先行走快速路径，避免全量正则）
-      const len = t.indexOf('\x1b') === -1 ? t.length : stripAnsi(t).length
+      const disp = t.indexOf('\x1b') === -1 ? t.length : stripAnsi(t).length
+      const len = it.ts.length + (hexView.value ? disp * 3 + 2 : disp)
       if (len > m) m = len
     }
-    const chars = Math.min(hexView.value ? m * 3 + 2 : m, 20000)
-    const fixedPx = 252 - (showLineNo.value ? 0 : 66) - (showDir.value ? 0 : 30)
+    const chars = Math.min(m, 20000)
+    const fixedPx = 128 - (showLineNo.value ? 0 : 66) - (showDir.value ? 0 : 30) + (showDelta.value ? 66 : 0)
     rowMinWidth.value = `calc(${Math.max(chars, 40)}ch + ${fixedPx}px)`
   },
   300,
   true,
 )
-watch([() => session.value?.lineCounter ?? 0, hexView, showLineNo, showDir], recomputeRowMinWidth, {
+watch([() => session.value?.lineCounter ?? 0, hexView, showLineNo, showDir, showDelta], recomputeRowMinWidth, {
   immediate: true,
 })
 

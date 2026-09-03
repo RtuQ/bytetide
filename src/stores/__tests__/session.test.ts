@@ -18,48 +18,66 @@ function mkRaw(epoch: number, dir: 'rx' | 'tx' = 'rx'): RawLogLine {
   return { ts: '00:00:00.000', dir, text: `l${epoch}`, bytes: null, epochMillis: epoch }
 }
 
-describe('appendMissing 补拉去重', () => {
+describe('appendPulled 拉模型摄取', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
-  it('插入缺失行、跳过已有行（同 epoch 同方向）', () => {
+  function mkPulled(ringNo: number) {
+    return { ...mkRaw(ringNo), ringNo }
+  }
+
+  it('按 ringNo 升序入表、游标推进到最新、行号全局单调', () => {
     const store = useSessionStore()
-    const id = store.createLocalSession('local-test', CFG)
-    store.appendLines(id, [mkRaw(100), mkRaw(200), mkRaw(300)])
-    // 补拉包含 200/300（已有）+ 400/500（缺失）
-    const inserted = store.appendMissing(id, [mkRaw(200), mkRaw(300), mkRaw(400), mkRaw(500)])
-    expect(inserted.map((l) => l.epochMillis)).toEqual([400, 500])
-    const lines = store.sessions[id]!.lines
-    expect(lines.map((l) => l.epochMillis)).toEqual([100, 200, 300, 400, 500])
-    // 行号全局单调
-    expect(lines.map((l) => l.no)).toEqual([1, 2, 3, 4, 5])
+    const id = store.createLocalSession('local-pull', CFG)
+    const fresh = store.appendPulled(id, [mkPulled(3), mkPulled(7), mkPulled(9)])
+    const s = store.sessions[id]!
+    expect(fresh.map((l) => l.no)).toEqual([1, 2, 3])
+    expect(s.lines.map((l) => l.epochMillis)).toEqual([3, 7, 9])
+    expect(s.pullNo).toBe(9)
   })
 
-  it('同 epoch 不同方向不算重复', () => {
+  it('游标防御：ringNo <= pullNo 的重复拉取不入表', () => {
     const store = useSessionStore()
-    const id = store.createLocalSession('local-test', CFG)
-    store.appendLines(id, [mkRaw(100, 'rx')])
-    const inserted = store.appendMissing(id, [mkRaw(100, 'tx')])
-    expect(inserted).toHaveLength(1)
-    expect(store.sessions[id]!.lines).toHaveLength(2)
+    const id = store.createLocalSession('local-pull2', CFG)
+    store.appendPulled(id, [mkPulled(1), mkPulled(2)])
+    // 重复拉到已消费的 1/2 + 新行 5：只有 5 入表
+    const fresh = store.appendPulled(id, [mkPulled(1), mkPulled(2), mkPulled(5)])
+    expect(fresh.map((l) => l.epochMillis)).toEqual([5])
+    expect(store.sessions[id]!.lines).toHaveLength(3)
+    expect(store.sessions[id]!.pullNo).toBe(5)
   })
 
-  it('空补拉返回空且不改动缓冲', () => {
+  it('超过 MAX_LINES 裁剪最旧行并累计 droppedLines', () => {
     const store = useSessionStore()
-    const id = store.createLocalSession('local-test', CFG)
-    store.appendLines(id, [mkRaw(100)])
-    const before = store.sessions[id]!.lines
-    expect(store.appendMissing(id, [mkRaw(100)])).toEqual([])
-    expect(store.sessions[id]!.lines).toBe(before)
-    expect(store.sessions[id]!.lineCounter).toBe(1)
+    const id = store.createLocalSession('local-pull3', CFG)
+    const batch = Array.from({ length: 50010 }, (_, i) => mkPulled(i + 1))
+    store.appendPulled(id, batch)
+    const s = store.sessions[id]!
+    expect(s.lines).toHaveLength(50000)
+    expect(s.droppedLines).toBe(10)
+    expect(s.pullNo).toBe(50010)
   })
 
-  it('补拉自身重复行只插一次', () => {
+  it('空批次返回空且不推进游标', () => {
     const store = useSessionStore()
-    const id = store.createLocalSession('local-test', CFG)
-    store.appendLines(id, [mkRaw(100)])
-    const inserted = store.appendMissing(id, [mkRaw(400), mkRaw(400)])
-    expect(inserted).toHaveLength(1)
-    expect(store.sessions[id]!.lines).toHaveLength(2)
+    const id = store.createLocalSession('local-pull4', CFG)
+    expect(store.appendPulled(id, [])).toEqual([])
+    expect(store.sessions[id]!.pullNo).toBe(0)
+  })
+
+  it('clearLog 归零 droppedLines，pullNo 不回退（后端 no 单调）', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('local-pull5', CFG)
+    // 超出前端缓冲上限（50000），制造 10 行丢弃
+    const batch = Array.from({ length: 50010 }, (_, i) => mkPulled(i + 1))
+    store.appendPulled(id, batch)
+    expect(store.sessions[id]!.droppedLines).toBe(10)
+    await store.clearLog(id)
+    // 清屏后旧缺口已无意义，丢弃计数归零
+    expect(store.sessions[id]!.droppedLines).toBe(0)
+    // 后端 no 游标单调不回退：清屏后旧 ringNo 不回灌，新行正常入表
+    expect(store.appendPulled(id, [mkPulled(50010), mkPulled(50011)])).toHaveLength(1)
+    expect(store.sessions[id]!.lines).toHaveLength(1)
+    expect(store.sessions[id]!.droppedLines).toBe(0)
   })
 
   it('appendLines 丢弃水位以下的迟到事件行（防补拉重复）', () => {
@@ -74,21 +92,12 @@ describe('appendMissing 补拉去重', () => {
     expect(s.lines).toHaveLength(2)
   })
 
-  it('appendMissing 推进水位到最新插入行', () => {
-    const store = useSessionStore()
-    const id = store.createLocalSession('local-test', CFG)
-    store.appendLines(id, [mkRaw(100)])
-    store.appendMissing(id, [mkRaw(200), mkRaw(300)])
-    expect(store.sessions[id]!.pulledThrough).toBe(300)
-    // 水位以下的迟到事件行被 appendLines 挡住
-    expect(store.appendLines(id, [mkRaw(250)])).toEqual([])
-  })
-
   it('clearLog 重置水位', () => {
     const store = useSessionStore()
     const id = store.createLocalSession('local-test', CFG)
     store.appendLines(id, [mkRaw(100)])
-    store.appendMissing(id, [mkRaw(200)])
+    const s = store.sessions[id]!
+    s.pulledThrough = 200
     expect(store.sessions[id]!.pulledThrough).toBe(200)
     // clearLog 会调后端命令；仅验证水位重置（invoke 失败被吞）
     void store.clearLog(id)

@@ -6,7 +6,7 @@ mod session;
 mod state;
 
 use single_instance::SingleInstance;
-use tauri::Manager;
+use tauri::{Manager, Listener};
 
 use crate::state::AppState;
 
@@ -41,46 +41,39 @@ fn disable_power_throttling() -> bool {
     true
 }
 
-/// WebView2（Chromium）对“无交互页面”有独立于 EcoQoS 的深度节流：
-/// 数分钟无输入后 timer/task 降到约每分钟一次（实测前端每 60s 醒一次、
-/// 每批只处理 1-5 行，而后端 ring 同期正常推进）。必须在 WebView2
-/// 环境创建前设 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS 才能生效。
-fn disable_webview_background_throttle() {
-    #[cfg(windows)]
-    {
-        // intensive-wake-up-throttling=5 分钟级节流；CalculateNativeWinOcclusion
-        // 会把被遮挡窗口当不可见再叠加冻结。都不影响前台性能。
-        let args = "--disable-intensive-wake-up-throttling --disable-features=CalculateNativeWinOcclusion";
-        // 已有用户参数时追加，不覆盖外部诊断配置
-        let prev = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default();
-        let merged = if prev.is_empty() {
-            args.to_string()
-        } else if prev.contains("intensive-wake-up-throttling") {
-            prev
-        } else {
-            format!("{prev} {args}")
-        };
-        std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", merged);
-    }
-    #[cfg(not(windows))]
-    {}
-}
-
 /// 后端诊断心跳：每 10s 把各 live 会话 ring 末行时间戳落后墙钟的毫秒数
-/// 追加到 app_data/perf-heartbeat.log。完全在后端线程，不依赖前端事件循环--
+/// 追加到 app_log_dir/perf-heartbeat.log。完全在后端线程，不依赖前端事件循环--
 /// 前端卡死时仍能持续记录“后端视角的滞后”，事后直接看文件即可定位
 /// （分界：后端滞后=读线程/IO 被节流；后端 0 滞后而前端滞后=WebView 积压）。
 /// 启动即调用，内部同时完成 EcoQoS 限流的退出并把结果写进首行。
+/// 诊断日志统一落 `app_log_dir`（Windows: %LOCALAPPDATA%\<id>\logs；
+/// macOS: ~/Library/Logs/<id>；Linux: XDG state/<id>/logs）——机器本地
+/// 数据不随 Roaming 漫游，符合平台惯例。超 5MB 打开时截断（诊断日志
+/// 无需无限历史）。返回 None = 目录不可用，调用方静默放弃。
+pub(crate) fn open_diag_log(app: &tauri::AppHandle, name: &str) -> Option<std::fs::File> {
+    use std::io::Write as _;
+    let dir = app.path().app_log_dir().ok()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(name);
+    const CAP: u64 = 5 * 1024 * 1024;
+    if std::fs::metadata(&path).map(|m| m.len() > CAP).unwrap_or(false) {
+        if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open(&path) {
+            let _ = f.set_len(0);
+            let _ = f.flush();
+        }
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .ok()
+}
+
 fn start_perf_heartbeat(app: &tauri::AppHandle) {
     use std::io::Write as _;
 
     let ecoqos_off = disable_power_throttling();
-    let Ok(dir) = app.path().app_data_dir() else { return };
-    let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join("perf-heartbeat.log");
-    let Ok(mut w) = std::fs::OpenOptions::new().create(true).append(true).open(&path) else {
-        return;
-    };
+    let Some(mut w) = open_diag_log(app, "perf-heartbeat.log") else { return };
     let _ = writeln!(
         w,
         "# heartbeat start {} ecoqos_disabled={}",
@@ -138,9 +131,6 @@ fn round_window_corners(window: &tauri::WebviewWindow) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 必须在任何窗口/WebView 创建之前：关闭 WebView2 后台深度节流
-    disable_webview_background_throttle();
-
     // 单实例：若已有实例运行则静默退出；锁创建失败则放行，不阻断启动
     let instance = SingleInstance::new("serial_tool-single-instance-lock");
     if let Ok(ref i) = instance {
@@ -167,6 +157,16 @@ pub fn run() {
             if let Some(win) = app.get_webview_window("main") {
                 round_window_corners(&win);
             }
+            // 防启动白屏：窗口以 visible:false 创建（tauri.conf.json），
+            // 前端挂载完成 emit app-ready 后才显示，首帧即完整 UI
+            // （v2 listen 返回 EventId，监听器随应用存活，无需保活）
+            #[cfg(not(target_os = "macos"))]
+            if let Some(win) = app.get_webview_window("main") {
+                let w = win.clone();
+                app.listen("app-ready", move |_| {
+                    let _ = w.show();
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -178,7 +178,8 @@ pub fn run() {
             commands::session_log_path_cmd,
             commands::export_text_cmd,
             commands::append_perf_diag_cmd,
-            commands::ring_lines_cmd,
+            commands::ring_lines_no_cmd,
+            commands::set_live_rules_cmd,
             commands::read_text_file_cmd,
             commands::create_offline_session_cmd,
             commands::bridge_get_config_cmd,

@@ -73,19 +73,15 @@ pub fn export_text_cmd(path: String, content: String) -> Result<(), String> {
 }
 
 /// 前端性能诊断旁路落盘：把哨兵产生的单条诊断记录追加到
-/// app_data/perf-frontend.log。前端调用方不 await、失败静默--
+/// app_log_dir/perf-frontend.log。前端调用方不 await、失败静默--
 /// 这是“前端自己给自己取证”的通道，卡顿中事件循环仍活着时可用；
 /// 完全死透时由后端 perf-heartbeat.log 兜底记录后端视角。
 #[tauri::command]
 pub fn append_perf_diag_cmd(app: AppHandle, kind: String, session_id: String, lag_ms: u64, batch_ms: u64, lines: u64, vis: String) -> Result<(), String> {
     use std::io::Write as _;
-    let Ok(dir) = app.path().app_data_dir() else { return Ok(()) };
-    let _ = std::fs::create_dir_all(&dir);
-    let mut w = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("perf-frontend.log"))
-        .map_err(|e| e.to_string())?;
+    let Some(mut w) = crate::open_diag_log(&app, "perf-frontend.log") else {
+        return Ok(());
+    };
     writeln!(
         w,
         "{} kind={} s={} lag={}ms batch={}ms n={} vis={}",
@@ -100,18 +96,32 @@ pub fn append_perf_diag_cmd(app: AppHandle, kind: String, session_id: String, la
     .map_err(|e| e.to_string())
 }
 
-/// 前端自愈补拉：取 ring 中 epochMillis > sinceEpoch 的行（封顶 2000）。
-/// 深度节流/事件丢失导致前端滞后时，前端检测到后直接拉齐，不等事件补投。
+/// 前端推送实时规则（自动回复/告警）到会话：拉模型下评估在后端读线程。
 #[tauri::command]
-pub fn ring_lines_cmd(
+pub fn set_live_rules_cmd(
     session_id: String,
-    since_epoch: u64,
+    auto_reply: crate::serial::rules::AutoReplyCfg,
+    alerts: crate::serial::rules::AlertCfg,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .manager
+        .set_live_rules(&session_id, auto_reply, alerts)
+        .map_err(|e| e.to_string())
+}
+
+/// 视图拉模型数据通道：取 ring 中 `no > sinceNo` 的行（封顶 20000=ring 容量）。
+/// `no` 单调递增且清屏不回退，游标语义下不重不漏。
+#[tauri::command]
+pub fn ring_lines_no_cmd(
+    session_id: String,
+    since_no: u64,
     max: Option<usize>,
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::serial::manager::BridgeLine>, String> {
     state
         .manager
-        .ring_lines_since(&session_id, since_epoch, max.unwrap_or(2000))
+        .ring_lines_after_no(&session_id, since_no, max.unwrap_or(5000))
         .map_err(|e| e.to_string())
 }
 
