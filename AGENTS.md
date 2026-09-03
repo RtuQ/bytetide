@@ -27,6 +27,12 @@
 
 关键词高亮调色板（多色并行高亮）见 `src/types/index.ts` 的 `KEYWORD_PALETTE`，新增关键词时循环取色。
 
+### ANSI 颜色渲染（`src/composables/useAnsi.ts`）
+- 日志视图常开渲染 SGR：重置/加粗、16 色（`--ansi-*`/`--ansi-bright-*` token，深浅主题各一套）、256 色（cube/灰阶公式转 `rgb()`）、真彩透传 `rgb()`（设备数据直出，属不走 token 的合理例外）；非 SGR CSI、游离 ESC、行尾未闭合段整体吞掉。
+- 管线：`parseAnsi` 切样式游程 → 游程内跑 `segmentsFor` 叠加搜索/关键词高亮（高亮优先，`hlStyle` 覆盖 ANSI 色）→ LogView `rowSegments/segStyle` 渲染。
+- 性能：无 ESC 行走 `indexOf` 快速路径；`rowMinWidth` 估宽对含 ESC 行按 `stripAnsi` 后长度。
+- 限制：每行独立解析状态（嵌入式日志惯例行内自带 reset），跨行颜色延续不做；搜索/过滤/导出/HEX 仍基于含转义的原文。
+
 ### 字体
 - UI 文字（标签/按钮/正文）：`--font-ui`，系统无衬线（Segoe UI 优先，Windows 友好，离线可用）
 - 数据/日志/HEX/代码：`--font-mono`，等宽（Cascadia Code → JetBrains Mono → Fira Code → Consolas）

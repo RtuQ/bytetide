@@ -95,17 +95,23 @@ curl -sS -H "Authorization: Bearer $SERIALTOOL_TOKEN" \
   "$SERIALTOOL_URL/sessions/s1/lines?from=100&to=120&q=OK,ERR&hex=AA55&sinceMs=$(($(date +%s)000-60000))"
 ```
 
-### `GET /sessions/:id/follow?sinceNo=<int>&timeoutMs=<int>`
+### `GET /sessions/:id/follow?sinceNo=<int>&timeoutMs=<int>[&filterLimit=<int>&<filters>]`
 Long-poll: blocks up to `timeoutMs` (default 5000, max 30000) for lines with `no > sinceNo`, polling the ring every 50ms.
-`{ lines:BridgeLine[], lastNo, timedOut }`. If `timedOut` and no new data, retry with `sinceNo=<returned lastNo>`.
+`{ lines:BridgeLine[], lastNo, timedOut, truncated }`. If `timedOut` and no new data, retry with `sinceNo=<returned lastNo>`.
+
+**Server-side filtering** (implemented): add the full `/lines` filter set (`re`/`q`/`dir`/`exclude`/`hex`/`mask`/`ci`/`sinceMs`/`untilMs`) and only matching lines cross the wire. Semantics:
+- `lastNo` is the **scan high-water mark** (includes non-matching lines) — a stateless client loop `sinceNo = response.lastNo` never rescans and never livelocks.
+- On timeout with no matches, `lastNo` still advances past the scanned lines.
+- `filterLimit` (default 500, max 5000) caps matched lines per response; when hit, `truncated:true` and `lastNo` = the **last returned** line's `no` (the unconsumed remainder is picked up by the next request with that `sinceNo`).
+- With no filter fields at all, behavior is byte-identical to the unfiltered follow (no `filterLimit` applied).
 ```bash
 curl -sS -H "Authorization: Bearer $SERIALTOOL_TOKEN" \
-  "$SERIALTOOL_URL/sessions/s1/follow?sinceNo=1234&timeoutMs=5000"
+  "$SERIALTOOL_URL/sessions/s1/follow?sinceNo=1234&timeoutMs=15000&re=async+timeout|erase&exclude=HEARTBEAT"
 ```
 
 ## Server-side analysis (precomputed)
 
-**Filters are shared**: every endpoint below (`/histogram`, `/timing`, `/decode`, `/value-hist`, `/infer`) accepts the full `/lines` filter set (`dir`/`q`/`re`/`hex`/`mask`/`exclude`/`ci`/`sinceMs`/`untilMs`) alongside its own params, and defaults to `dir=rx` unless told otherwise. Example: `/decode?head=AA55&exclude=HEARTBEAT` decodes frames only from lines not containing `HEARTBEAT`.
+**Filters are shared**: every endpoint below (`/follow`, `/histogram`, `/timing`, `/decode`, `/value-hist`, `/infer`) accepts the full `/lines` filter set (`dir`/`q`/`re`/`hex`/`mask`/`exclude`/`ci`/`sinceMs`/`untilMs`) alongside its own params. The analysis endpoints (`/histogram`…`/infer`) default to `dir=rx` unless told otherwise; `/follow` keeps both directions unless `dir` is set. Example: `/decode?head=AA55&exclude=HEARTBEAT` decodes frames only from lines not containing `HEARTBEAT`.
 
 ### `GET /sessions/:id/histogram?bucket=<ms>&<filters>`
 Buckets filtered lines by `epochMillis` into `bucket`-ms windows (default 1000).
