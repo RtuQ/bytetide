@@ -7,22 +7,29 @@ import { setupEvents } from './composables/useTauriEvents'
 import { useHighlighter, HIGHLIGHTER_KEY } from './composables/useHighlighter'
 import { usePlotData, PLOT_DATA_KEY } from './composables/usePlotData'
 import { useTheme } from './composables/useTheme'
+import {
+  usePanelState,
+  loadCenterSplit,
+  saveCenterSplit,
+  SPLIT_MIN,
+  SPLIT_MAX,
+} from './composables/useLayoutPrefs'
 import { DEFAULT_PLOT_CONFIG, DEFAULT_SEARCH } from './types'
-import PortBar from './components/PortBar.vue'
 import TitleBar from './components/TitleBar.vue'
 import TabBar from './components/TabBar.vue'
 import LogView from './components/LogView.vue'
 import PlotView from './components/PlotView.vue'
+import CompareView from './components/CompareView.vue'
+import DockView from './components/DockView.vue'
+import StatusBar from './components/StatusBar.vue'
 import SearchPanel from './components/SearchPanel.vue'
 import BookmarkPanel from './components/BookmarkPanel.vue'
 import KeywordPanel from './components/KeywordPanel.vue'
 import AutoReplyPanel from './components/AutoReplyPanel.vue'
 import AlertPanel from './components/AlertPanel.vue'
 import ConfigPresetsPanel from './components/ConfigPresetsPanel.vue'
-import ComparePanel from './components/ComparePanel.vue'
 import PlotConfigPanel from './components/PlotConfigPanel.vue'
 import AiNotesPanel from './components/AiNotesPanel.vue'
-import MatchStats from './components/MatchStats.vue'
 import SendPanel from './components/SendPanel.vue'
 import SplitView from './components/SplitView.vue'
 
@@ -59,7 +66,58 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => {
   unlistens.value.forEach((f) => f())
+  window.removeEventListener('mousemove', onSplitMove)
+  window.removeEventListener('mouseup', onSplitEnd)
 })
+
+// ---- 视图四态（布局重构 V1）：viewbar 常驻于工具区之上，任何模式下都可切换/退出对比 ----
+const activeView = computed(() => store.active?.centerView ?? 'log')
+const compareOn = computed(() => store.compareMode)
+
+const VIEW_ITEMS = [
+  { key: 'log', label: '日志', title: '仅日志' },
+  { key: 'split', label: '分屏', title: '日志与图表同屏，可拖分割条调整高度' },
+  { key: 'plot', label: '图表', title: '仅图表' },
+] as const
+
+function setView(v: 'log' | 'split' | 'plot') {
+  if (store.compareMode) store.toggleCompareMode()
+  if (!store.activeId) return
+  store.setCenterView(store.activeId, v)
+}
+
+// ---- 日志↔图表 分屏高度比（拖拽手柄逻辑对齐侧栏手柄的 moved-while-down 模式） ----
+const splitPct = ref(loadCenterSplit())
+const logWrapStyle = computed(() =>
+  activeView.value === 'split' ? { flex: `0 0 ${splitPct.value}%` } : undefined,
+)
+
+let splitDragging = false
+let splitMoved = false
+function onSplitStart(e: MouseEvent) {
+  e.preventDefault()
+  splitDragging = true
+  splitMoved = false
+  document.body.classList.add('app-dragging')
+  window.addEventListener('mousemove', onSplitMove)
+  window.addEventListener('mouseup', onSplitEnd)
+}
+function onSplitMove(e: MouseEvent) {
+  if (!splitDragging) return
+  splitMoved = true
+  const el = document.getElementById('center-body')
+  if (!el) return
+  const r = el.getBoundingClientRect()
+  const pct = ((e.clientY - r.top) / r.height) * 100
+  splitPct.value = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, Math.round(pct)))
+}
+function onSplitEnd() {
+  splitDragging = false
+  document.body.classList.remove('app-dragging')
+  window.removeEventListener('mousemove', onSplitMove)
+  window.removeEventListener('mouseup', onSplitEnd)
+  if (splitMoved) saveCenterSplit(splitPct.value)
+}
 
 // ---- 侧栏：左缘手柄拖拽调宽；点击手柄上的按钮收起/展开；状态 localStorage 记忆 ----
 const SIDEBAR_KEY = 'serialtool.sidebar'
@@ -138,19 +196,63 @@ const sidebarStyle = computed(() =>
         flex: `0 0 ${sidebarWidth.value}px`,
       },
 )
+
+// ---- 面板开合记忆：默认全收起，用户展开/收起即持久化（布局重构 V1） ----
+const panel = usePanelState()
+function onPanelToggle(e: Event, id: string) {
+  // toggle 事件在 open 态变更后触发，读 DOM 当前值即用户意图
+  panel.setOpen(id, (e.target as HTMLDetailsElement).open)
+}
 </script>
 
 <template>
   <div class="app">
     <TitleBar />
-    <PortBar />
     <TabBar />
     <div class="app-main">
       <SplitView v-if="store.splitMode" />
       <template v-else>
         <div class="app-center">
-          <PlotView v-if="store.active?.plot?.enabled" :session-id="store.activeId ?? ''" />
-          <LogView v-else :session-id="store.activeId ?? ''" />
+          <!-- 视图切换条：常驻（对比模式下也能一键切回，兼作对比退出） -->
+          <div v-if="store.active" class="viewbar">
+            <div class="seg" role="group" aria-label="中心视图模式">
+              <button
+                v-for="v in VIEW_ITEMS"
+                :key="v.key"
+                class="seg-item"
+                :class="{ active: !compareOn && activeView === v.key }"
+                :title="v.title"
+                type="button"
+                @click="setView(v.key)"
+              >{{ v.label }}</button>
+              <button
+                class="seg-item"
+                :class="{ active: compareOn }"
+                title="双会话时间对齐对比（占中心区）"
+                type="button"
+                @click="store.toggleCompareMode()"
+              >对比</button>
+            </div>
+          </div>
+          <div id="center-body" class="center-body">
+            <div class="log-wrap" :style="logWrapStyle">
+              <LogView :session-id="store.activeId ?? ''" />
+            </div>
+            <div
+              v-if="activeView === 'split' && !compareOn"
+              class="hsplit"
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="调整日志与图表高度"
+              title="拖动调整日志/图表高度"
+              @mousedown="onSplitStart"
+            ></div>
+            <div v-if="activeView !== 'log' && !compareOn" class="plot-wrap">
+              <PlotView :session-id="store.activeId ?? ''" />
+            </div>
+            <CompareView v-if="compareOn" />
+          </div>
+          <DockView />
           <SendPanel />
         </div>
       </template>
@@ -179,17 +281,23 @@ const sidebarStyle = computed(() =>
         </button>
       </div>
       <aside class="app-sidebar" :class="{ collapsed: sidebarCollapsed }" :style="sidebarStyle">
-        <SearchPanel />
-        <BookmarkPanel />
-        <KeywordPanel />
-        <AutoReplyPanel />
-        <AlertPanel />
-        <ConfigPresetsPanel />
-        <ComparePanel />
-        <PlotConfigPanel />
-        <AiNotesPanel />
-        <MatchStats />
+        <div class="group-head">查找</div>
+        <SearchPanel :open="panel.isOpen('search')" @toggle="onPanelToggle($event, 'search')" />
+        <BookmarkPanel :open="panel.isOpen('bookmarks')" @toggle="onPanelToggle($event, 'bookmarks')" />
+
+        <div class="group-head">规则</div>
+        <KeywordPanel :open="panel.isOpen('keywords')" @toggle="onPanelToggle($event, 'keywords')" />
+        <AutoReplyPanel :open="panel.isOpen('autoreply')" @toggle="onPanelToggle($event, 'autoreply')" />
+        <AlertPanel :open="panel.isOpen('alerts')" @toggle="onPanelToggle($event, 'alerts')" />
+
+        <div class="group-head">数据</div>
+        <PlotConfigPanel :open="panel.isOpen('plot')" @toggle="onPanelToggle($event, 'plot')" />
+
+        <div class="group-head">库</div>
+        <ConfigPresetsPanel :open="panel.isOpen('presets')" @toggle="onPanelToggle($event, 'presets')" />
+        <AiNotesPanel :open="panel.isOpen('ainotes')" @toggle="onPanelToggle($event, 'ainotes')" />
       </aside>
     </div>
+    <StatusBar />
   </div>
 </template>

@@ -46,7 +46,7 @@
 
 ### 主题（深/浅）
 - 默认浅色（白）；深色可选，由 `:root[data-theme='light']` / 非 light 选择器覆盖同一组 token（仅覆盖值，类名不变）。默认值只在两处初始化：`index.html` 内联脚本与 `useTheme.loadTheme`，改默认必须同步两处。
-- 钩子挂在 `<html data-theme>`：`index.html` 内联脚本在 CSS 前据 `serialtool.theme` 设好，防首屏闪；`useTheme` 组合式（`src/composables/useTheme.ts`）提供 `theme` ref 与 `toggleTheme`，PortBar 有切换按钮。
+- 钩子挂在 `<html data-theme>`：`index.html` 内联脚本在 CSS 前据 `serialtool.theme` 设好，防首屏闪；`useTheme` 组合式（`src/composables/useTheme.ts`）提供 `theme` ref 与 `toggleTheme`，SettingsPopover 有切换按钮（布局重构 V1 前在 PortBar）。
 - **PlotView 用 `getComputedStyle(documentElement)` 读 token 并缓存**：切主题时已 `watch(theme)` 清缓存重绘；新增任何自读 token 的组件都要照此处理。
 - 新增颜色一律走 token，**不要硬编码 rgba/hex**（`.log-row` 分隔线/hover 旧硬编码已改回 `var(--border)`/`var(--bg-hover)`）。
 
@@ -70,35 +70,43 @@
 
 ---
 
-## 3. 布局结构（`src/App.vue`）
+## 3. 布局结构（`src/App.vue`，布局重构 V1 起 / `docs/plan-layout-v1.md`）
 
 ```
 .app (column, 100vh)
- ├─ PortBar     ← 常驻单行：＋新建连接(弹层：数据源+参数+从预设) / 打开日志 / 设置
- │                （SettingsPopover 弹层按 日志/集成/视图 分组，二级视图同浮层切换；
- │                上次连接参数 localStorage 记忆，预设从设置或新建弹层应用）
- ├─ TabBar      ← 串口会话标签
+ ├─ TitleBar    ← 标题行：品牌 + 设置(SettingsPopover：日志/集成/视图分组弹层，主题切换在此)
+ │                + 版本徽标/更新弹层 + 窗口控制；整行 data-tauri-drag-region 拖拽区
+ ├─ TabBar      ← 标签行：＋新建连接(NewConnectionPopover) + 会话标签(横滚) + 打开日志；
+ │                cfg/打开日志走 usePortConfig 共享单例（PortBar 组件已退役）
  └─ .app-main (row, flex:1)
-     ├─ .app-center (column)
-     │   ├─ LogView   ← 工具栏 + 虚拟滚动日志(横向可滚) + 空状态
-     │   └─ SendPanel ← 发送区（<details> 折叠条，默认收起）
-     └─ .app-sidebar (312px, column, overflow-y:auto) ← 十个可折叠面板（全默认收起）
-         ├─ SearchPanel        (搜索+紧邻其下的命中列表折叠节+过滤链编辑区)
-         ├─ BookmarkPanel      行书签列表
-         ├─ KeywordPanel
-         ├─ AutoReplyPanel
-         ├─ AlertPanel         告警规则+历史
-         ├─ ConfigPresetsPanel 预设库(四类+JSON导入导出)
-         ├─ ComparePanel       双会话时间对齐对比
-         ├─ PlotConfigPanel
-         ├─ AiNotesPanel       AI 批注（REST 写入→事件实时显示，可删/清空；跟随活动会话）
-         └─ MatchStats         (显示名「监控」，纯流量迷你图，flex:1 内部滚动；
-                                收起时 :not([open]) 回退 flex:0 0 auto 不占位)
+     ├─ SplitView  ← 多列分屏（全局 splitMode，最多 4 列 SessionColumn；与单列互斥）
+     ├─ .app-center (column)            ← 单列模式
+     │   ├─ .viewbar    ← 视图四态 seg（日志/分屏/图表/对比）：任何模式常驻，兼作对比退出
+     │   ├─ .center-body
+     │   │   ├─ LogView    ← 工具栏 + 虚拟滚动日志(横向可滚) + 空状态
+     │   │   ├─ .hsplit    ← 日志↔图表拖拽分割条（20–80% 钳制，serialtool.centerSplit）
+     │   │   ├─ PlotView   ← centerView 'split'/'plot' 时渲染（useResizeObserver 自适应尺寸）
+     │   │   └─ CompareView ← compareMode 时占中心区（双会话时间对齐；ComparePanel 已退役）
+     │   ├─ DockView   ← 底部 dock 三页签：解码(parser V1 空态)/告警历史(AlertPanel 拆出)/
+     │   │              监控(MatchStats 迁入)；可拖高可收起（serialtool.dock）
+     │   └─ SendPanel  ← 发送区（<details> 折叠条，默认收起）
+     ├─ .sidebar-handle ← 侧栏拖宽(240–560px)/收起手柄（serialtool.sidebar）
+     └─ .app-sidebar   ← 分组粘头（.group-head sticky）四组，overflow-y:auto：
+         查找(SearchPanel+命中列表/BookmarkPanel) · 规则(KeywordPanel/AutoReplyPanel/
+         AlertPanel=告警规则) · 数据(PlotConfigPanel) · 库(ConfigPresetsPanel/AiNotesPanel)
+ └─ StatusBar   ← 底部状态栏：状态点+端口/传输参数 | RX/TX 速率 | 丢行(>0 红) | 滞后/批均
+                  | RX/TX 行数（跟随活动会话；解析器状态位待 parser V1 点亮）
 ```
 
+- **视图模式耦合不变式**：会话级 `centerView: 'log'|'split'|'plot'`（makeSession 默认 log、
+  reconnectSession 迁移、clearLog 不清）；全局 `compareMode` 占中心区。
+  **`centerView !== 'log' ⟹ plot.enabled`**：setCenterView 进入 split/plot 自动开图；
+  setPlotEnabled 显式开图切到 plot 视图、关图回落 log（启用开关始终看得见效果）。
+
 ### 侧栏面板约定
-每个侧栏组件根元素是 `<details class="panel">`（**默认收起**，不加 `open`），`<summary class="panel-head">` 内含：`.panel-icon` + `.panel-title` + 可选 `.badge`(数量) + `.chevron`(展开旋转 90°)。
+每个侧栏组件根元素是 `<details class="panel">`（**默认收起**），`<summary class="panel-head">` 内含：`.panel-icon` + `.panel-title` + 可选 `.badge`(数量) + `.chevron`(展开旋转 90°)。
 body 用 `.panel-body`；需限高滚动的用 `.kw-body` / `.ar-body`（已带 max-height + overflow）。
+分组容器与粘性组头（`.group-head`）在 App.vue；**面板开合状态持久化**（布局重构 V1）：App.vue 对每个面板组件传 `:open` + `@toggle`（attrs 透传到根 details），经 `useLayoutPrefs.usePanelState` 读写 `serialtool.panels`，默认全收起不变，面板组件自身不感知。
 
 ### Cargo workspace 布局
 根 `Cargo.toml` 是 workspace（members：`crates/bytetide-core`、`crates/bytetide-cli`、`src-tauri`）；锁文件与构建产物统一在仓库根（根 `Cargo.lock` / 根 `target/`，src-tauri 下已无）。
@@ -109,7 +117,7 @@ body 用 `.panel-body`；需限高滚动的用 `.kw-body` / `.ar-body`（已带 
 ### 数据源与新增会话级字段
 - `PortConfig.transport`：None/'serial' 串口；'tcp-client'/'tcp-server'/'udp' 网络源（serde default，旧 JSON 兼容）。后端串口/网络共用 `stream_loop`（core 的 `serial/manager.rs`），加新传输=扩展 `establish_link` 即可。
 - 会话级 UI 偏好字段（showLineNo/showDir/droppedLines/bookmarks/aiNotes/alerts/filters…）**必须同时**改三处：`makeSession` 默认值、`reconnectSession` 的 carried 迁移清单、相关 actions。clearLog 会重置 lineCounter 与 droppedLines 并清空 bookmarks 与 aiNotes（aiNotes 同时回写后端镜像清空；droppedLines 在重连迁移中保留）。
-- localStorage 键：`serialtool.theme/.lastPortConfig/.logConfig/.searchHistory/.portPresets/.configPresets/.alertSound/.update.lastCheck/.update.dismissedVersion`。预设库 payload 各类别形状校验在 `applyConfigPreset/importConfigPresets`。
+- localStorage 键：`serialtool.theme/.lastPortConfig/.logConfig/.searchHistory/.portPresets/.configPresets/.alertSound/.update.lastCheck/.update.dismissedVersion/.sidebar(宽+收起)/.panels(侧栏面板开合)/.centerSplit(日志↔图表高度比)/.dock(底部dock高度/收起/页签)`。预设库 payload 各类别形状校验在 `applyConfigPreset/importConfigPresets`。
 - 更新检查（`useUpdateChecker`）：启动延迟 5s 静默查 GitHub Releases API（24h 节流，失败也记间隔）；`UPDATE_REPO` 常量已定 `RtuQ/bytetide`（与 scripts/portable-README.txt 主页链接联动，改一处必改另一处）。免安装版策略 = 只提示 + 跳转下载页，不做自更新；TitleBar 版本徽标在 `status==='available'` 时亮起，「忽略此版本」按 tag 记忆。
 - **长跑性能红线**：`lines` 元素必须在 `appendLines`/`appendPulled` 处 `markRaw`（日志行不可变，禁 Proxy 开销）；侧栏折叠面板 body 仍处于挂载态，**禁止无守卫的全量行 computed**——折叠/空态必须早退或停算（参考 SearchPanel 命中节 hitsOpen、BookmarkPanel 空书签早退）。
 - **数据流 = 拉模型（feat/pull-based-view 起）**：后端 ring 是唯一真相（`no` 游标单调递增、清屏不回退）；前端 `useTauriEvents` 每 200ms 按会话 `pullNo` 调 `ring_lines_no_cmd` 拉 delta（`appendPulled` 入表），**不再有 `log` 事件流**（40ms 推事件曾把 WebView2 渲染进程调度饿死成死亡螺旋，实测积压 15 分钟、1s 定时器饿到 48s 才醒）。渲染进程被节流时最坏滞后=一个拉取周期，醒来一次拉齐即收敛。新增实时数据通道时走游标拉取，勿回加高频 emit。CLI（bytetide-cli）是 ring 的第二个消费者：每 50ms 调 `ring_lines_after_no` 游标拉取、零事件流，新增消费者照此办理。
