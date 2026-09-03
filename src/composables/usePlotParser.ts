@@ -1,6 +1,6 @@
-import type { LogLine, PlotBytes, PlotChecksum, PlotConfig, PlotEndian, PlotPoint, PlotSource } from '../types'
+import type { LogLine, PlotBytes, PlotChecksum, PlotConfig, PlotEndian, PlotPoint } from '../types'
+import { lineBytes } from '../parser/lineBytes'
 
-const textEncoder = new TextEncoder()
 const HEX_PAIR = /[0-9a-fA-F]{2}/g
 
 /** 把配置里的 hex 字段（如 "01 00" / "0100" / "01,00"）解析为字节数组 */
@@ -10,21 +10,6 @@ export function parseHexField(s: string): number[] {
   let m: RegExpExecArray | null
   while ((m = HEX_PAIR.exec(s)) !== null) out.push(parseInt(m[0], 16))
   return out
-}
-
-/** 取一行 RX 的字节表示。
- *  binary：优先用后端携带的原始字节（含 0x80+ 孤立字节），否则 TextEncoder 恢复有效 UTF-8 字节。
- *  ascii-hex：从 .text 抽取十六进制字节对（设备发 "01 00 ..." 文本）。 */
-export function lineBytes(line: LogLine, source: PlotSource): Uint8Array {
-  if (source === 'ascii-hex') {
-    const out: number[] = []
-    HEX_PAIR.lastIndex = 0
-    let m: RegExpExecArray | null
-    while ((m = HEX_PAIR.exec(line.text)) !== null) out.push(parseInt(m[0], 16))
-    return new Uint8Array(out)
-  }
-  if (line.bytes && line.bytes.length > 0) return new Uint8Array(line.bytes)
-  return textEncoder.encode(line.text)
 }
 
 /** 计算校验和：sum 取低 8 位，xor 为逐字节异或，none 恒 0（不校验时调用方不应进入校验分支） */
