@@ -44,7 +44,7 @@ export interface Session {
   /** 后端 ring 游标（`no`，单调递增、清屏不回退）：拉模型视图通道的拉取位点。
    *  只随 appendPulled 前进；重连=新会话新 ring，随 makeSession 归零。 */
   pullNo: number
-  /** 前端缓冲上限裁剪掉的累计行数（clearLog 不清零，暴露给 UI 明示） */
+  /** 前端缓冲上限裁剪掉的行数（自连接或上次清屏起累计；重连迁移保留） */
   droppedLines: number
   /** 书签行号（升序；随 lines 环形淘汰自然失效——跳转前由 UI 校验行仍存在） */
   bookmarks: number[]
@@ -473,8 +473,11 @@ export const useSessionStore = defineStore('session', {
       s.lines = []
       s.lineCounter = 0
       s.pulledThrough = 0
-      // 行号已从 1 重新计数，旧书签全部失义，一并清空（droppedLines 为累计语义，保留）
+      // 行号已从 1 重新计数，旧书签全部失义，一并清空
       s.bookmarks = []
+      // 丢弃计数与"当前视图缺口"绑定：清屏后缓冲从头开始，旧缺口已无意义，
+      // 归零避免让人误以为当前日志仍缺数据（重连迁移保留，因日志行本身被带走）
+      s.droppedLines = 0
       // AI 批注锚定行号，同样失义：本地清空并同步后端镜像
       s.aiNotes = []
       invoke('bridge_sync_annotations_cmd', { sessionId: id, annotations: [] }).catch(() => {})

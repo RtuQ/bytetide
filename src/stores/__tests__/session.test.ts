@@ -64,6 +64,22 @@ describe('appendPulled 拉模型摄取', () => {
     expect(store.sessions[id]!.pullNo).toBe(0)
   })
 
+  it('clearLog 归零 droppedLines，pullNo 不回退（后端 no 单调）', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('local-pull5', CFG)
+    // 超出前端缓冲上限（50000），制造 10 行丢弃
+    const batch = Array.from({ length: 50010 }, (_, i) => mkPulled(i + 1))
+    store.appendPulled(id, batch)
+    expect(store.sessions[id]!.droppedLines).toBe(10)
+    await store.clearLog(id)
+    // 清屏后旧缺口已无意义，丢弃计数归零
+    expect(store.sessions[id]!.droppedLines).toBe(0)
+    // 后端 no 游标单调不回退：清屏后旧 ringNo 不回灌，新行正常入表
+    expect(store.appendPulled(id, [mkPulled(50010), mkPulled(50011)])).toHaveLength(1)
+    expect(store.sessions[id]!.lines).toHaveLength(1)
+    expect(store.sessions[id]!.droppedLines).toBe(0)
+  })
+
   it('appendLines 丢弃水位以下的迟到事件行（防补拉重复）', () => {
     const store = useSessionStore()
     const id = store.createLocalSession('local-test', CFG)

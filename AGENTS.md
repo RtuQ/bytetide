@@ -96,7 +96,7 @@ body 用 `.panel-body`；需限高滚动的用 `.kw-body` / `.ar-body`（已带 
 
 ### 数据源与新增会话级字段
 - `PortConfig.transport`：None/'serial' 串口；'tcp-client'/'tcp-server'/'udp' 网络源（serde default，旧 JSON 兼容）。后端串口/网络共用 `stream_loop`（manager.rs），加新传输=扩展 `establish_link` 即可。
-- 会话级 UI 偏好字段（showLineNo/showDir/droppedLines/bookmarks/aiNotes/alerts/filters…）**必须同时**改三处：`makeSession` 默认值、`reconnectSession` 的 carried 迁移清单、相关 actions。clearLog 会重置 lineCounter 并清空 bookmarks 与 aiNotes（aiNotes 同时回写后端镜像清空）。
+- 会话级 UI 偏好字段（showLineNo/showDir/droppedLines/bookmarks/aiNotes/alerts/filters…）**必须同时**改三处：`makeSession` 默认值、`reconnectSession` 的 carried 迁移清单、相关 actions。clearLog 会重置 lineCounter 与 droppedLines 并清空 bookmarks 与 aiNotes（aiNotes 同时回写后端镜像清空；droppedLines 在重连迁移中保留）。
 - localStorage 键：`serialtool.theme/.lastPortConfig/.logConfig/.searchHistory/.portPresets/.configPresets/.alertSound/.update.lastCheck/.update.dismissedVersion`。预设库 payload 各类别形状校验在 `applyConfigPreset/importConfigPresets`。
 - 更新检查（`useUpdateChecker`）：启动延迟 5s 静默查 GitHub Releases API（24h 节流，失败也记间隔）；`UPDATE_REPO` 常量已定 `RtuQ/bytetide`（与 scripts/portable-README.txt 主页链接联动，改一处必改另一处）。免安装版策略 = 只提示 + 跳转下载页，不做自更新；TitleBar 版本徽标在 `status==='available'` 时亮起，「忽略此版本」按 tag 记忆。
 - **长跑性能红线**：`lines` 元素必须在 `appendLines`/`appendPulled` 处 `markRaw`（日志行不可变，禁 Proxy 开销）；侧栏折叠面板 body 仍处于挂载态，**禁止无守卫的全量行 computed**——折叠/空态必须早退或停算（参考 SearchPanel 命中节 hitsOpen、BookmarkPanel 空书签早退）。
