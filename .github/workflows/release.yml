@@ -87,8 +87,15 @@ jobs:
           path: target/release/bundle/dmg/ByteTide_*_aarch64.dmg
           if-no-files-found: error
 
+  build-cli:
+    # 复用 CLI 工作流出 aarch64 / x86_64 musl 静态 tarball；publish=false 不单独建
+    # Release，产物经 artifact 汇入下方 release 任务，与桌面产物挂进同一份草稿 Release
+    uses: ./.github/workflows/cli-release.yml
+    with:
+      publish: false
+
   release:
-    needs: [build-windows, build-macos]
+    needs: [build-windows, build-macos, build-cli]
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts

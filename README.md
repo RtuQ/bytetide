@@ -108,7 +108,7 @@ Tauri 2 + Vue 3 + Rust 构建：安装包小、启动快、内存占用低，完
 
 ## CLI（bytetide）：无头监控
 
-桌面进不去的地方——服务器、树莓派 / ARM 工控板——用 `bytetide` 命令行版盯串口。GitHub Releases 的 `cli-v*` 标签提供 aarch64 / x86_64 的 **musl 静态二进制**，拷过去单文件即可运行，无需装任何依赖；本地从源码构建用 `cargo build -p bytetide-cli --release`。
+桌面进不去的地方——服务器、树莓派 / ARM 工控板——用 `bytetide` 命令行版盯串口。GitHub Releases 的桌面版 `v*` 发布与 CLI 专用的 `cli-v*` 标签都提供 aarch64 / x86_64 的 **musl 静态二进制** tarball，拷过去单文件即可运行，无需装任何依赖；本地从源码构建用 `cargo build -p bytetide-cli --release`。
 
 ```bash
 bytetide list                                  # 列出串口

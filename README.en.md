@@ -108,7 +108,7 @@ A ready-made AI skill package lives at [skills/serial-tool-bridge](./skills/seri
 
 ## CLI (`bytetide`): headless monitoring
 
-Where the desktop app can't go — servers, Raspberry Pi / ARM boards — watch your serial line with the `bytetide` command-line binary. GitHub Releases under `cli-v*` tags ships **static musl builds** for aarch64 / x86_64: copy a single file over, run it, nothing to install. Build locally with `cargo build -p bytetide-cli --release`.
+Where the desktop app can't go — servers, Raspberry Pi / ARM boards — watch your serial line with the `bytetide` command-line binary. Both desktop `v*` releases and the CLI-only `cli-v*` tags ship **static musl builds** for aarch64 / x86_64 as tarballs: copy a single file over, run it, nothing to install. Build locally with `cargo build -p bytetide-cli --release`.
 
 ```bash
 bytetide list                                  # list serial ports

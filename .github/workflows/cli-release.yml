@@ -1,10 +1,17 @@
 name: CLI Release
 
-# 独立标签命名空间：只匹配 cli-v*（如 cli-v0.1.0），与桌面端的 v* 互不触发——
-# 桌面版发版不会带出 CLI 构建，CLI 单独发版也不影响桌面版 release。
+# 独立标签命名空间 cli-v*（如 cli-v0.1.0）单独发 CLI 版；同时声明 workflow_call
+# 供桌面端 release.yml 的 v* 流程复用——此时传 publish=false 只出产物不建 Release，
+# CLI tarball 与桌面版产物汇总进同一份草稿 Release。
 on:
   push:
     tags: ['cli-v*']
+  workflow_call:
+    inputs:
+      publish:
+        description: '是否在本工作流内创建 GitHub Release（被桌面版 v* 流程复用时传 false）'
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -98,9 +105,10 @@ jobs:
           path: bytetide-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
-      # 仅在标签推送时创建 GitHub Release 并挂上 tarball
+      # 独立 cli-v* 推送照旧直接建 Release；被 v* 桌面流程调用时 publish=false，
+      # 产物只上传 artifact，由调用方的 release 任务统一挂到同一份草稿 Release
       - name: Create GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && (github.event_name != 'workflow_call' || inputs.publish)
         uses: softprops/action-gh-release@v2
         with:
           files: bytetide-*.tar.gz
