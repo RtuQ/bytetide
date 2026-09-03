@@ -2,6 +2,12 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useUpdateChecker } from '../composables/useUpdateChecker'
+import { usePortCfg, useOpenLog } from '../composables/usePortConfig'
+import SettingsPopover from './SettingsPopover.vue'
+
+// PortBar 退役（布局重构 V1）：设置弹层挂进标题行，cfg/openLog 走共享 composable
+const { cfg, applyPreset } = usePortCfg()
+const { openLog } = useOpenLog()
 
 // 去掉原生标题栏后的自定义标题栏：深色、可拖拽、自带最小化/最大化-还原/关闭。
 // 浏览器预览（无 Tauri）下这些 API 会失败，静默忽略即可。
@@ -95,6 +101,9 @@ async function close() {
       <span>ByteTide <span class="titlebar-sub">字节潮</span></span>
     </div>
     <div class="titlebar-spacer" data-tauri-drag-region></div>
+    <div class="titlebar-actions">
+      <SettingsPopover :cfg="cfg" @open-log="openLog" @apply-preset="applyPreset" />
+    </div>
     <div class="titlebar-update">
       <button
         class="titlebar-ver"

@@ -783,11 +783,10 @@ input[type="color"]:focus-visible {
 /* ---------- Tabs ---------- */
 .tabbar {
   display: flex;
-  gap: 4px;
-  align-items: stretch;
+  gap: 6px;
+  align-items: center;
   flex-wrap: nowrap;
-  overflow-x: auto;
-  padding: 8px 10px 0;
+  padding: 6px 10px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
   min-height: 40px;
@@ -890,20 +889,7 @@ input[type="color"]:focus-visible {
   }
 }
 
-/* ---------- Port bar ---------- */
-.portbar {
-  position: relative;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  padding: 7px 12px;
-  background: var(--bg-surface);
-  border-bottom: 1px solid var(--border);
-}
-.portbar .sp {
-  flex: 1;
-}
+/* ---------- 弹层锚定（.portbar-pop* 为 NewConnection/Settings 弹层共用；PortBar 行已退役） ---------- */
 .field {
   display: flex;
   flex-direction: column;
@@ -1681,52 +1667,11 @@ input[type="color"]:focus-visible {
   align-items: center;
 }
 
-/* ---------- Match stats panel ---------- */
-.panel.matchstats {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-/* 收起时不占满剩余空间，避免收起后下方留一大块空白 */
-.panel.matchstats:not([open]) {
-  flex: 0 0 auto;
-}
-.panel.matchstats > .panel-body {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  padding: 0;
-  gap: 0;
-}
-.ms-charts {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
-}
-.ms-chart-label {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 10px;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  margin-bottom: 4px;
-}
-.ms-chart-label b {
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-weight: 600;
-}
 .mini-chart {
   display: block;
   width: 100%;
 }
-/* 日志行：选中态与书签 gutter */
+/* 日志行：选中态与书签 gutter（MatchStats 面板样式已随组件退役，监控迁入底部 dock） */
 .log-row.selected {
   background: var(--bg-elevated);
   box-shadow: inset 3px 0 0 var(--accent);
@@ -1850,15 +1795,6 @@ input[type="color"]:focus-visible {
   font-family: var(--font-mono);
   font-size: 11px;
 }
-.al-hist-head {
-  margin-top: 4px;
-}
-.al-hist-title {
-  font-size: 10px;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-}
 .al-hit {
   display: flex;
   align-items: center;
@@ -1871,45 +1807,6 @@ input[type="color"]:focus-visible {
 }
 .al-hit:hover {
   background: var(--bg-hover);
-}
-.lv-dot {
-  flex: 0 0 8px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-.lv-dot.lv-info {
-  background: var(--accent);
-}
-.lv-dot.lv-warn {
-  background: var(--warn);
-}
-.lv-dot.lv-err {
-  background: var(--err);
-}
-.al-time {
-  flex: 0 0 auto;
-  color: var(--text-dim);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-}
-.al-name {
-  flex: 0 1 auto;
-  max-width: 40%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-muted);
-  font-size: 11px;
-}
-.al-text {
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
 }
 /* 过滤链（搜索面板内） */
 .fl-head {
@@ -1986,25 +1883,6 @@ input[type="color"]:focus-visible {
 }
 .cp-io {
   margin-top: 6px;
-}
-.ms-stat {
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-  font-size: 11px;
-  color: var(--text-muted);
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.ms-stat b {
-  color: var(--accent);
-  font-size: 13px;
-  font-family: var(--font-mono);
-}
-.ms-list {
-  flex: 1 1 auto;
-  overflow-y: auto;
 }
 .ms-row {
   padding: 5px 12px;
@@ -2572,66 +2450,6 @@ input[type="color"]:focus-visible {
 .addr-port {
   width: 110px;
 }
-/* 对比面板 */
-.cmp-ctl {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 8px;
-}
-.cmp-row {
-  display: grid;
-  grid-template-columns: 48px 64px minmax(0, 1fr) 58px 48px 64px minmax(0, 1fr);
-  gap: 6px;
-  align-items: baseline;
-  padding: 2px 4px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  border-bottom: 1px solid var(--border);
-}
-.cmp-row.solo {
-  opacity: 0.75;
-}
-.cmp-head {
-  color: var(--text-dim);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-.cmp-no {
-  color: var(--text-dim);
-  text-align: right;
-}
-.cmp-no.clickable {
-  cursor: pointer;
-}
-.cmp-no.clickable:hover {
-  color: var(--accent);
-}
-.cmp-ts {
-  color: var(--text-dim);
-}
-.cmp-txt {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text);
-  min-width: 0;
-}
-.cmp-delta {
-  text-align: right;
-  color: var(--text-muted);
-}
-.cmp-delta.hot {
-  color: var(--err);
-  font-weight: 700;
-}
-.cmp-hl {
-  background: var(--hl-search-bg);
-  color: var(--hl-search-fg);
-  border-radius: 2px;
-}
 .dim {
   color: var(--text-dim);
 }
@@ -2753,3 +2571,628 @@ input[type="color"]:focus-visible {
   color: var(--text-muted);
   white-space: nowrap;
 }
+
+/* ══════════ 布局重构 V1（docs/plan-layout-v1.md）══════════
+   三个区段分工：dock 组件群 / 对比中心视图 / 布局集成（顶栏两行、状态栏、分屏条、侧栏分组）。
+   只在各自区段内追加，勿越界。 */
+
+/* ── dock 区段（DockView / DockDecode / DockAlerts / DockMonitor）── */
+
+/* 容器：底部伴随信息 dock。高度由 DockView 内联驱动（loadDockPrefs/clampDockHeight 钳制），
+   收起只剩页签条一行；拖拽期间关闭高度过渡保证跟手 */
+.dock {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  transition: height var(--t) var(--ease);
+}
+.dock.collapsed {
+  height: 32px;
+}
+body.dock-resizing .dock {
+  transition: none;
+}
+/* 拖拽手柄期间：禁止选中文字、全局行向光标（同侧栏手柄约定） */
+body.dock-resizing {
+  cursor: row-resize;
+  user-select: none;
+}
+
+/* 上缘拖高手柄：6px 热区骑缝（透明、hover 与拖动中亮出主题蓝） */
+.dock-resize {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: row-resize;
+  z-index: 5;
+}
+.dock-resize:hover,
+body.dock-resizing .dock-resize {
+  background: var(--border-focus);
+}
+.dock.collapsed .dock-resize {
+  display: none;
+}
+
+/* 页签条 */
+.dock-tabs {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 32px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--border);
+}
+/* 收起态 tabs 即 dock 全部：底边框交给下邻（SendPanel）的顶边框，避免双线 */
+.dock.collapsed .dock-tabs {
+  border-bottom-color: transparent;
+}
+.dock-tabs-spacer {
+  flex: 1;
+}
+.dock-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease);
+}
+.dock-tab:hover {
+  color: var(--text);
+}
+.dock-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.dock-tab:focus-visible {
+  border-radius: var(--r-sm);
+  box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--border-focus);
+}
+.dock-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 15px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+}
+.dock-tab.active .dock-tab-badge {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* 收起/展开按钮：箭头指向内容边缘移动方向，收起态旋转 180° */
+.dock-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.dock-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.dock-toggle:focus-visible {
+  box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--border-focus);
+}
+.dock-toggle svg {
+  width: 13px;
+  height: 13px;
+  transition: transform var(--t) var(--ease);
+}
+.dock.collapsed .dock-toggle svg {
+  transform: rotate(180deg);
+}
+
+/* pane 主体：dock 内容滚动独立于日志虚拟滚动（列表组件自行 overflow） */
+.dock-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* 各 pane 的空态 / 无会话态 */
+.dock-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+/* 解码页签占位空态（parser 落地后替换为实时解码列表） */
+.dock-decode-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--text-dim);
+  text-align: center;
+}
+.dock-decode-empty svg {
+  width: 28px;
+  height: 28px;
+  opacity: 0.55;
+}
+.dock-decode-title {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.dock-decode-desc {
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* 告警历史页签：等级 pill + 时间 + 会话 + 命中文案 + 行号（整行点击跳转） */
+.dock-alerts {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.dock-alerts-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+}
+.dock-alerts-title {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.dock-alerts-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 6px 6px;
+}
+.dock-alert-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  min-width: 0;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease);
+}
+.dock-alert-row + .dock-alert-row {
+  border-top: 1px solid var(--border);
+}
+.dock-alert-row:hover {
+  background: var(--bg-hover);
+}
+.dock-lvl {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.dock-lvl.lv-info {
+  color: var(--accent);
+}
+.dock-lvl.lv-warn {
+  color: var(--warn);
+}
+.dock-lvl.lv-err {
+  color: var(--err);
+}
+.dock-alert-time {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.dock-alert-name {
+  flex: 0 1 auto;
+  max-width: 22%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.dock-alert-text {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.dock-alert-no {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* 监控页签：速率/行数/丢行卡片行 + 三张迷你图（计算逻辑同原 MatchStats） */
+.dock-monitor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.dock-mon-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+}
+.dock-mon-cards {
+  flex: none;
+  display: flex;
+  gap: 10px;
+}
+.dock-mon-card {
+  flex: 1 1 0;
+  min-width: 104px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-base);
+}
+.dock-mon-k {
+  margin-bottom: 2px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.dock-mon-v {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+.dock-mon-v small {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-dim);
+}
+.dock-mon-v.rx {
+  color: var(--rx);
+}
+.dock-mon-v.tx {
+  color: var(--tx);
+}
+.dock-mon-v.bad {
+  color: var(--err);
+}
+.dock-mon-charts {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+}
+.dock-mon-chart {
+  flex: 1 1 200px;
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-base);
+}
+.dock-mon-cl {
+  flex: none;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.dock-mon-cl b {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+.dock-mon-canvas {
+  flex: 1;
+  min-height: 0;
+}
+/* MiniChart 的高度是 prop 内联样式（固定 px）；dock 内让它随容器伸缩，
+   resize observer 会在尺寸变化时重绘（拖高/主题切换均覆盖） */
+.dock-mon-canvas .mini-chart {
+  height: 100% !important;
+}
+
+/* ── /dock 区段 ── */
+
+/* ── compare 区段（CompareView）── */
+
+/* 对比中心视图（docs/plan-layout-v1.md §2-②）：占中心区整块。
+   头部行 = 标题 + 会话 A/B 选择 + 容差/范围 + 右侧弱提示；主体 = 时间对齐表格（表头 sticky）。
+   类名独立成 cmp-v-* 一族，旧 ComparePanel 的 .cmp-*（「对比面板」区段）退役删除时不影响此处。 */
+
+.cmp-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+/* 头部行 */
+.cmp-v-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.cmp-v-icon {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--text-muted);
+}
+.cmp-v-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.cmp-v-pick {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.cmp-v-pick-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.cmp-v-select {
+  max-width: 170px;
+}
+.cmp-v-tol {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  cursor: default;
+}
+.cmp-v-hint {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* 空态引导 */
+.cmp-v-empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  color: var(--text-dim);
+  font-size: 12px;
+  text-align: center;
+  padding: 20px;
+}
+.cmp-v-empty svg {
+  width: 36px;
+  height: 36px;
+  opacity: 0.4;
+}
+
+/* 时间对齐表格（宽容器，表头 sticky） */
+.cmp-v-table {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.cmp-v-table table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.cmp-v-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  text-align: left;
+  padding: 6px 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmp-v-th-time {
+  width: 128px;
+}
+.cmp-v-table td {
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  vertical-align: top;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmp-v-table tr.cmp-v-solo td {
+  opacity: 0.75; /* 孤立行整体弱化（沿用原 .cmp-row.solo 语义） */
+}
+
+/* 时间 / Δ 列 */
+.cmp-v-ts {
+  display: block;
+  color: var(--text-dim);
+}
+.cmp-v-delta {
+  display: block;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.cmp-v-delta.hot {
+  color: var(--err);
+  font-weight: 700;
+}
+
+/* A/B 行单元格：行号跳转 + 差异高亮文本 */
+.cmp-v-cell {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.cmp-v-jump {
+  flex: none;
+  border: none;
+  background: none;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.cmp-v-jump:hover {
+  color: var(--accent);
+}
+.cmp-v-jump:focus-visible {
+  outline: none;
+  border-radius: var(--r-sm);
+  box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--border-focus);
+}
+.cmp-v-txt {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.cmp-v-hl {
+  background: var(--hl-search-bg);
+  color: var(--hl-search-fg);
+  border-radius: 2px;
+}
+.cmp-v-none {
+  color: var(--text-dim);
+}
+
+/* 截断提示（表格下方、随滚动容器） */
+.cmp-v-cap {
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* ── /compare 区段 ── */
+
+/* ── layout 集成区段（TitleBar 两行 / StatusBar / hsplit / 侧栏分组）── */
+
+/* 标题行动作区（设置弹层挂点） */
+.titlebar-actions { display: flex; align-items: center; gap: 6px; margin-right: 8px; }
+
+/* 标签行：左新建触发器 + 中间可滚标签 + 右打开日志 */
+.tabs-scroll { display: flex; gap: 4px; flex: 1; min-width: 0; align-items: stretch; overflow-x: auto; scrollbar-width: thin; }
+.tabbar-tail { display: flex; align-items: center; margin-left: 2px; }
+
+/* 视图切换条（布局重构 V1：任何模式下常驻，兼作对比退出） */
+.viewbar { display: flex; align-items: center; padding: 6px 10px; background: var(--bg-surface); border-bottom: 1px solid var(--border); flex: none; }
+
+/* 中部 body：日志 / 分割条 / 图表 垂直排布 */
+.center-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.log-wrap { flex: 1 1 auto; min-height: 0; display: flex; }
+.plot-wrap { flex: 1 1 auto; min-height: 0; display: flex; }
+
+/* 日志↔图表 分割条（视觉对齐侧栏手柄的 hover 点亮语义） */
+.hsplit { flex: none; height: 5px; background: var(--bg-surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); cursor: row-resize; position: relative; }
+.hsplit::after { content: ""; position: absolute; left: 50%; top: 1px; width: 34px; height: 1.5px; transform: translateX(-50%); background: var(--border-strong); border-radius: 1px; transition: background var(--t-fast); }
+.hsplit:hover::after { background: var(--accent); }
+
+/* 拖拽期间全局禁选中/穿透（与 sidebar-resizing 同语义） */
+body.app-dragging { user-select: none; }
+body.app-dragging * { pointer-events: none !important; }
+
+/* 侧栏分组粘头（布局重构 V1：查找/规则/数据/库） */
+.group-head { position: sticky; top: 0; z-index: 3; padding: 10px 6px 5px; font-size: 10.5px; font-weight: 600; letter-spacing: 1px; color: var(--text-dim); text-transform: uppercase; background: var(--bg-surface); border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+
+/* 底部状态栏（布局重构 V1） */
+.statusbar { flex: none; height: 25px; display: flex; align-items: center; gap: 14px; padding: 0 12px; background: var(--bg-surface); border-top: 1px solid var(--border); font-size: 11px; color: var(--text-muted); }
+.sb-sect { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.sb-spacer { flex: 1; }
+.sb-name { color: var(--text); font-weight: 600; }
+.sb-dim { color: var(--text-dim); }
+.sb-mono { font-family: var(--font-mono); }
+.sb-rx { color: var(--rx); }
+.sb-tx { color: var(--tx); }
+.sb-bad { color: var(--err); font-weight: 600; }
+.sb-warn { color: var(--warn); }
+.sb-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--text-dim); }
+.sb-dot.connecting { background: var(--warn); animation: pulse 1.2s var(--ease) infinite; }
+.sb-dot.connected { background: var(--rx); box-shadow: 0 0 0 2px var(--bg-surface), 0 0 8px rgba(52, 211, 153, 0.6); }
+.sb-dot.disconnected { background: var(--text-dim); }
+.sb-dot.error { background: var(--err); }
+.sb-dot.offline { background: var(--text-dim); }
+
+/* ── /layout 集成区段 ── */

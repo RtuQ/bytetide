@@ -24,23 +24,13 @@ function upd(rid: string, patch: Partial<AlertRule>) {
 function del(rid: string) {
   if (active.value) store.removeAlertRule(active.value.id, rid)
 }
-function fmtTime(at: number) {
-  const d = new Date(at)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
-}
-/** 点击历史：切到来源会话并跳转到命中行 */
-function jumpToHit(sessionId: string, no: number) {
-  if (!store.sessions[sessionId]) return
-  store.setActive(sessionId)
-  if (no > 0) store.requestJump(sessionId, no)
-}
 </script>
 
 <template>
   <details class="panel">
     <summary class="panel-head">
       <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
-      <span class="panel-title">告警</span>
+      <span class="panel-title">告警规则</span>
       <span v-if="active" class="badge">{{ active.alerts.rules.length }}</span>
       <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
     </summary>
@@ -181,27 +171,6 @@ function jumpToHit(sessionId: string, no: number) {
             s 冷却
           </span>
         </div>
-      </div>
-
-      <div class="ar-line al-hist-head">
-        <span class="al-hist-title">历史（{{ alerts.hits.length }}）</span>
-        <span class="send-spacer"></span>
-        <button class="btn btn-ghost btn-sm" :disabled="!alerts.hits.length" @click="alerts.clear()">
-          清空
-        </button>
-      </div>
-      <div v-if="!alerts.hits.length" class="panel-hint">暂无告警记录</div>
-      <div
-        v-for="h in alerts.hits"
-        :key="h.id"
-        class="al-hit"
-        @click="jumpToHit(h.sessionId, h.no)"
-        :title="h.sessionName + ' #' + h.no + '，点击跳转'"
-      >
-        <span class="lv-dot" :class="'lv-' + h.level"></span>
-        <span class="al-time">{{ fmtTime(h.at) }}</span>
-        <span class="al-name">{{ h.sessionName }}</span>
-        <span class="al-text">{{ h.text }}</span>
       </div>
     </div>
     <div v-else class="panel-empty">无活动会话</div>

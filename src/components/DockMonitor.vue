@@ -5,9 +5,10 @@ import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore } from '../stores/session'
 import { useLineStats } from '../composables/useLineStats'
 import { usePerfWatch } from '../composables/usePerfWatch'
-import { humanizeBytes } from '../composables/useRate'
+import { humanizeBytes, useRate } from '../composables/useRate'
 import MiniChart from './MiniChart.vue'
 
+/** 监控页签（自 MatchStats 整体迁入，计算逻辑原样搬运；跟随活动会话） */
 const store = useSessionStore()
 const active = computed(() => store.active)
 const perf = usePerfWatch()
@@ -59,8 +60,11 @@ async function exportDiag() {
   }
 }
 
-// 纯监控面板：行速率/字节速率/RX Δ间隔（随 lineCounter 版本节流重算）。
-// 命中列表已迁至搜索面板，紧邻输入框展示。
+// RX/TX 字节速率（1s 采样，与会话切换解耦：切到累计值更小的会话自动归零）
+const rxBps = useRate(() => active.value?.rxBytes ?? 0)
+const txBps = useRate(() => active.value?.txBytes ?? 0)
+
+// 行速率/字节速率曲线/RX Δ间隔（随 lineCounter 版本节流重算）
 const totalBytes = computed(() =>
   active.value ? (active.value.rxBytes ?? 0) + (active.value.txBytes ?? 0) : 0,
 )
@@ -77,14 +81,8 @@ const lastByteRate = computed(() =>
 </script>
 
 <template>
-  <details class="panel matchstats">
-    <summary class="panel-head">
-      <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
-      <span class="panel-title">监控</span>
-      <span v-if="active" class="badge">{{ active.lines.length }}</span>
-      <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-    </summary>
-    <div class="panel-body" v-if="active">
+  <div class="dock-monitor">
+    <template v-if="active">
       <div class="perf-line" :class="perfCls" title="显示滞后=当前墙钟−最新行后端时间戳；批均=单批次处理耗时">
         <span class="perf-dot"></span>
         处理延迟 <b>{{ perf.lagMs.value }}</b>ms · 批均 {{ perf.batchCostMs.value }}ms
@@ -105,27 +103,52 @@ const lastByteRate = computed(() =>
           </div>
         </div>
       </details>
-      <div class="ms-charts">
-        <div class="ms-chart">
-          <div class="ms-chart-label"><span>行速率（60s）</span><span>峰值 <b>{{ maxLineRate }}</b>/s</span></div>
-          <MiniChart :values="lineVals" color="var(--accent)" />
-        </div>
-        <div class="ms-chart">
-          <div class="ms-chart-label"><span>字节速率（60s）</span><span>当前 <b>{{ humanizeBytes(lastByteRate) }}</b>/s</span></div>
-          <MiniChart :values="byteHist" color="var(--rx)" />
-        </div>
-        <div class="ms-chart">
-          <div class="ms-chart-label">
-            <span>RX Δ间隔（{{ gaps.count }} 对）</span>
-            <span>min {{ gaps.min }} · avg {{ gaps.avg }} · p95 <b>{{ gaps.p95 }}</b> · max {{ gaps.max }} ms</span>
+      <div class="dock-mon-body">
+        <div class="dock-mon-cards">
+          <div class="dock-mon-card" title="最近 1 秒接收字节数">
+            <div class="dock-mon-k">RX 速率</div>
+            <div class="dock-mon-v rx">{{ humanizeBytes(rxBps) }}<small>/s</small></div>
           </div>
-          <MiniChart :values="gapSamples" color="var(--tx)" />
+          <div class="dock-mon-card" title="最近 1 秒发送字节数">
+            <div class="dock-mon-k">TX 速率</div>
+            <div class="dock-mon-v tx">{{ humanizeBytes(txBps) }}<small>/s</small></div>
+          </div>
+          <div class="dock-mon-card" :title="`缓冲行数 ${active.lines.length.toLocaleString()}`">
+            <div class="dock-mon-k">RX / TX 行数</div>
+            <div class="dock-mon-v">{{ active.rxLines.toLocaleString() }} / {{ active.txLines.toLocaleString() }}</div>
+          </div>
+          <div class="dock-mon-card" title="前端缓冲上限（50k 行）裁剪掉的行数累计">
+            <div class="dock-mon-k">丢行</div>
+            <div class="dock-mon-v" :class="{ bad: active.droppedLines > 0 }">{{
+              active.droppedLines.toLocaleString()
+            }}</div>
+          </div>
+        </div>
+        <div class="dock-mon-charts">
+          <div class="dock-mon-chart">
+            <div class="dock-mon-cl"><span>行速率（60s）</span><span>峰值 <b>{{ maxLineRate }}</b>/s</span></div>
+            <div class="dock-mon-canvas">
+              <MiniChart :values="lineVals" color="var(--accent)" />
+            </div>
+          </div>
+          <div class="dock-mon-chart">
+            <div class="dock-mon-cl"><span>字节速率（60s）</span><span>当前 <b>{{ humanizeBytes(lastByteRate) }}</b>/s</span></div>
+            <div class="dock-mon-canvas">
+              <MiniChart :values="byteHist" color="var(--rx)" />
+            </div>
+          </div>
+          <div class="dock-mon-chart">
+            <div class="dock-mon-cl">
+              <span>RX Δ间隔（{{ gaps.count }} 对）</span>
+              <span>min {{ gaps.min }} · avg {{ gaps.avg }} · p95 <b>{{ gaps.p95 }}</b> · max {{ gaps.max }} ms</span>
+            </div>
+            <div class="dock-mon-canvas">
+              <MiniChart :values="gapSamples" color="var(--tx)" />
+            </div>
+          </div>
         </div>
       </div>
-      <div class="ms-stat">
-        共 <b>{{ active.lines.length }}</b> 行（RX/TX 字节与速率见上方曲线）
-      </div>
-    </div>
-    <div v-else class="panel-empty">无活动会话</div>
-  </details>
+    </template>
+    <div v-else class="dock-empty">无活动会话</div>
+  </div>
 </template>

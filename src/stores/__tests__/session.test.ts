@@ -198,3 +198,65 @@ describe('AI 批注同步', () => {
     expect(store.sessions[id]!.aiNotes).toEqual([])
   })
 })
+
+describe('centerView / compareMode（布局重构 V1）', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('新会话 centerView 默认 log', () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('cv-1', CFG)
+    expect(store.sessions[id]!.centerView).toBe('log')
+  })
+
+  it('setCenterView 进入 split/plot 时自动启用绘图（连带 HEX 视图）', () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('cv-2', CFG)
+    expect(store.sessions[id]!.plot.enabled).toBe(false)
+    store.setCenterView(id, 'split')
+    const s = store.sessions[id]!
+    expect(s.centerView).toBe('split')
+    expect(s.plot.enabled).toBe(true)
+    expect(s.hexView).toBe(true) // setPlotEnabled 的既有副作用：开图强制 HEX
+    // 已启用后再切 plot 不重复触发
+    store.setCenterView(id, 'plot')
+    expect(store.sessions[id]!.centerView).toBe('plot')
+  })
+
+  it('切回 log 不关闭绘图（图表开关独立于视图模式）', () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('cv-3', CFG)
+    store.setCenterView(id, 'plot')
+    store.setCenterView(id, 'log')
+    const s = store.sessions[id]!
+    expect(s.centerView).toBe('log')
+    expect(s.plot.enabled).toBe(true)
+  })
+
+  it('clearLog 不清 centerView（视图偏好非数据）', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('cv-4', CFG)
+    store.setCenterView(id, 'split')
+    await store.clearLog(id)
+    expect(store.sessions[id]!.centerView).toBe('split')
+  })
+
+  it('compareMode 全局切换', () => {
+    const store = useSessionStore()
+    expect(store.compareMode).toBe(false)
+    store.toggleCompareMode()
+    expect(store.compareMode).toBe(true)
+    store.toggleCompareMode()
+    expect(store.compareMode).toBe(false)
+  })
+
+  it('视图耦合：显式启用绘图切到图表视图，关闭绘图回落 log', () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('cv-5', CFG)
+    store.setPlotEnabled(id, true)
+    expect(store.sessions[id]!.centerView).toBe('plot')
+    store.setCenterView(id, 'split')
+    store.setPlotEnabled(id, false)
+    expect(store.sessions[id]!.centerView).toBe('log')
+    expect(store.sessions[id]!.plot.enabled).toBe(false)
+  })
+})

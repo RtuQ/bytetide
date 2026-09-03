@@ -29,6 +29,9 @@ import {
 } from '../types'
 import { parseLogFile } from '../composables/useLogParser'
 
+/** 中心区视图模式：log=仅日志；split=日志+图表同屏；plot=仅图表 */
+export type CenterView = 'log' | 'split' | 'plot'
+
 export interface Session {
   id: string
   /** 会话来源：live=实时串口；offline=从日志文件离线载入 */
@@ -59,6 +62,8 @@ export interface Session {
   /** 告警规则（RX 行扫描，触发系统通知+历史） */
   alerts: AlertState
   plot: PlotConfig
+  /** 中心区视图模式（会话级偏好，重连迁移；clearLog 不清——视图偏好非数据） */
+  centerView: CenterView
   followTail: boolean
   onlyMatches: boolean
   hexView: boolean
@@ -96,6 +101,7 @@ function makeSession(id: string, config: PortConfig): Session {
     autoReply: { enabled: false, rules: [] },
     alerts: { ...DEFAULT_ALERT_STATE, rules: [] },
     plot: { ...DEFAULT_PLOT_CONFIG },
+    centerView: 'log',
     followTail: true,
     onlyMatches: false,
     hexView: false,
@@ -225,6 +231,7 @@ export const useSessionStore = defineStore('session', {
     configPresets: loadConfigPresets(),
     presets: loadPresets(),
     splitMode: false,
+    compareMode: false,
     columns: [] as (string | null)[],
   }),
   getters: {
@@ -301,6 +308,10 @@ export const useSessionStore = defineStore('session', {
     exitSplit() {
       this.splitMode = false
       this.columns = []
+    },
+    /** 双会话时间对齐对比：全局布局态，占中心区（与 splitMode 同级） */
+    toggleCompareMode() {
+      this.compareMode = !this.compareMode
     },
     /** 设置某列绑定的会话；若该会话已在别列，则两列互换（避免同会话出现两次） */
     setColumnSession(i: number, id: string | null) {
@@ -439,6 +450,7 @@ export const useSessionStore = defineStore('session', {
         autoReply: s.autoReply,
         alerts: { enabled: s.alerts.enabled, rules: s.alerts.rules.map((r) => ({ ...r })) },
         plot: s.plot,
+        centerView: s.centerView,
         followTail: s.followTail,
         onlyMatches: s.onlyMatches,
         hexView: s.hexView,
@@ -688,13 +700,27 @@ export const useSessionStore = defineStore('session', {
       const s = this.sessions[id]
       if (s) s.bookmarks = []
     },
-    /** 开启绘图：同时强制 HEX 视图（绘图仅支持 hex 格式接收模式）；关闭时不改动 hexView */
+    /** 开启绘图：同时强制 HEX 视图（绘图仅支持 hex 格式接收模式）；关闭时不改动 hexView。
+     *  视图耦合（布局重构 V1）：显式开图自动切到图表视图、关图时图表类视图回落 log，
+     *  维持直觉「启用开关看得见效果」；不变式：centerView !== 'log' ⟹ plot.enabled */
     setPlotEnabled(id: string, v: boolean) {
       const s = this.sessions[id]
       if (!s) return
       s.plot = { ...s.plot, enabled: v }
-      if (v) s.hexView = true
+      if (v) {
+        s.hexView = true
+        if (s.centerView === 'log') s.centerView = 'plot'
+      } else if (s.centerView !== 'log') {
+        s.centerView = 'log'
+      }
       this._pushPlot(id)
+    },
+    /** 切换中心区视图模式；进入 split/plot 时若图表未启用则顺带启用（一次点击即出图） */
+    setCenterView(id: string, view: CenterView) {
+      const s = this.sessions[id]
+      if (!s || s.centerView === view) return
+      s.centerView = view
+      if (view !== 'log' && !s.plot.enabled) this.setPlotEnabled(id, true)
     },
     /** 更新绘图解析配置（帧头/帧尾/校验/通道等），enabled 经 setPlotEnabled 单独控制 */
     updatePlot(id: string, patch: Partial<PlotConfig>) {
