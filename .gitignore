@@ -60,3 +60,11 @@ docs/*-plan.md
 
 # 源码打包产物
 serial-tool-*-src.zip
+
+# 本地工作草稿（评审原型/计划文档，不进仓库）
+/demo/
+/docs/plan-*.md
+
+# 本地工作草稿（评审原型/计划文档，不进仓库）
+/demo/
+/docs/plan-*.md
