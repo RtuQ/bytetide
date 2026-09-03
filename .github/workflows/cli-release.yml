@@ -18,14 +18,21 @@ permissions:
 
 jobs:
   build-cli:
-    # 交叉编译静态 musl CLI（可跑在无桌面/容器的 ARM Linux）。
+    # Linux musl：交叉编译静态二进制（可跑在无桌面/容器的 ARM Linux）。
+    # macOS：macos-latest 运行器本身是 Apple Silicon，原生编译 aarch64 包。
     # bytetide-cli 依赖 bytetide-core 时已 default-features=false（关掉 libudev C 依赖），
     # 无需额外 feature flag 即可交叉编译。
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        target: [aarch64-unknown-linux-musl, x86_64-unknown-linux-musl]
+        include:
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -41,16 +48,24 @@ jobs:
 
       # cargo-zigbuild + ziglang：PyPI 直接装预编译二进制，免 docker 交叉编译 musl
       - name: Install cargo-zigbuild
+        if: runner.os == 'Linux'
         run: python3 -m pip install cargo-zigbuild ziglang
 
       - name: Build CLI
-        run: cargo zigbuild --release -p bytetide-cli --target ${{ matrix.target }}
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            cargo build --release -p bytetide-cli --target ${{ matrix.target }}
+          else
+            cargo zigbuild --release -p bytetide-cli --target ${{ matrix.target }}
+          fi
 
       # musl 静态产物冒烟检查（rustc 的 static-pie 变体报 "static-pie linked"）
-      - name: Verify static binary
+      - name: Verify binary
         run: |
           file target/${{ matrix.target }}/release/bytetide
-          file target/${{ matrix.target }}/release/bytetide | grep -Eq "statically linked|static-pie linked"
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            file target/${{ matrix.target }}/release/bytetide | grep -Eq "statically linked|static-pie linked"
+          fi
 
       - name: Package
         run: |
@@ -58,8 +73,9 @@ jobs:
           ByteTide CLI —— 串口/网络日志监控（无 UI）
           ==========================================
 
-          静态链接的 musl 二进制（ARM64 / x86_64），可直接跑在无桌面环境、
-          容器与嵌入式 Linux 上，无需安装任何运行库。
+          无 UI 命令行监控工具。Linux 包为静态链接的 musl 二进制（ARM64 / x86_64），
+          可直接跑在无桌面环境、容器与嵌入式 Linux 上；macOS 包为 Apple Silicon
+          原生二进制。均无需安装任何运行库。
 
           常用命令
           --------

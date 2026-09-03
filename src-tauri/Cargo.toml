@@ -1,6 +1,6 @@
 [package]
 name = "serial_tool"
-version = "0.1.0"
+version = "0.2.0"
 description = "ByteTide (字节潮) — a dark, data-dense desktop serial/UART debug and protocol analysis tool with binary frame decoding, waveform plotting, and a REST analysis bridge for AI agents."
 authors = ["Howe"]
 edition = "2021"
