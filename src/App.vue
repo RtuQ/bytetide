@@ -58,11 +58,17 @@ provide(PLOT_DATA_KEY, plotData)
 
 onMounted(async () => {
   useTheme()
-  unlistens.value = await setupEvents()
-  await store.refreshPorts()
-  await bridge.load()
-  // 首帧就绪：通知 Rust 显示窗口（防白屏；浏览器冒烟无后端时静默）
-  emit('app-ready').catch(() => {})
+  // 首帧就绪：通知 Rust 显示窗口（防白屏）。放 finally：启动链任何一步失败
+  // 也要亮窗报错，不能把窗口藏死成「应用打不开」（浏览器冒烟无后端时静默）
+  try {
+    unlistens.value = await setupEvents()
+    await store.refreshPorts()
+    await bridge.load()
+  } catch (e) {
+    console.error('[startup] 启动链失败:', e)
+  } finally {
+    emit('app-ready').catch(() => {})
+  }
 })
 onBeforeUnmount(() => {
   unlistens.value.forEach((f) => f())

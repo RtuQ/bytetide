@@ -157,13 +157,15 @@ pub fn run() {
                 round_window_corners(&win);
             }
             // 防启动白屏：窗口以 visible:false 创建（tauri.conf.json），
-            // 前端挂载完成 emit app-ready 后才显示，首帧即完整 UI
+            // 前端挂载完成 emit app-ready 后才显示，首帧即完整 UI。
+            // 全平台生效——曾因 #[cfg(not(macos))] 在 macOS 上无显示路径，
+            // 窗口永久隐藏表现为「应用打不开」（v0.2.1 macOS 包即中招）。
             // （v2 listen 返回 EventId，监听器随应用存活，无需保活）
-            #[cfg(not(target_os = "macos"))]
             if let Some(win) = app.get_webview_window("main") {
                 let w = win.clone();
                 app.listen("app-ready", move |_| {
                     let _ = w.show();
+                    let _ = w.set_focus();
                 });
             }
             Ok(())
