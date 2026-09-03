@@ -79,9 +79,9 @@ async function drainSession(sessionId: string): Promise<void> {
       store.tallyBytes(sessionId, fresh)
       // 性能哨兵：滞后=墙钟−最新行后端时间戳，批耗时=本处理段
       recordBatch(sessionId, fresh, performance.now() - t0)
-      // 取证探针（seg/raf）：保留至热点确认后移除
+      // 取证探针（seg/raf，仅 DEV 构建；release 由 Vite tree-shake 移除）
       const handlerMs = performance.now() - t0
-      if (handlerMs > 5) {
+      if (import.meta.env.DEV && handlerMs > 5) {
         const s2 = store.sessions[sessionId]
         void invoke('append_perf_diag_cmd', {
           kind: 'seg',
