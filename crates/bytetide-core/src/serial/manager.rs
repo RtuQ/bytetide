@@ -8,27 +8,12 @@ use std::time::{Duration, Instant};
 
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager};
 
 use super::port::{open_port, Dir, LogLine, PortConfig};
 use crate::logfmt;
 use crate::session::SessionLog;
 use crate::serial::rules::{alert_eval, auto_reply_payload, AlertCfg, AlertWinState, AutoReplyCfg};
-
-/// 批量日志事件载荷（按会话路由，单事件名 `log`）。
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct StatusPayload {
-    pub session_id: String,
-    pub status: String,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct ErrorPayload {
-    pub session_id: String,
-    pub error: String,
-}
+use crate::sink::EventSink;
 
 /// 桥接环形缓冲容量（带原始字节的近期分析窗口）。
 pub const RING_CAP: usize = 20000;
@@ -140,14 +125,6 @@ pub struct BridgeAlert {
     pub ts: String,
     pub text: String,
     pub at: u64,
-}
-
-/// 告警命中事件载荷（稀疏：仅命中时发；通知与提示音在 UI 侧执行）
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct AlertHitPayload {
-    pub session_id: String,
-    pub hits: Vec<BridgeAlert>,
 }
 
 /// AI 批注（REST 写入，事件推送到前端界面；`no` 为行号——
@@ -346,19 +323,21 @@ impl PortManager {
     }
 
     /// 创建会话并启动读线程；立即返回会话 ID。端口在读线程内打开，
-    /// 打开失败通过 `session-error` 事件回报，状态从 connecting -> connected/error。
+    /// 打开失败通过 sink.error 回报，状态从 connecting -> connected/error。
+    /// `sessions_dir`：无自定义路径模板时默认日志文件的落盘目录；传空 PathBuf 表示不落盘（CLI 缺省）。
     pub fn connect(
         &self,
         config: PortConfig,
         log_config: logfmt::LogConfig,
-        app: &AppHandle,
+        sink: Arc<dyn EventSink>,
+        sessions_dir: PathBuf,
     ) -> anyhow::Result<String> {
         let id = format!("s{}", self.next_id.fetch_add(1, Ordering::Relaxed));
         let stop = Arc::new(AtomicBool::new(false));
         let buf = Arc::new(RingBuf::new());
         let plot = Arc::new(RwLock::new(PlotConfig::default()));
         let (write_tx, write_rx) = mpsc::channel::<PortCmd>();
-        // 日志路径：模板非空则按当时时间+端口名解析，否则用默认 app_data 路径
+        // 日志路径：模板非空则按当时时间+端口名解析，否则用默认 sessions_dir 路径
         let (log_path, custom_path) = match log_config
             .log_path_template
             .as_deref()
@@ -372,13 +351,14 @@ impl PortManager {
                 )),
                 true,
             ),
-            None => (session_log_path(app, &id), false),
+            // 空 sessions_dir（CLI 缺省不落盘）：空路径交给 open_session_log 跳过录制
+            None if sessions_dir.as_os_str().is_empty() => (PathBuf::new(), false),
+            None => (default_log_path(&sessions_dir, &id), false),
         };
         let ts_format = log_config.line_ts_format.filter(|s| !s.is_empty());
 
         let cfg = config.clone();
         let id2 = id.clone();
-        let app2 = app.clone();
         let stop2 = stop.clone();
         let buf2 = buf.clone();
         let auto_reply_cfg = Arc::new(RwLock::new(AutoReplyCfg::default()));
@@ -395,12 +375,12 @@ impl PortManager {
                 // 串口与 TCP/UDP 源共用同一装配路径，按传输类型选择循环
                 if is_net_transport(&cfg) {
                     net_loop(
-                        cfg, id2, app2, stop2, write_rx, lp, ts_format, custom_path, buf2, ar2,
+                        cfg, id2, sink, stop2, write_rx, lp, ts_format, custom_path, buf2, ar2,
                         al2, am2,
                     )
                 } else {
                     reader_loop(
-                        cfg, id2, app2, stop2, write_rx, lp, ts_format, custom_path, buf2, ar2,
+                        cfg, id2, sink, stop2, write_rx, lp, ts_format, custom_path, buf2, ar2,
                         al2, am2,
                     )
                 }
@@ -708,20 +688,16 @@ impl PortManager {
     }
 }
 
-fn session_log_path(app: &AppHandle, id: &str) -> PathBuf {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| PathBuf::from("logs"));
-    dir.join("sessions").join(format!("{}.log", id))
+/// 默认日志路径：`sessions_dir/{id}.log`（桌面端传 app_data_dir()/sessions）。
+fn default_log_path(sessions_dir: &std::path::Path, id: &str) -> PathBuf {
+    sessions_dir.join(format!("{}.log", id))
 }
 
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn reader_loop(
     config: PortConfig,
     session_id: String,
-    app: AppHandle,
+    sink: Arc<dyn EventSink>,
     stop: Arc<AtomicBool>,
     write_rx: mpsc::Receiver<PortCmd>,
     log_path: PathBuf,
@@ -733,27 +709,26 @@ fn reader_loop(
     alerts_mirror: Arc<RwLock<Vec<BridgeAlert>>>,
 ) {
     let (session_log, ts_fmt) =
-        open_session_log(&app, &session_id, &log_path, custom_path, ts_format);
+        open_session_log(&*sink, &session_id, &log_path, custom_path, ts_format);
 
     let mut port = match open_port(&config) {
         Ok(p) => p,
         Err(e) => {
-            emit_error(
-                &app,
+            sink.error(
                 &session_id,
                 &format!("打开串口 {} 失败: {}", config.name, e),
             );
-            emit_status(&app, &session_id, "error");
+            sink.status(&session_id, "error");
             return;
         }
     };
-    emit_status(&app, &session_id, "connected");
+    sink.status(&session_id, "connected");
 
     stream_loop(
         port.as_mut(),
         "串口连接已断开",
         "写入串口失败",
-        &app,
+        &*sink,
         &session_id,
         stop,
         write_rx,
@@ -763,26 +738,6 @@ fn reader_loop(
         auto_reply,
         alert_cfg,
         alerts_mirror,
-    );
-}
-
-fn emit_status(app: &AppHandle, session_id: &str, status: &str) {
-    let _ = app.emit(
-        "session-status",
-        StatusPayload {
-            session_id: session_id.to_string(),
-            status: status.to_string(),
-        },
-    );
-}
-
-fn emit_error(app: &AppHandle, session_id: &str, error: &str) {
-    let _ = app.emit(
-        "session-error",
-        ErrorPayload {
-            session_id: session_id.to_string(),
-            error: error.to_string(),
-        },
     );
 }
 
@@ -822,22 +777,28 @@ fn sink_line(line: &LogLine, session_log: &mut Option<SessionLog>, ring: &RingBu
     ring.push(line)
 }
 
-fn finish_loop(session_log: Option<SessionLog>, app: &AppHandle, session_id: &str) {
+fn finish_loop(session_log: Option<SessionLog>, sink: &dyn EventSink, session_id: &str) {
     if let Some(mut w) = session_log {
         let _ = w.flush();
     }
-    emit_status(app, session_id, "disconnected");
+    sink.status(session_id, "disconnected");
 }
 
 /// 打开会话日志文件并上报 connecting；打开失败仅在自定义路径时告警。
 /// 返回 (session_log, ts_fmt)，供串口/网络两类循环共用。
 fn open_session_log(
-    app: &AppHandle,
+    sink: &dyn EventSink,
     session_id: &str,
     log_path: &std::path::Path,
     custom_path: bool,
     ts_format: Option<String>,
 ) -> (Option<SessionLog>, String) {
+    // 空路径 = 不落盘（CLI 缺省）：不建文件、不改错误状态，仅上报 connecting
+    if log_path.as_os_str().is_empty() {
+        let ts_fmt = ts_format.unwrap_or_else(|| "%h:%m:%s.%t".to_string());
+        sink.status(session_id, "connecting");
+        return (None, ts_fmt);
+    }
     if let Some(parent) = log_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -845,8 +806,7 @@ fn open_session_log(
         Ok(w) => Some(w),
         Err(e) => {
             if custom_path {
-                emit_error(
-                    app,
+                sink.error(
                     session_id,
                     &format!("日志路径无效/不可写: {}: {}", log_path.display(), e),
                 );
@@ -855,19 +815,19 @@ fn open_session_log(
         }
     };
     let ts_fmt = ts_format.unwrap_or_else(|| "%h:%m:%s.%t".to_string());
-    emit_status(app, session_id, "connecting");
+    sink.status(session_id, "connecting");
     (session_log, ts_fmt)
 }
 
 /// 串口与 TCP/UDP 共用的读循环：行切分、TX 回显、空闲半行刷出。
-/// 数据不再经事件推给前端（IPC 洪水会把渲染进程调度饿死）：行进 ring（前端
-/// 按 `no` 游标拉取）与落盘文件；只有状态/错误/低频事件走 emit。
+/// 数据不经事件推送（IPC 洪水会把消费者调度饿死）：行进 ring（消费方
+/// 按 `no` 游标拉取）与落盘文件；只有状态/错误/低频事件走 sink。
 #[allow(clippy::too_many_arguments)]
 fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
     io: &mut T,
     eof_msg: &str,
     write_err_msg: &str,
-    app: &AppHandle,
+    sink: &dyn EventSink,
     session_id: &str,
     stop: Arc<AtomicBool>,
     write_rx: mpsc::Receiver<PortCmd>,
@@ -907,7 +867,7 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
                                 &ring,
                             );
                         }
-                        Err(_) => emit_error(app, session_id, write_err_msg),
+                        Err(_) => sink.error(session_id, write_err_msg),
                     }
                 }
                 PortCmd::Clear => {
@@ -921,7 +881,7 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
 
         match io.read(&mut buf) {
             Ok(0) => {
-                emit_error(app, session_id, eof_msg);
+                sink.error(session_id, eof_msg);
                 break;
             }
             Ok(n) => {
@@ -937,7 +897,7 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
                         apply_rx_rules(
                             &line, ring_no, io, &mut session_log, &ring, ts_fmt,
                             &auto_reply.read().clone(), &alert_cfg.read().clone(),
-                            &mut alert_states, &mut fired_alerts, app, session_id, write_err_msg,
+                            &mut alert_states, &mut fired_alerts, sink, session_id, write_err_msg,
                         );
                     } else {
                         line_buf.push(b);
@@ -960,18 +920,18 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
                     apply_rx_rules(
                         &line, ring_no, io, &mut session_log, &ring, ts_fmt,
                         &auto_reply.read().clone(), &alert_cfg.read().clone(), &mut alert_states,
-                        &mut fired_alerts, app, session_id, write_err_msg,
+                        &mut fired_alerts, sink, session_id, write_err_msg,
                     );
                     last_idle_flush = Instant::now();
                 }
             }
             Err(e) => {
-                emit_error(app, session_id, &format!("读取错误: {e}"));
+                sink.error(session_id, &format!("读取错误: {e}"));
                 break;
             }
         }
 
-        // 命中上报：写 mirror（REST /alerts 只读）+ 稀疏事件通知前端（通知/提示音在 UI 侧）
+        // 命中上报：写 mirror（REST /alerts 只读）+ 稀疏事件通知宿主（通知/提示音在 UI 侧）
         if !fired_alerts.is_empty() {
             {
                 let mut m = alerts_mirror.write();
@@ -981,22 +941,15 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
                     m.drain(..n - 100);
                 }
             }
-            let _ = app.emit(
-                "alert-hit",
-                AlertHitPayload {
-                    session_id: session_id.to_string(),
-                    hits: std::mem::take(&mut fired_alerts),
-                },
-            );
+            sink.alert_hits(session_id, std::mem::take(&mut fired_alerts));
         }
     }
 
-    finish_loop(session_log, app, session_id);
+    finish_loop(session_log, sink, session_id);
 }
 
-/// 逐 RX 行规则评估：自动回复（读线程内直接回写设备，不依赖前端存活）
+/// 逐 RX 行规则评估：自动回复（读线程内直接回写设备，不依赖宿主存活）
 /// 与告警（命中攒批上报）。仅 RX 参与；TX 回显不受规则影响。
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn apply_rx_rules<T: std::io::Write + ?Sized>(
     line: &LogLine,
@@ -1009,7 +962,7 @@ fn apply_rx_rules<T: std::io::Write + ?Sized>(
     alert_cfg: &AlertCfg,
     alert_states: &mut HashMap<String, AlertWinState>,
     fired_alerts: &mut Vec<BridgeAlert>,
-    app: &AppHandle,
+    sink: &dyn EventSink,
     session_id: &str,
     write_err_msg: &str,
 ) {
@@ -1038,7 +991,7 @@ fn apply_rx_rules<T: std::io::Write + ?Sized>(
                         ring,
                     );
                 }
-                Err(_) => emit_error(app, session_id, write_err_msg),
+                Err(_) => sink.error(session_id, write_err_msg),
             }
         }
     }
@@ -1161,7 +1114,7 @@ fn is_net_transport(config: &PortConfig) -> bool {
 fn net_loop(
     config: PortConfig,
     session_id: String,
-    app: AppHandle,
+    sink: Arc<dyn EventSink>,
     stop: Arc<AtomicBool>,
     write_rx: mpsc::Receiver<PortCmd>,
     log_path: PathBuf,
@@ -1173,23 +1126,24 @@ fn net_loop(
     alerts_mirror: Arc<RwLock<Vec<BridgeAlert>>>,
 ) {
     let desc = describe_transport(&config);
-    let (session_log, ts_fmt) = open_session_log(&app, &session_id, &log_path, custom_path, ts_format);
+    let (session_log, ts_fmt) =
+        open_session_log(&*sink, &session_id, &log_path, custom_path, ts_format);
 
     let mut link = match establish_link(&config) {
         Ok(l) => l,
         Err(e) => {
-            emit_error(&app, &session_id, &format!("建立 {desc} 失败: {e}"));
-            emit_status(&app, &session_id, "error");
+            sink.error(&session_id, &format!("建立 {desc} 失败: {e}"));
+            sink.status(&session_id, "error");
             return;
         }
     };
-    emit_status(&app, &session_id, "connected");
+    sink.status(&session_id, "connected");
 
     stream_loop(
         &mut link,
         "网络连接已断开",
         "网络写入失败",
-        &app,
+        &*sink,
         &session_id,
         stop,
         write_rx,
@@ -1349,6 +1303,20 @@ mod tests {
         assert_eq!(buf.tx_lines(), 1);
         assert_eq!(buf.rx_bytes(), 5); // 2 + 3
         assert_eq!(buf.tx_bytes(), 1);
+    }
+
+    #[test]
+    fn open_session_log_empty_path_skips_recording() {
+        // CLI 缺省不落盘：空路径 -> 不建文件（session_log=None），仍上报 connecting、无错误事件
+        let sink = crate::sink::VecSink::default();
+        let (session_log, ts_fmt) =
+            open_session_log(&sink, "s1", std::path::Path::new(""), false, None);
+        assert!(session_log.is_none());
+        assert_eq!(ts_fmt, "%h:%m:%s.%t");
+        assert_eq!(
+            sink.0.lock().clone(),
+            vec!["status s1 connecting".to_string()]
+        );
     }
 
     #[test]

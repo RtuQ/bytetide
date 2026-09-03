@@ -30,7 +30,7 @@ Built with Tauri 2 + Vue 3 + Rust: small binaries, fast startup, low memory, ful
 1. **Install** (or download a release; building from source below):
    ```bash
    npm install
-   npm run tauri build   # bundle in src-tauri/target/release/bundle/
+   npm run tauri build   # bundle in target/release/bundle/
    ```
 2. **Connect**: pick a port (or a TCP / UDP address) in the top bar and hit Connect — logs start scrolling.
 3. **Explore**: search for keywords; click a line and press `Ctrl+B` to bookmark it; open the Plot panel to see waveforms; flip on the REST bridge when you want an AI to take a look.
@@ -106,19 +106,51 @@ A ready-made AI skill package lives at [skills/serial-tool-bridge](./skills/seri
 
 ---
 
+## CLI (`bytetide`): headless monitoring
+
+Where the desktop app can't go — servers, Raspberry Pi / ARM boards — watch your serial line with the `bytetide` command-line binary. GitHub Releases under `cli-v*` tags ships **static musl builds** for aarch64 / x86_64: copy a single file over, run it, nothing to install. Build locally with `cargo build -p bytetide-cli --release`.
+
+```bash
+bytetide list                                  # list serial ports
+bytetide monitor                               # no source arg: arrow-key port picker
+bytetide monitor -p /dev/ttyUSB0 --baud 115200 --ts
+bytetide monitor --tcp 192.168.1.50:9000 --retry 5
+bytetide monitor --tcp-listen 9000 --json      # one JSON object per line, script-friendly
+bytetide monitor --udp 5140
+```
+
+Interactive sending: type a line and press Enter to send it as ASCII; `/hex AA 01` sends hex, `/mode ascii|hex` switches modes, `/quit` exits.
+
+```
+$ bytetide monitor
+? Select port › /dev/ttyUSB0 (USB Serial)
+RX  [Boot] sensor-fw v2.1
+TX  get temp           ← typed + Enter
+RX  T=23.4C
+TX  AA 01              ← /hex AA 01
+^C
+Disconnected: 00:03:12 · RX 1284 lines / 54.2 KB · TX 2 lines / 12 B · recorded log.tsv
+```
+
+Data lines go to stdout (`RX  ` green / `TX  ` amber, two-space columns); the connect banner and the Ctrl-C summary go to stderr — so `| head` and redirections are safe (exit codes 0/1/2). `--no-color` or `NO_COLOR` disables color. `-o/--record <path|template>` records a desktop-compatible TSV you can copy back and reopen via "Open Log" with every offline feature intact; by default nothing is recorded and no timestamps are shown. See `bytetide --help` for everything.
+
+---
+
 ## Building
 
 ```bash
 npm install
 
 npm run tauri dev      # dev mode: desktop app with hot reload
-npm run tauri build    # installer bundle in src-tauri/target/release/bundle/
+npm run tauri build    # installer bundle in target/release/bundle/
 npm run build          # frontend only: type-check + production build
 npm test               # frontend unit tests (40+)
-cd src-tauri && cargo test   # backend unit tests (30+)
+cargo test             # Rust unit tests (run at repo root: core / cli / src-tauri)
+cargo run -p bytetide-cli -- --help   # try the CLI locally
 ```
 
 Requirements: Node.js 18+, Rust stable, plus the [Tauri 2 system dependencies](https://tauri.app/start/prerequisites/).
+The Rust side is a Cargo workspace (`crates/bytetide-core` / `crates/bytetide-cli` / `src-tauri`): run cargo commands from the repo root; the lockfile and build artifacts live in the root `target/`.
 GitHub Actions runs the full check suite on push / PR.
 
 > `npm run dev` alone (without the Tauri backend) still renders the UI for a smoke check — but serial I/O won't work.
@@ -129,16 +161,15 @@ GitHub Actions runs the full check suite on push / PR.
 
 ```
 serial_tool/
+├─ crates/               # Cargo workspace members
+│  ├─ bytetide-core/     # Core logic: serial / sessions / ring buffer / rules / recording (Tauri-free)
+│  └─ bytetide-cli/      # The bytetide CLI (headless monitoring)
 ├─ src/                  # Frontend (Vue 3 + TypeScript + Pinia)
 │  ├─ components/        # UI: log view, send panel, search, plot, sidebar panels
 │  ├─ composables/       # Headless logic: events, parsers, plotting, alert beep…
 │  ├─ stores/            # Session state machine, alert history
 │  └─ types/             # Types & defaults (single source of truth)
-├─ src-tauri/            # Rust backend
-│  └─ src/
-│     ├─ bridge.rs       # REST analysis bridge (axum)
-│     ├─ serial/         # Serial/network reader threads, ring buffer
-│     └─ …               # invoke commands, log persistence
+├─ src-tauri/            # Desktop Rust shell: invoke commands, REST bridge, hotplug, event forwarding
 ├─ sample-data/          # Demo log
 ├─ docs/                 # Screenshots & docs assets
 ├─ skills/               # AI skill package for the REST bridge (copy to ~/.zcode/skills/)

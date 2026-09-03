@@ -1,0 +1,21 @@
+[package]
+name = "bytetide-cli"
+description = "ByteTide CLI：无 UI 串口/网络日志监控（静态编译可跑在 ARM Linux 等无桌面环境）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "bytetide"
+path = "src/main.rs"
+
+[dependencies]
+bytetide-core = { path = "../bytetide-core", default-features = false }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+console = "0.15"
+dialoguer = "0.11"
+ctrlc = { version = "3", features = ["termination"] }

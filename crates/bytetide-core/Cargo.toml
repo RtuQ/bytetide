@@ -1,0 +1,21 @@
+[package]
+name = "bytetide-core"
+description = "ByteTide 串口/网络日志核心：会话管理、ring 拉模型、规则评估、TSV 落盘（无 UI，桌面端与 CLI 共用）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serialport = { workspace = true }
+parking_lot = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+regex = { workspace = true }
+
+[features]
+default = ["udev"]
+# Linux 下 libudev 提供 USB VID/PID 等枚举元数据（C 依赖，musl 静态编译不可用；
+# 关闭后 bytetide-cli 用 /dev 扫描兜底，按路径打开不受影响）
+udev = ["serialport/libudev"]

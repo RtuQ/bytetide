@@ -1,8 +1,7 @@
 mod bridge;
 mod commands;
-mod logfmt;
-mod serial;
-mod session;
+mod gui_sink;
+mod hotplug;
 mod state;
 
 use single_instance::SingleInstance;
@@ -144,11 +143,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(AppState {
-            manager: serial::PortManager::new(),
+            manager: bytetide_core::serial::PortManager::new(),
         })
         .setup(|app| {
             let handle = app.handle().clone();
-            serial::hotplug::start_hotplug(handle);
+            hotplug::start_hotplug(handle);
             start_perf_heartbeat(app.handle());
             // REST 分析桥：按持久化配置自启（默认关，需在前端启用）
             app.manage(bridge::BridgeController::init(app.handle().clone()));

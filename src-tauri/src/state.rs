@@ -1,4 +1,4 @@
-use crate::serial::PortManager;
+use bytetide_core::serial::PortManager;
 
 /// Tauri 全局状态：持有串口会话管理器。
 pub struct AppState {

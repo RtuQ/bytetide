@@ -15,10 +15,9 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      # 工作区化后 cargo 在仓库根执行，缓存默认即根 workspace / target
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -26,12 +25,12 @@ jobs:
           node-version: 18
           cache: npm
 
-      # Rust：单元测试 + 编译检查
+      # Rust：单元测试 + 编译检查（覆盖 bytetide-core / bytetide-cli / src-tauri 全工作区）
       - name: Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --workspace
 
       - name: Rust check
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+        run: cargo check --workspace
 
       # 前端：类型检查 + 构建
       - name: Install JS deps
