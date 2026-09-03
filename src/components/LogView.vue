@@ -205,14 +205,21 @@ watch(
   },
 )
 
-// 从 MatchStats 点击行号跳转
+// 从 MatchStats / 解码列表点击行号跳转：滚动定位并闪烁目标行 1.2s
+const flashNo = ref<number | null>(null)
 watch(
   () => session.value?.jump,
   async (j) => {
     if (!j) return
     await nextTick()
     const idx = viewItems.value.findIndex((l) => l.no === j.no)
-    if (idx >= 0) scroller.value?.scrollToItem?.(idx)
+    if (idx >= 0) {
+      scroller.value?.scrollToItem?.(idx)
+      flashNo.value = j.no
+      setTimeout(() => {
+        if (flashNo.value === j.no) flashNo.value = null
+      }, 1200)
+    }
   },
 )
 
@@ -361,7 +368,7 @@ onBeforeUnmount(() => {
     >
       <div
         class="log-row"
-        :class="[item.dir, { selected: item.no === selectedNo }]"
+        :class="[item.dir, { selected: item.no === selectedNo, flash: item.no === flashNo }]"
         @click="selectedNo = item.no"
       >
         <span class="bm-gutter">

@@ -25,6 +25,7 @@ import StatusBar from './components/StatusBar.vue'
 import SearchPanel from './components/SearchPanel.vue'
 import BookmarkPanel from './components/BookmarkPanel.vue'
 import KeywordPanel from './components/KeywordPanel.vue'
+import ParserPanel from './components/ParserPanel.vue'
 import AutoReplyPanel from './components/AutoReplyPanel.vue'
 import AlertPanel from './components/AlertPanel.vue'
 import ConfigPresetsPanel from './components/ConfigPresetsPanel.vue'
@@ -293,6 +294,7 @@ function onPanelToggle(e: Event, id: string) {
 
         <div class="group-head">规则</div>
         <KeywordPanel :open="panel.isOpen('keywords')" @toggle="onPanelToggle($event, 'keywords')" />
+        <ParserPanel :open="panel.isOpen('parser')" @toggle="onPanelToggle($event, 'parser')" />
         <AutoReplyPanel :open="panel.isOpen('autoreply')" @toggle="onPanelToggle($event, 'autoreply')" />
         <AlertPanel :open="panel.isOpen('alerts')" @toggle="onPanelToggle($event, 'alerts')" />
 

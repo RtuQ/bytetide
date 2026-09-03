@@ -87,13 +87,15 @@
      │   │   ├─ .hsplit    ← 日志↔图表拖拽分割条（20–80% 钳制，serialtool.centerSplit）
      │   │   ├─ PlotView   ← centerView 'split'/'plot' 时渲染（useResizeObserver 自适应尺寸）
      │   │   └─ CompareView ← compareMode 时占中心区（双会话时间对齐；ComparePanel 已退役）
-     │   ├─ DockView   ← 底部 dock 三页签：解码(parser V1 空态)/告警历史(AlertPanel 拆出)/
-     │   │              监控(MatchStats 迁入)；可拖高可收起（serialtool.dock）
+     │   ├─ DockView   ← 底部 dock 页签：解码(DockDecode 实时解码列表；仅解析脚本启用时
+     │   │              出现)/告警历史(AlertPanel 拆出)/监控(MatchStats 迁入)；可拖高可收起
+     │   │              （serialtool.dock）
      │   └─ SendPanel  ← 发送区（<details> 折叠条，默认收起）
      ├─ .sidebar-handle ← 侧栏拖宽(240–560px)/收起手柄（serialtool.sidebar）
      └─ .app-sidebar   ← 分组粘头（.group-head sticky）四组，overflow-y:auto：
-         查找(SearchPanel+命中列表/BookmarkPanel) · 规则(KeywordPanel/AutoReplyPanel/
-         AlertPanel=告警规则) · 数据(PlotConfigPanel) · 库(ConfigPresetsPanel/AiNotesPanel)
+         查找(SearchPanel+命中列表/BookmarkPanel) · 规则(KeywordPanel/ParserPanel=
+         协议解析脚本管理+试运行+统计/AutoReplyPanel/AlertPanel=告警规则) ·
+         数据(PlotConfigPanel) · 库(ConfigPresetsPanel/AiNotesPanel)
  └─ StatusBar   ← 底部状态栏：状态点+端口/传输参数 | RX/TX 速率 | 丢行(>0 红) | 滞后/批均
                   | RX/TX 行数（跟随活动会话；解析器状态位待 parser V1 点亮）
 ```
@@ -121,6 +123,18 @@ body 用 `.panel-body`；需限高滚动的用 `.kw-body` / `.ar-body`（已带 
 - 更新检查（`useUpdateChecker`）：启动延迟 5s 静默查 GitHub Releases API（24h 节流，失败也记间隔）；`UPDATE_REPO` 常量已定 `RtuQ/bytetide`（与 scripts/portable-README.txt 主页链接联动，改一处必改另一处）。免安装版策略 = 只提示 + 跳转下载页，不做自更新；TitleBar 版本徽标在 `status==='available'` 时亮起，「忽略此版本」按 tag 记忆。
 - **长跑性能红线**：`lines` 元素必须在 `appendLines`/`appendPulled` 处 `markRaw`（日志行不可变，禁 Proxy 开销）；侧栏折叠面板 body 仍处于挂载态，**禁止无守卫的全量行 computed**——折叠/空态必须早退或停算（参考 SearchPanel 命中节 hitsOpen、BookmarkPanel 空书签早退）。
 - **数据流 = 拉模型（feat/pull-based-view 起）**：后端 ring 是唯一真相（`no` 游标单调递增、清屏不回退）；前端 `useTauriEvents` 每 200ms 按会话 `pullNo` 调 `ring_lines_no_cmd` 拉 delta（`appendPulled` 入表），**不再有 `log` 事件流**（40ms 推事件曾把 WebView2 渲染进程调度饿死成死亡螺旋，实测积压 15 分钟、1s 定时器饿到 48s 才醒）。渲染进程被节流时最坏滞后=一个拉取周期，醒来一次拉齐即收敛。新增实时数据通道时走游标拉取，勿回加高频 emit。CLI（bytetide-cli）是 ring 的第二个消费者：每 50ms 调 `ring_lines_after_no` 游标拉取、零事件流，新增消费者照此办理。
+- **协议解析引擎（feat/parser-v1，规范见 docs/parser-spec.md）**：导入 `bytetide.parser v1`
+  脚本（声明式字段层为主 / JS parse 兜底 / 纯切帧器），把 RX/TX 帧实时翻译为解码行。
+  **切帧在主线程**（`src/parser/framer.ts` 状态机按 (sessionId,dir) 隔离），声明式解码零代码执行；
+  脚本层 parse 跑 blob module Worker 沙箱（`bootstrap.ts`，reqId 看门狗 ack 3s/results 10s 超时即
+  terminate+卸载，滚动 1000 帧错误率 >30% 熔断自动停用）。数据入口：拉取循环尾部与离线载入处调
+  `feedParser(sessionId, lines)`；解码行入 `session.decoded`（markRaw + 1000 条 FIFO，
+  `applyDecoded` 200ms 节流；重连不迁移、clearLog 清空并经 `registerParserOnClear` 注入回调复位
+  framer+gen）。导入/启用时对每会话最近 2000 行回溯补解码并整表替换；试运行三分类
+  （无数据直接启用 / 0 帧或 CRC 全败停留启用前 / 通过自动启用）。**CSP 红线**：`tauri.conf.json`
+  现为 `csp: null`，blob Worker + 动态 `import()` 成立；将来引入 CSP 必须含 `script-src blob:` 与
+  `worker-src blob:`，否则脚本层静默挂掉（声明式层不受影响）。ABI 改动三处同步：
+  `src/parser/parser-abi.d.ts` → `src/types/parser.ts` → `docs/parser-spec.md`。
 - **自动回复/告警 = Rust 侧评估（feat/pull-based-view 第 2 步）**：设备交互的正确性不依赖前端存活。规则存 `SessionHandle.auto_reply/alert_cfg`（前端 `pushLiveRules` 整体覆盖推送：连接时+规则变更时）；`stream_loop` 逐 RX 行在 core 的 `serial/rules.rs`（纯函数：`build_test_matcher` 语义对齐前端 `buildTestMatcher`、`auto_reply_payload`、`alert_eval` 窗口/冷却状态机）评估：自动回复命中在读线程内直接回写设备（TX 回显照常进 ring/落盘）；告警命中攒批写后端 mirror（REST `/alerts`）+ `alert-hit` 稀疏事件——通知/提示音/历史入 UI 在事件监听侧执行（`useTauriEvents`），行号用 LogLine.rn（ring no）回查 UI no。改规则语义时 Rust 与前端两处测试都要动。
 - **事件出口 = `EventSink` trait（core 去 tauri 化）**：core 不再 import tauri；状态/错误/告警（`status`/`error`/`alert_hits`）经 `sink.rs` 的 `EventSink` trait 送出，桌面端 `src-tauri/src/gui_sink.rs` 转发为原事件名（`session-status`/`session-error`/`alert-hit`）。改事件名必须同步前端 `useTauriEvents`。`PortManager::connect` 现签名 `(config, log_config, sink: Arc<dyn EventSink>, sessions_dir)`，`sessions_dir` 传空 = 不落盘（CLI 默认）。
 - **后台/锁屏不实时根因 = Windows EcoQoS**：进程后台化或锁屏时系统把窗口化进程降入节能队列，IPC 派发被推迟到数十秒级（症状：`batchMs` 仅 2-6ms 但 `lagMs` 飙到 30s）。治本在 `lib.rs::disable_power_throttling()`，进程启动即调 `SetProcessInformation(ProcessPowerThrottling, StateMask=0)` 退出限流；`windows-sys` 仅 Windows target 引入。哨兵 `usePerfWatch` 的 `DiagEntry.vis` 记录每条滞后发生时的窗口可见性，`hidden` 时滞后=系统限流，`visible` 时滞后=真积压，一眼可辨。注意：`--disable-features=CalculateNativeWinOcclusion` 生效时被遮挡窗口也报 `visible`，此时 vis 判读失效，需以后端 `perf-heartbeat.log` 对照。
@@ -131,6 +145,8 @@ body 用 `.panel-body`；需限高滚动的用 `.kw-body` / `.ar-body`（已带 
 - AI 分析入口：前端内嵌调用 REST 桥的对话式分析（离线选区→“让 AI 解释”）
 - 时序回放（离线日志按原间隔重放为伪实时会话）
 - 对比视图完整 diff 算法；tcp-server 多并发接入；UDP 对端发送
+- 解析引擎 V1.1：LogView 行内类型徽章（shallowRef Map<no,tag> 驱动可见行重渲染；
+  V1 评审定为可砍项已砍，解码列表在底部 dock「解码」页签）
 
 ### 连接控制（停止 / 重连 / 关闭）
 - **停止**：`store.stopSession(id)` —— 断开串口但保留标签页与日志，状态 → `disconnected`
@@ -152,7 +168,7 @@ UI 层与逻辑层严格分离：
 |---|---|---|
 | **core（Rust 纯逻辑）** | `crates/bytetide-core/**` | 串口/会话/ring/规则/落盘；桌面与 CLI 共用，改这里必须跑 core+src-tauri 两边测试 |
 | **CLI** | `crates/bytetide-cli/**` | args / render / pick / input；纯函数单测同 core 规范 |
-| **逻辑（改 UI 时勿动）** | `src/types/index.ts`、`src/stores/session.ts`、`src/composables/*`、`src/main.ts`、`src-tauri/src/**`（GUI 壳：commands/bridge/hotplug/gui_sink） | 业务/数据/事件逻辑。只做纯 UI 时不要改这里 |
+| **逻辑（改 UI 时勿动）** | `src/types/index.ts`、`src/types/parser.ts`、`src/parser/**`（framer/fields/crc/engine/bootstrap/lineBytes，ABI 形状在 parser-abi.d.ts）、`src/stores/session.ts`、`src/composables/*`、`src/main.ts`、`src-tauri/src/**`（GUI 壳：commands/bridge/hotplug/gui_sink） | 业务/数据/事件逻辑。只做纯 UI 时不要改这里 |
 | **UI** | `src/App.vue`、`src/components/*.vue` 的 `<template>`、`src/styles.css`、`index.html`、`src-tauri/tauri.conf.json`(窗口) | 自由改 |
 
 - 改 `.vue` 时**只动 `<template>`**，`<script setup>` 原样保留，除非确需新增 UI 交互态（如本地的折叠/切换 ref）
