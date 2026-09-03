@@ -30,7 +30,7 @@ Tauri 2 + Vue 3 + Rust 构建：安装包小、启动快、内存占用低，完
 1. **安装**（已发布则直接下载；从源码构建见[下文](#构建)）：
    ```bash
    npm install
-   npm run tauri build   # 产物在 src-tauri/target/release/bundle/
+   npm run tauri build   # 产物在 target/release/bundle/
    ```
 2. **连接**：顶部选好端口（或 TCP / UDP 地址），点「连接」，日志开始滚动。
 3. **开始用**：搜索框找关键字；点一行再按 `Ctrl+B` 加书签；侧栏「数据绘图」配好帧格式看波形；想让 AI 分析就打开「REST 桥接」。
@@ -106,19 +106,51 @@ Tauri 2 + Vue 3 + Rust 构建：安装包小、启动快、内存占用低，完
 
 ---
 
+## CLI（bytetide）：无头监控
+
+桌面进不去的地方——服务器、树莓派 / ARM 工控板——用 `bytetide` 命令行版盯串口。GitHub Releases 的 `cli-v*` 标签提供 aarch64 / x86_64 的 **musl 静态二进制**，拷过去单文件即可运行，无需装任何依赖；本地从源码构建用 `cargo build -p bytetide-cli --release`。
+
+```bash
+bytetide list                                  # 列出串口
+bytetide monitor                               # 不带源参数：终端里方向键选口
+bytetide monitor -p /dev/ttyUSB0 --baud 115200 --ts
+bytetide monitor --tcp 192.168.1.50:9000 --retry 5
+bytetide monitor --tcp-listen 9000 --json      # 每行一个 JSON，脚本友好
+bytetide monitor --udp 5140
+```
+
+交互发送：敲一行回车即按 ASCII 发送，`/hex AA 01` 发 HEX，`/mode ascii|hex` 切模式，`/quit` 退出。
+
+```
+$ bytetide monitor
+? 选择串口 › /dev/ttyUSB0 (USB Serial)
+RX  [Boot] sensor-fw v2.1
+TX  get temp           ← 敲回车直接发
+RX  T=23.4C
+TX  AA 01              ← /hex AA 01
+^C
+已断开：时长 00:03:12 · RX 1284 行 / 54.2 KB · TX 2 行 / 12 B · 录制 log.tsv
+```
+
+数据行走 stdout（`RX  ` 绿 / `TX  ` 琥珀两列），连接与 Ctrl-C 总结走 stderr——`| head`、重定向都安全（退出码 0/1/2）；`--no-color` 或 `NO_COLOR` 关色。`-o/--record <路径|模板>` 录制为桌面端同款 TSV，拷回电脑用「打开日志」离线复盘，功能一个不少；默认不录制、不加时间戳。完整参数见 `bytetide --help`。
+
+---
+
 ## 构建
 
 ```bash
 npm install
 
 npm run tauri dev      # 开发模式：桌面应用 + 热重载
-npm run tauri build    # 打安装包，产物在 src-tauri/target/release/bundle/
+npm run tauri build    # 打安装包，产物在 target/release/bundle/
 npm run build          # 仅前端：类型检查 + 生产构建
 npm test               # 前端单测（40+ 例）
-cd src-tauri && cargo test   # 后端单测（30+ 例）
+cargo test             # Rust 单测（仓库根跑，workspace 全量：core / cli / src-tauri）
+cargo run -p bytetide-cli -- --help   # 本地体验 CLI
 ```
 
 环境要求：Node.js 18+、Rust stable，以及 [Tauri 2 系统依赖](https://tauri.app/start/prerequisites/)。
+Rust 侧是 Cargo workspace（`crates/bytetide-core` / `crates/bytetide-cli` / `src-tauri`）：cargo 命令都在仓库根执行，锁文件与构建产物统一在根 `target/`。
 GitHub Actions 会在 push / PR 时自动跑完整校验。
 
 > 只跑 `npm run dev`（不开 Tauri 后端）也能看界面：空状态正常渲染，但收发等功能不可用。
@@ -129,16 +161,15 @@ GitHub Actions 会在 push / PR 时自动跑完整校验。
 
 ```
 serial_tool/
+├─ crates/               # Cargo workspace 成员
+│  ├─ bytetide-core/     # 核心逻辑：串口 / 会话 / 环形缓冲 / 规则 / 落盘（不依赖 Tauri）
+│  └─ bytetide-cli/      # bytetide 命令行版（无头监控）
 ├─ src/                  # 前端（Vue 3 + TypeScript + Pinia）
 │  ├─ components/        # 界面组件：日志 / 发送 / 搜索 / 绘图 / 各侧栏面板
 │  ├─ composables/       # 无界面逻辑：事件接入、解析器、绘图、告警音…
 │  ├─ stores/            # 会话状态机、告警历史
 │  └─ types/             # 类型与默认配置（单一事实来源）
-├─ src-tauri/            # Rust 后端
-│  └─ src/
-│     ├─ bridge.rs       # REST 分析桥（axum）
-│     ├─ serial/         # 串口 / 网络源读线程、环形缓冲
-│     └─ …               # invoke 命令、日志落盘
+├─ src-tauri/            # 桌面端 Rust 壳：invoke 命令、REST 桥、热插拔、事件转发
 ├─ sample-data/          # 演示日志
 ├─ docs/                 # 截图等文档资源
 ├─ skills/               # REST 桥 AI 技能包（拷到 ~/.zcode/skills/ 即可安装）

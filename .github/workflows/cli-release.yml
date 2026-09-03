@@ -1,0 +1,106 @@
+name: CLI Release
+
+# 独立标签命名空间：只匹配 cli-v*（如 cli-v0.1.0），与桌面端的 v* 互不触发——
+# 桌面版发版不会带出 CLI 构建，CLI 单独发版也不影响桌面版 release。
+on:
+  push:
+    tags: ['cli-v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-cli:
+    # 交叉编译静态 musl CLI（可跑在无桌面/容器的 ARM Linux）。
+    # bytetide-cli 依赖 bytetide-core 时已 default-features=false（关掉 libudev C 依赖），
+    # 无需额外 feature flag 即可交叉编译。
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-unknown-linux-musl, x86_64-unknown-linux-musl]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add cross-compile target
+        run: rustup target add ${{ matrix.target }}
+
+      # 工作区在仓库根，缓存默认即根 workspace / target
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      # cargo-zigbuild + ziglang：PyPI 直接装预编译二进制，免 docker 交叉编译 musl
+      - name: Install cargo-zigbuild
+        run: python3 -m pip install cargo-zigbuild ziglang
+
+      - name: Build CLI
+        run: cargo zigbuild --release -p bytetide-cli --target ${{ matrix.target }}
+
+      # musl 静态产物冒烟检查（rustc 的 static-pie 变体报 "static-pie linked"）
+      - name: Verify static binary
+        run: |
+          file target/${{ matrix.target }}/release/bytetide
+          file target/${{ matrix.target }}/release/bytetide | grep -Eq "statically linked|static-pie linked"
+
+      - name: Package
+        run: |
+          cat > README-CLI.txt <<'EOF'
+          ByteTide CLI —— 串口/网络日志监控（无 UI）
+          ==========================================
+
+          静态链接的 musl 二进制（ARM64 / x86_64），可直接跑在无桌面环境、
+          容器与嵌入式 Linux 上，无需安装任何运行库。
+
+          常用命令
+          --------
+          列出可用串口：
+              bytetide list
+
+          监控串口：
+              bytetide monitor -p /dev/ttyUSB0 --baud 115200
+
+          监控 TCP 设备（tcp-client 数据源）：
+              bytetide monitor --tcp host:port
+
+          选项摘要
+          --------
+            -p, --port <PORT>      串口设备路径（如 /dev/ttyUSB0、COM3）
+            --baud <BAUD>          波特率（默认 115200）
+            --tcp <HOST:PORT>      以 TCP 客户端连接 host:port（与 -p 二选一）
+            --record <FILE>        录制为 TSV，可直接在 ByteTide 桌面版中打开
+            -h, --help             查看完整帮助
+            -V, --version          查看版本
+
+          交互命令（monitor 运行中输入）
+          ------------------------------
+            直接输入一行文字回车  按当前模式（默认 ASCII）发送到设备
+            /hex AA 01 5a          单次以 HEX 发送
+            /mode ascii|hex        切换默认发送模式
+            /quit                  退出监控
+
+          其他
+          ----
+            Ctrl-C 退出并打印本次收发统计。
+            桌面版 ByteTide：https://github.com/RtuQ/bytetide
+          EOF
+          # 二进制与 README 一并放进 tarball 根目录
+          tar -czf bytetide-${{ matrix.target }}.tar.gz \
+            -C target/${{ matrix.target }}/release bytetide \
+            -C "$GITHUB_WORKSPACE" README-CLI.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bytetide-${{ matrix.target }}
+          path: bytetide-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+      # 仅在标签推送时创建 GitHub Release 并挂上 tarball
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: bytetide-*.tar.gz

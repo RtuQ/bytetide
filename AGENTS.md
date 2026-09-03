@@ -100,16 +100,24 @@
 每个侧栏组件根元素是 `<details class="panel">`（**默认收起**，不加 `open`），`<summary class="panel-head">` 内含：`.panel-icon` + `.panel-title` + 可选 `.badge`(数量) + `.chevron`(展开旋转 90°)。
 body 用 `.panel-body`；需限高滚动的用 `.kw-body` / `.ar-body`（已带 max-height + overflow）。
 
+### Cargo workspace 布局
+根 `Cargo.toml` 是 workspace（members：`crates/bytetide-core`、`crates/bytetide-cli`、`src-tauri`）；锁文件与构建产物统一在仓库根（根 `Cargo.lock` / 根 `target/`，src-tauri 下已无）。
+- `crates/bytetide-core`：从 src-tauri 抽出的纯逻辑——`serial/{manager,port,rules}.rs`、`session.rs`（TSV 录制）、`logfmt.rs`（路径/时间戳模板）、`sink.rs`（`EventSink`），**100% 不依赖 tauri**
+- `crates/bytetide-cli`：bin `bytetide`，无头监控（服务器 / ARM 板，musl 静态部署）；ring 的第二个消费者
+- `src-tauri`：只剩 GUI 壳（commands / bridge / hotplug / gui_sink），业务实现全在 core
+
 ### 数据源与新增会话级字段
-- `PortConfig.transport`：None/'serial' 串口；'tcp-client'/'tcp-server'/'udp' 网络源（serde default，旧 JSON 兼容）。后端串口/网络共用 `stream_loop`（manager.rs），加新传输=扩展 `establish_link` 即可。
+- `PortConfig.transport`：None/'serial' 串口；'tcp-client'/'tcp-server'/'udp' 网络源（serde default，旧 JSON 兼容）。后端串口/网络共用 `stream_loop`（core 的 `serial/manager.rs`），加新传输=扩展 `establish_link` 即可。
 - 会话级 UI 偏好字段（showLineNo/showDir/droppedLines/bookmarks/aiNotes/alerts/filters…）**必须同时**改三处：`makeSession` 默认值、`reconnectSession` 的 carried 迁移清单、相关 actions。clearLog 会重置 lineCounter 与 droppedLines 并清空 bookmarks 与 aiNotes（aiNotes 同时回写后端镜像清空；droppedLines 在重连迁移中保留）。
 - localStorage 键：`serialtool.theme/.lastPortConfig/.logConfig/.searchHistory/.portPresets/.configPresets/.alertSound/.update.lastCheck/.update.dismissedVersion`。预设库 payload 各类别形状校验在 `applyConfigPreset/importConfigPresets`。
 - 更新检查（`useUpdateChecker`）：启动延迟 5s 静默查 GitHub Releases API（24h 节流，失败也记间隔）；`UPDATE_REPO` 常量已定 `RtuQ/bytetide`（与 scripts/portable-README.txt 主页链接联动，改一处必改另一处）。免安装版策略 = 只提示 + 跳转下载页，不做自更新；TitleBar 版本徽标在 `status==='available'` 时亮起，「忽略此版本」按 tag 记忆。
 - **长跑性能红线**：`lines` 元素必须在 `appendLines`/`appendPulled` 处 `markRaw`（日志行不可变，禁 Proxy 开销）；侧栏折叠面板 body 仍处于挂载态，**禁止无守卫的全量行 computed**——折叠/空态必须早退或停算（参考 SearchPanel 命中节 hitsOpen、BookmarkPanel 空书签早退）。
-- **数据流 = 拉模型（feat/pull-based-view 起）**：后端 ring 是唯一真相（`no` 游标单调递增、清屏不回退）；前端 `useTauriEvents` 每 200ms 按会话 `pullNo` 调 `ring_lines_no_cmd` 拉 delta（`appendPulled` 入表），**不再有 `log` 事件流**（40ms 推事件曾把 WebView2 渲染进程调度饿死成死亡螺旋，实测积压 15 分钟、1s 定时器饿到 48s 才醒）。渲染进程被节流时最坏滞后=一个拉取周期，醒来一次拉齐即收敛。新增实时数据通道时走游标拉取，勿回加高频 emit。
-- **自动回复/告警 = Rust 侧评估（feat/pull-based-view 第 2 步）**：设备交互的正确性不依赖前端存活。规则存 `SessionHandle.auto_reply/alert_cfg`（前端 `pushLiveRules` 整体覆盖推送：连接时+规则变更时）；`stream_loop` 逐 RX 行在 `serial/rules.rs`（纯函数：`build_test_matcher` 语义对齐前端 `buildTestMatcher`、`auto_reply_payload`、`alert_eval` 窗口/冷却状态机）评估：自动回复命中在读线程内直接回写设备（TX 回显照常进 ring/落盘）；告警命中攒批写后端 mirror（REST `/alerts`）+ `alert-hit` 稀疏事件——通知/提示音/历史入 UI 在事件监听侧执行（`useTauriEvents`），行号用 LogLine.rn（ring no）回查 UI no。改规则语义时 Rust 与前端两处测试都要动。
+- **数据流 = 拉模型（feat/pull-based-view 起）**：后端 ring 是唯一真相（`no` 游标单调递增、清屏不回退）；前端 `useTauriEvents` 每 200ms 按会话 `pullNo` 调 `ring_lines_no_cmd` 拉 delta（`appendPulled` 入表），**不再有 `log` 事件流**（40ms 推事件曾把 WebView2 渲染进程调度饿死成死亡螺旋，实测积压 15 分钟、1s 定时器饿到 48s 才醒）。渲染进程被节流时最坏滞后=一个拉取周期，醒来一次拉齐即收敛。新增实时数据通道时走游标拉取，勿回加高频 emit。CLI（bytetide-cli）是 ring 的第二个消费者：每 50ms 调 `ring_lines_after_no` 游标拉取、零事件流，新增消费者照此办理。
+- **自动回复/告警 = Rust 侧评估（feat/pull-based-view 第 2 步）**：设备交互的正确性不依赖前端存活。规则存 `SessionHandle.auto_reply/alert_cfg`（前端 `pushLiveRules` 整体覆盖推送：连接时+规则变更时）；`stream_loop` 逐 RX 行在 core 的 `serial/rules.rs`（纯函数：`build_test_matcher` 语义对齐前端 `buildTestMatcher`、`auto_reply_payload`、`alert_eval` 窗口/冷却状态机）评估：自动回复命中在读线程内直接回写设备（TX 回显照常进 ring/落盘）；告警命中攒批写后端 mirror（REST `/alerts`）+ `alert-hit` 稀疏事件——通知/提示音/历史入 UI 在事件监听侧执行（`useTauriEvents`），行号用 LogLine.rn（ring no）回查 UI no。改规则语义时 Rust 与前端两处测试都要动。
+- **事件出口 = `EventSink` trait（core 去 tauri 化）**：core 不再 import tauri；状态/错误/告警（`status`/`error`/`alert_hits`）经 `sink.rs` 的 `EventSink` trait 送出，桌面端 `src-tauri/src/gui_sink.rs` 转发为原事件名（`session-status`/`session-error`/`alert-hit`）。改事件名必须同步前端 `useTauriEvents`。`PortManager::connect` 现签名 `(config, log_config, sink: Arc<dyn EventSink>, sessions_dir)`，`sessions_dir` 传空 = 不落盘（CLI 默认）。
 - **后台/锁屏不实时根因 = Windows EcoQoS**：进程后台化或锁屏时系统把窗口化进程降入节能队列，IPC 派发被推迟到数十秒级（症状：`batchMs` 仅 2-6ms 但 `lagMs` 飙到 30s）。治本在 `lib.rs::disable_power_throttling()`，进程启动即调 `SetProcessInformation(ProcessPowerThrottling, StateMask=0)` 退出限流；`windows-sys` 仅 Windows target 引入。哨兵 `usePerfWatch` 的 `DiagEntry.vis` 记录每条滞后发生时的窗口可见性，`hidden` 时滞后=系统限流，`visible` 时滞后=真积压，一眼可辨。注意：`--disable-features=CalculateNativeWinOcclusion` 生效时被遮挡窗口也报 `visible`，此时 vis 判读失效，需以后端 `perf-heartbeat.log` 对照。
 - **存储位置规范**：会话录制（用户数据）在 `app_data_dir()/sessions/`（Roaming）；诊断日志（perf-frontend.log / perf-heartbeat.log）统一走 `lib.rs::open_diag_log` → `app_log_dir()`（Win: %LOCALAPPDATA%\<id>\logs；macOS: ~/Library/Logs/<id>；Linux: XDG state），超 5MB 打开时截断轮转。新增日志写点一律走 `open_diag_log`，勿再散落 app_data 根目录。
+- **serialport feature 纪律**：core 的 serialport 是 `default-features = false` + 可选 `udev` feature——桌面端开（USB 元数据），CLI 永不开（musl 静态构建依赖此）。升级 serialport 时桌面 / CLI 两条线都要验证。
 
 ### 后续迭代计划（未排期）
 - AI 分析入口：前端内嵌调用 REST 桥的对话式分析（离线选区→“让 AI 解释”）
@@ -134,12 +142,14 @@ UI 层与逻辑层严格分离：
 
 | 层 | 文件 | 规则 |
 |---|---|---|
-| **逻辑（改 UI 时勿动）** | `src/types/index.ts`、`src/stores/session.ts`、`src/composables/*`、`src/main.ts`、`src-tauri/src/**` | 业务/数据/事件逻辑。只做纯 UI 时不要改这里 |
+| **core（Rust 纯逻辑）** | `crates/bytetide-core/**` | 串口/会话/ring/规则/落盘；桌面与 CLI 共用，改这里必须跑 core+src-tauri 两边测试 |
+| **CLI** | `crates/bytetide-cli/**` | args / render / pick / input；纯函数单测同 core 规范 |
+| **逻辑（改 UI 时勿动）** | `src/types/index.ts`、`src/stores/session.ts`、`src/composables/*`、`src/main.ts`、`src-tauri/src/**`（GUI 壳：commands/bridge/hotplug/gui_sink） | 业务/数据/事件逻辑。只做纯 UI 时不要改这里 |
 | **UI** | `src/App.vue`、`src/components/*.vue` 的 `<template>`、`src/styles.css`、`index.html`、`src-tauri/tauri.conf.json`(窗口) | 自由改 |
 
 - 改 `.vue` 时**只动 `<template>`**，`<script setup>` 原样保留，除非确需新增 UI 交互态（如本地的折叠/切换 ref）
 - 新增功能需要 store 动作时（如 `stopSession`），**只新增 action，不改既有 action 的行为**
-- 后端命令在 `src-tauri/src/commands.rs` + `serial/manager.rs`；前端经 `invoke` 调用。优先复用现有命令，避免改 Rust
+- 后端命令在 `src-tauri/src/commands.rs`，核心实现已移 `crates/bytetide-core`（`serial/manager.rs` 等）；前端经 `invoke` 调用。优先复用现有命令，避免改 Rust
 
 ### TypeScript 约束
 `tsconfig.json` 开了 `noUnusedLocals` + `noUnusedParameters` + `strict`。
@@ -152,11 +162,12 @@ UI 层与逻辑层严格分离：
 
 改完必跑（顺序即依赖：测试先于构建，构建先于人工验布局）：
 1. `npm run test` —— vitest 跑前端单测（`src/**/__tests__/*.test.ts`）；改了 `stores/`、`composables/` 必跑
-2. `cargo test` —— 在 `src-tauri/` 跑后端单测（内联 `#[cfg(test)]` 模块）；改了 Rust 必跑
-3. `npm run build` —— `vue-tsc --noEmit` 类型检查 + `vite build`，两者都过才算改完
-4. `npm run dev`（端口 1420，strictPort）浏览器看布局；接真实串口用 `npm run tauri dev`
-5. 浏览器无 Tauri 后端时，`invoke`/`listen` 会失败，但空状态 UI 仍应正常渲染、不崩——这是冒烟检查
-6. 虚拟滚动行高改了要同步改 `LogView.vue` 的 `:item-size` 与 `.log-row` 的 `height`（当前都是 22px）
+2. `cargo test` —— **在仓库根跑**（Cargo workspace 全量，覆盖 bytetide-core / bytetide-cli / src-tauri 的内联 `#[cfg(test)]` 模块）；改了 Rust 必跑
+3. `cargo run -p bytetide-cli -- --help` —— CLI 冒烟检查；改了 `crates/**` 必跑
+4. `npm run build` —— `vue-tsc --noEmit` 类型检查 + `vite build`，两者都过才算改完
+5. `npm run dev`（端口 1420，strictPort）浏览器看布局；接真实串口用 `npm run tauri dev`
+6. 浏览器无 Tauri 后端时，`invoke`/`listen` 会失败，但空状态 UI 仍应正常渲染、不崩——这是冒烟检查
+7. 虚拟滚动行高改了要同步改 `LogView.vue` 的 `:item-size` 与 `.log-row` 的 `height`（当前都是 22px）
 
 ### 测试规范（新增/修改功能必须遵守）
 - **改逻辑层必须同步新增或更新测试**：`stores/`、`composables/`、`src-tauri/src/` 的纯函数 / 分支 / 边界用例补单测；只改 `.vue` 的 `<template>` 可只跑构建，但触及 store action 或 composable 计算逻辑的改动不算纯 UI
