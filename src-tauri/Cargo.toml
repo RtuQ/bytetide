@@ -10,7 +10,7 @@ license = "MIT"
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
+# to make the lib name unique and not conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "serial_tool_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -19,26 +19,24 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# 串口/会话核心（workspace 成员，含 udev feature：桌面端保留 USB 枚举元数据）
+bytetide-core = { path = "../crates/bytetide-core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
-serde = { version = "1", features = ["derive"] }
+serde = { workspace = true }
 serde_json = "1"
-# 串口与异步
-serialport = "4"
+# REST 桥 /export 文件流式响应（ReaderStream）+ 异步端点
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "net", "io-util", "fs"] }
-# REST 桥 /export 文件流式响应（ReaderStream）
 tokio-util = { version = "0.7", features = ["io"] }
-parking_lot = "0.12"
-once_cell = "1"
-anyhow = "1"
+parking_lot = { workspace = true }
 # 时间戳
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { workspace = true }
 # 单实例
 single-instance = "0.3"
 # REST 分析桥（进程内 axum server + 正则过滤 + 帧解码）
 axum = "0.7"
-regex = "1"
+regex = { workspace = true }
 tauri-plugin-notification = "2"
 
 # Windows：退出 EcoQoS 能效限流（后台/锁屏时系统会把进程丢进节能队列，
@@ -49,4 +47,3 @@ windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_F
 # macOS：无边框窗口圆角（NSWindow contentView layer 裁剪），版本随 tauri/tao 锁定
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-

@@ -1,8 +1,7 @@
 use std::time::Duration;
 
+use bytetide_core::serial::port::{list_ports, PortInfo};
 use tauri::{AppHandle, Emitter};
-
-use super::port::{list_ports, PortInfo};
 
 /// 启动端口热插拔监听：每 1s 轮询 available_ports 做 diff，变化时 emit `port-changed`。
 pub fn start_hotplug(app: AppHandle) {

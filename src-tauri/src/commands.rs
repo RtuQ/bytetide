@@ -1,13 +1,15 @@
 use std::path::PathBuf;
 
+use bytetide_core::logfmt::LogConfig;
+use bytetide_core::serial::manager::{
+    BridgeAlert, BridgeAnnotation, BridgeBookmark, PlotConfig, SendMode, SendRequest,
+};
+use bytetide_core::serial::port::{list_ports, LogLine, PortConfig, PortInfo};
+use bytetide_core::serial::rules::{AlertCfg, AutoReplyCfg};
 use tauri::{AppHandle, Manager, State};
 
 use crate::bridge::{BridgeConfig, BridgeConfigPatch, BridgeController};
-use crate::logfmt::LogConfig;
-use crate::serial::manager::{
-    BridgeAlert, BridgeAnnotation, BridgeBookmark, PlotConfig, SendMode, SendRequest,
-};
-use crate::serial::port::{list_ports, LogLine, PortConfig, PortInfo};
+use crate::gui_sink::GuiSink;
 use crate::state::AppState;
 
 #[tauri::command]
@@ -22,9 +24,20 @@ pub fn connect_cmd(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<String, String> {
+    // 默认录制目录：app_data_dir()/sessions（与抽取前行为一致，失败回退 ./logs）
+    let sessions_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("logs"))
+        .join("sessions");
     state
         .manager
-        .connect(config, log_settings, &app)
+        .connect(
+            config,
+            log_settings,
+            std::sync::Arc::new(GuiSink(app)),
+            sessions_dir,
+        )
         .map_err(|e| e.to_string())
 }
 
@@ -100,8 +113,8 @@ pub fn append_perf_diag_cmd(app: AppHandle, kind: String, session_id: String, la
 #[tauri::command]
 pub fn set_live_rules_cmd(
     session_id: String,
-    auto_reply: crate::serial::rules::AutoReplyCfg,
-    alerts: crate::serial::rules::AlertCfg,
+    auto_reply: AutoReplyCfg,
+    alerts: AlertCfg,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     state
@@ -118,7 +131,7 @@ pub fn ring_lines_no_cmd(
     since_no: u64,
     max: Option<usize>,
     state: State<'_, AppState>,
-) -> Result<Vec<crate::serial::manager::BridgeLine>, String> {
+) -> Result<Vec<bytetide_core::serial::manager::BridgeLine>, String> {
     state
         .manager
         .ring_lines_after_no(&session_id, since_no, max.unwrap_or(5000))

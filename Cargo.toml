@@ -1,0 +1,25 @@
+# 工作区：桌面端（src-tauri，Tauri 壳 + REST 桥）与无 UI 核心/CLI 共享同一份串口逻辑。
+# bytetide-core 必须保持零 Tauri 依赖（可交叉编译到 Linux ARM musl）。
+[workspace]
+resolver = "2"
+members = [
+    "crates/bytetide-core",
+    "crates/bytetide-cli",
+    "src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Howe"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+parking_lot = "0.12"
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+regex = "1"
+# musl 静态交叉编译必须能关掉 libudev（C 依赖）；桌面端经 feature 打开
+serialport = { version = "4", default-features = false }

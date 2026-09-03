@@ -26,10 +26,10 @@ use serde::{Deserialize, Serialize};
 use tauri::{async_runtime, AppHandle, Emitter, Manager};
 use tokio::net::TcpListener;
 
-use crate::serial::manager::{
+use bytetide_core::serial::manager::{
     BridgeAnnotation, BridgeLine, BridgeStats, MatchHit, PlotConfig, SendMode, SendRequest,
 };
-use crate::serial::port::{list_ports, Dir};
+use bytetide_core::serial::port::{list_ports, Dir};
 use crate::state::AppState;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -322,7 +322,7 @@ async fn health(State(ctx): State<BridgeCtx>) -> impl IntoResponse {
     Json(Health {
         ok: true,
         version: VERSION,
-        ring_cap: crate::serial::manager::RING_CAP,
+        ring_cap: bytetide_core::serial::manager::RING_CAP,
         token_set: !c.token.is_empty(),
         allow_send: c.allow_send,
     })
