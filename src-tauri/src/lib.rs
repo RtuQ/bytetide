@@ -42,20 +42,38 @@ fn disable_power_throttling() -> bool {
 }
 
 /// 后端诊断心跳：每 10s 把各 live 会话 ring 末行时间戳落后墙钟的毫秒数
-/// 追加到 app_data/perf-heartbeat.log。完全在后端线程，不依赖前端事件循环--
+/// 追加到 app_log_dir/perf-heartbeat.log。完全在后端线程，不依赖前端事件循环--
 /// 前端卡死时仍能持续记录“后端视角的滞后”，事后直接看文件即可定位
 /// （分界：后端滞后=读线程/IO 被节流；后端 0 滞后而前端滞后=WebView 积压）。
 /// 启动即调用，内部同时完成 EcoQoS 限流的退出并把结果写进首行。
+/// 诊断日志统一落 `app_log_dir`（Windows: %LOCALAPPDATA%\<id>\logs；
+/// macOS: ~/Library/Logs/<id>；Linux: XDG state/<id>/logs）——机器本地
+/// 数据不随 Roaming 漫游，符合平台惯例。超 5MB 打开时截断（诊断日志
+/// 无需无限历史）。返回 None = 目录不可用，调用方静默放弃。
+pub(crate) fn open_diag_log(app: &tauri::AppHandle, name: &str) -> Option<std::fs::File> {
+    use std::io::Write as _;
+    let dir = app.path().app_log_dir().ok()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(name);
+    const CAP: u64 = 5 * 1024 * 1024;
+    if std::fs::metadata(&path).map(|m| m.len() > CAP).unwrap_or(false) {
+        if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open(&path) {
+            let _ = f.set_len(0);
+            let _ = f.flush();
+        }
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .ok()
+}
+
 fn start_perf_heartbeat(app: &tauri::AppHandle) {
     use std::io::Write as _;
 
     let ecoqos_off = disable_power_throttling();
-    let Ok(dir) = app.path().app_data_dir() else { return };
-    let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join("perf-heartbeat.log");
-    let Ok(mut w) = std::fs::OpenOptions::new().create(true).append(true).open(&path) else {
-        return;
-    };
+    let Some(mut w) = open_diag_log(app, "perf-heartbeat.log") else { return };
     let _ = writeln!(
         w,
         "# heartbeat start {} ecoqos_disabled={}",

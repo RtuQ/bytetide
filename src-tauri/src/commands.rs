@@ -73,19 +73,15 @@ pub fn export_text_cmd(path: String, content: String) -> Result<(), String> {
 }
 
 /// 前端性能诊断旁路落盘：把哨兵产生的单条诊断记录追加到
-/// app_data/perf-frontend.log。前端调用方不 await、失败静默--
+/// app_log_dir/perf-frontend.log。前端调用方不 await、失败静默--
 /// 这是“前端自己给自己取证”的通道，卡顿中事件循环仍活着时可用；
 /// 完全死透时由后端 perf-heartbeat.log 兜底记录后端视角。
 #[tauri::command]
 pub fn append_perf_diag_cmd(app: AppHandle, kind: String, session_id: String, lag_ms: u64, batch_ms: u64, lines: u64, vis: String) -> Result<(), String> {
     use std::io::Write as _;
-    let Ok(dir) = app.path().app_data_dir() else { return Ok(()) };
-    let _ = std::fs::create_dir_all(&dir);
-    let mut w = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("perf-frontend.log"))
-        .map_err(|e| e.to_string())?;
+    let Some(mut w) = crate::open_diag_log(&app, "perf-frontend.log") else {
+        return Ok(());
+    };
     writeln!(
         w,
         "{} kind={} s={} lag={}ms batch={}ms n={} vis={}",
