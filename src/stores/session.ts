@@ -28,6 +28,7 @@ import {
   type Keyword,
 } from '../types'
 import { parseLogFile } from '../composables/useLogParser'
+import type { DecodedFrame } from '../types/parser'
 
 /** 中心区视图模式：log=仅日志；split=日志+图表同屏；plot=仅图表 */
 export type CenterView = 'log' | 'split' | 'plot'
@@ -53,6 +54,8 @@ export interface Session {
   bookmarks: number[]
   /** AI 批注（REST 桥写入、事件实时同步；no 为行号，行被淘汰或清屏后标记自动隐藏） */
   aiNotes: AiAnnotation[]
+  /** 解码帧（解析引擎产出，no 锚定 LogLine.no；markRaw + 1000 条 FIFO，重连不迁移） */
+  decoded: DecodedFrame[]
   sendHistory: string[]
   search: SearchState
   /** 过滤链（与“搜索”独立）：include/exclude 依序作用于显示行集 */
@@ -79,6 +82,8 @@ export interface Session {
 
 /** 前端环形缓冲上限，超过则丢弃最旧行 */
 const MAX_LINES = 50000
+/** 解码帧环形上限（plan-parser-v1：1000 条/会话 FIFO） */
+const MAX_DECODED = 1000
 
 function makeSession(id: string, config: PortConfig): Session {
   return {
@@ -94,6 +99,7 @@ function makeSession(id: string, config: PortConfig): Session {
     droppedLines: 0,
     bookmarks: [],
     aiNotes: [],
+    decoded: [],
     sendHistory: [],
     search: { ...DEFAULT_SEARCH },
     filters: [],
@@ -131,6 +137,13 @@ let ruleSeq = 0
 function newRuleId(): string {
   ruleSeq += 1
   return `r${Date.now().toString(36)}${ruleSeq}`
+}
+
+/** 解析引擎的 clearLog 钩子（useParserEngine 注册）：清屏时复位 framer 并 gen+1，
+ *  经注册注入避免 store→engine 循环依赖 */
+let parserOnClear: ((id: string) => void) | null = null
+export function registerParserOnClear(fn: (id: string) => void) {
+  parserOnClear = fn
 }
 
 const LOG_CONFIG_KEY = 'serialtool.logConfig'
@@ -492,12 +505,15 @@ export const useSessionStore = defineStore('session', {
       s.droppedLines = 0
       // AI 批注锚定行号，同样失义：本地清空并同步后端镜像
       s.aiNotes = []
+      // 解码帧同样锚定行号：清空并由解析引擎复位该会话切帧状态（gen+1）
+      s.decoded = []
       invoke('bridge_sync_annotations_cmd', { sessionId: id, annotations: [] }).catch(() => {})
       try {
         await invoke('clear_log_cmd', { sessionId: id })
       } catch {
         /* ignore */
       }
+      parserOnClear?.(id)
     },
     /** 推送实时规则到后端（拉模型：评估在读线程，规则变更/重连后整体覆盖） */
     pushLiveRules(id: string) {
@@ -563,6 +579,22 @@ export const useSessionStore = defineStore('session', {
       }
       s.pullNo = arr[arr.length - 1]!.ringNo
       return fresh
+    },
+    /** 解析引擎落表：解码帧追加（元素 markRaw + 1000 条 FIFO；replace=true 用于回溯整表替换）。
+     *  200ms 节流批量由调用方（useParserEngine）负责，这里只管入表。 */
+    applyDecoded(id: string, frames: DecodedFrame[], replace = false) {
+      const s = this.sessions[id]
+      if (!s) return
+      const fresh = frames.map((f) => markRaw({ ...f }))
+      s.decoded = replace ? fresh : s.decoded.concat(fresh)
+      if (s.decoded.length > MAX_DECODED) {
+        s.decoded = s.decoded.slice(s.decoded.length - MAX_DECODED)
+      }
+    },
+    /** 清空解码帧（卸载/停用回溯前重置） */
+    resetDecoded(id: string) {
+      const s = this.sessions[id]
+      if (s) s.decoded = []
     },
     /** 累计 RX/TX 字节与行数（lifetime，随缓冲裁剪不回退）；与 appendLines 分离，不改其行为 */
     tallyBytes(id: string, raw: RawLogLine[]) {

@@ -6,6 +6,7 @@ import { playAlertBeep } from './useAlertBeep'
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
 import { recordBatch } from './usePerfWatch'
 import { setupBridgeSync } from './useBridgeSync'
+import { feedParser } from './useParserEngine'
 import type {
   AiAnnotation,
   AlertLevel,
@@ -79,6 +80,8 @@ async function drainSession(sessionId: string): Promise<void> {
       store.tallyBytes(sessionId, fresh)
       // 性能哨兵：滞后=墙钟−最新行后端时间戳，批耗时=本处理段
       recordBatch(sessionId, fresh, performance.now() - t0)
+      // 解析引擎 feed（未启用脚本时 no-op）：切帧在主线程线性批处理
+      feedParser(sessionId, fresh)
       // 取证探针（seg/raf，仅 DEV 构建；release 由 Vite tree-shake 移除）
       const handlerMs = performance.now() - t0
       if (import.meta.env.DEV && handlerMs > 5) {
