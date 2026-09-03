@@ -782,6 +782,7 @@ input[type="color"]:focus-visible {
 
 /* ---------- Tabs ---------- */
 .tabbar {
+  position: relative; /* 弹层锚点：NewConnectionPopover 的 .portbar-pop.left 以下拉定位 */
   display: flex;
   gap: 6px;
   align-items: center;
@@ -3150,8 +3151,8 @@ body.dock-resizing .dock-resize {
 
 /* ── layout 集成区段（TitleBar 两行 / StatusBar / hsplit / 侧栏分组）── */
 
-/* 标题行动作区（设置弹层挂点） */
-.titlebar-actions { display: flex; align-items: center; gap: 6px; margin-right: 8px; }
+/* 标题行动作区（设置弹层挂点；relative 作为 .portbar-pop.right 的定位锚） */
+.titlebar-actions { position: relative; display: flex; align-items: center; gap: 6px; margin-right: 8px; }
 
 /* 标签行：左新建触发器 + 中间可滚标签 + 右打开日志 */
 .tabs-scroll { display: flex; gap: 4px; flex: 1; min-width: 0; align-items: stretch; overflow-x: auto; scrollbar-width: thin; }
