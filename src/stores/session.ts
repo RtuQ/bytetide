@@ -73,6 +73,9 @@ export interface Session {
   showDelta: boolean
   showLineNo: boolean
   showDir: boolean
+  /** 落盘录制开关（会话级，重连迁移）：false=暂停写日志文件（视图不受影响）；
+   *  重新开启时另起新分段文件继续录制 */
+  recOn: boolean
   rxBytes: number
   txBytes: number
   rxLines: number
@@ -114,6 +117,7 @@ function makeSession(id: string, config: PortConfig): Session {
     showDelta: false,
     showLineNo: true,
     showDir: true,
+    recOn: true,
     rxBytes: 0,
     txBytes: 0,
     rxLines: 0,
@@ -470,6 +474,7 @@ export const useSessionStore = defineStore('session', {
         showDelta: s.showDelta,
         showLineNo: s.showLineNo,
         showDir: s.showDir,
+        recOn: s.recOn,
         rxBytes: s.rxBytes,
         txBytes: s.txBytes,
         rxLines: s.rxLines,
@@ -485,6 +490,8 @@ export const useSessionStore = defineStore('session', {
       pendingError.delete(id)
       this.flushPending(newId)
       this.pushLiveRules(newId)
+      // 新后端会话连接时已默认开录制；沿用原会话的暂停状态
+      if (!carried.recOn) this.setRec(newId, false)
     },
     async send(id: string, text: string, mode: 'ascii' | 'hex') {
       const s = this.sessions[id]
@@ -529,6 +536,30 @@ export const useSessionStore = defineStore('session', {
       try {
         const p = await invoke<string>('session_log_path_cmd', { sessionId: id })
         alert(p)
+      } catch (e) {
+        alert(String(e))
+      }
+    },
+    /** 落盘录制开关：关=暂停写日志文件（数据仍进日志视图）；开=另起新分段文件继续录制。
+     *  本地乐观置位，后端失败回滚并提示 */
+    async setRec(id: string, on: boolean) {
+      const s = this.sessions[id]
+      if (!s || s.kind !== 'live') return
+      s.recOn = on
+      try {
+        await invoke('set_recording_cmd', { sessionId: id, on })
+      } catch (e) {
+        s.recOn = !on
+        alert(String(e))
+      }
+    },
+    /** 日志分段：关闭当前文件，从当前时刻另起 `基准名-YYYYMMDD-HHMMSS.log`
+     *  新文件继续录制（旧文件保留）；录制暂停中调用会顺带恢复录制 */
+    async rotateLog(id: string) {
+      const s = this.sessions[id]
+      if (!s || s.kind !== 'live') return
+      try {
+        await invoke('rotate_log_cmd', { sessionId: id })
       } catch (e) {
         alert(String(e))
       }

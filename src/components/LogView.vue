@@ -137,6 +137,12 @@ const totalBytes = computed(() => {
 })
 const bps = useRate(() => totalBytes.value)
 
+// 落盘录制/分段仅对读线程存活的会话可用（已连接或连接中），未连接时命令通道已关
+const recLive = computed(() => {
+  const st = session.value?.status
+  return st === 'connected' || st === 'connecting'
+})
+
 function deltaMs(item: LogLine, index: number): string {
   if (index <= 0) return '-'
   const prev = viewItems.value[index - 1]
@@ -343,6 +349,33 @@ onBeforeUnmount(() => {
         <button class="btn btn-ghost btn-sm" title="导出日志" @click="exportLog">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           <span>导出</span>
+        </button>
+        <button
+          v-if="session.kind !== 'offline'"
+          class="btn btn-ghost btn-sm rec-btn"
+          :class="{ 'rec-on': session.recOn }"
+          :disabled="!recLive"
+          :title="session.recOn
+            ? '落盘录制中，点击暂停写入日志文件（日志视图不受影响）'
+            : '录制已暂停，点击另起新文件继续落盘'"
+          aria-label="切换日志落盘录制"
+          @click="store.setRec(props.sessionId, !session.recOn)"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/></svg>
+          <span>录制</span>
+        </button>
+        <button
+          v-if="session.kind !== 'offline'"
+          class="btn btn-ghost btn-sm"
+          :disabled="!recLive"
+          :title="session.recOn
+            ? '日志分段：关闭当前文件，从当前时刻另起带时间戳的新文件继续落盘（旧文件保留）'
+            : '日志分段：另起带时间戳的新文件并恢复落盘'"
+          aria-label="另起新日志分段文件"
+          @click="store.rotateLog(props.sessionId)"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M15 18v-6"/><path d="M12 15h6"/></svg>
+          <span>分段</span>
         </button>
         <button v-if="session.kind !== 'offline'" class="btn btn-ghost btn-sm" title="打开日志文件路径" @click="store.openLogPath(props.sessionId)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>

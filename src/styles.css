@@ -1697,6 +1697,13 @@ input[type="color"]:focus-visible {
 .star-btn.bm-on svg polygon {
   fill: currentColor;
 }
+/* 录制开关：录制中红点实心（同告警/停止的红），暂停时灰点空心 */
+.rec-btn.rec-on {
+  color: var(--err);
+}
+.rec-btn.rec-on svg circle {
+  fill: currentColor;
+}
 /* 书签面板 */
 .bm-list {
   overflow-y: auto;

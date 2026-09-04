@@ -280,6 +280,12 @@ pub struct SendRequest {
 pub enum PortCmd {
     Send(SendRequest),
     Clear,
+    /// 日志落盘控制（录制开关/分段共用）：携带新分段完整路径，读线程内
+    /// flush+关闭当前文件后从该路径另起新文件继续录制。分段= manager 计算好
+    /// 带时间戳的路径后发此命令；恢复录制=同上。
+    RecOn(PathBuf),
+    /// 暂停落盘：flush+关闭当前文件（ring/视图不受影响，仅停止写文件）。
+    RecOff,
 }
 
 /// 会话类型：实时串口 / 离线加载的日志文件。
@@ -294,7 +300,10 @@ struct SessionHandle {
     kind: SessionKind,
     stop: Arc<AtomicBool>,
     write_tx: mpsc::Sender<PortCmd>,
+    /// 当前日志文件路径（分段后随最新分段更新；「打开日志」指向当前文件）
     log_path: PathBuf,
+    /// 连接时解析出的基准路径：分段命名始终基于它，避免 stem 越叠越长
+    log_base: PathBuf,
     join: Option<thread::JoinHandle<()>>,
     buf: Arc<RingBuf>,
     plot: Arc<RwLock<PlotConfig>>,
@@ -394,7 +403,8 @@ impl PortManager {
                 kind: SessionKind::Live,
                 stop,
                 write_tx,
-                log_path,
+                log_path: log_path.clone(),
+                log_base: log_path,
                 join: Some(handle),
                 buf,
                 plot,
@@ -431,7 +441,8 @@ impl PortManager {
                 kind: SessionKind::Offline,
                 stop: Arc::new(AtomicBool::new(false)),
                 write_tx,
-                log_path: path,
+                log_path: path.clone(),
+                log_base: path,
                 join: None,
                 buf,
                 plot,
@@ -547,6 +558,52 @@ impl PortManager {
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
         Ok(h.log_path.to_string_lossy().into_owned())
+    }
+
+    /// 日志分段（「分段」按钮）：关闭当前日志文件，从当前时刻另起带时间戳的
+    /// 新文件继续落盘，旧文件保留；录制暂停中调用会顺带恢复录制。
+    /// 返回新文件完整路径。
+    pub fn rotate_log(&self, id: &str) -> anyhow::Result<String> {
+        let new_path = {
+            let sessions = self.sessions.read();
+            let h = sessions
+                .get(id)
+                .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+            if matches!(h.kind, SessionKind::Offline) {
+                return Err(anyhow::anyhow!("离线会话不落盘"));
+            }
+            if h.log_base.as_os_str().is_empty() {
+                return Err(anyhow::anyhow!("该会话未启用日志落盘"));
+            }
+            let np = next_segment_path(&h.log_base, &chrono::Local::now(), |p| p.exists());
+            h.write_tx
+                .send(PortCmd::RecOn(np.clone()))
+                .map_err(|_| anyhow::anyhow!("通道已关闭（会话未连接）"))?;
+            np
+        };
+        // 「打开日志」与下次分段都应基于新文件
+        if let Some(h) = self.sessions.write().get_mut(id) {
+            h.log_path = new_path.clone();
+        }
+        Ok(new_path.to_string_lossy().into_owned())
+    }
+
+    /// 落盘录制开关（「录制」按钮）：关=暂停写文件（数据仍进 ring/视图）；
+    /// 开=另起新分段文件继续录制。
+    pub fn set_recording(&self, id: &str, on: bool) -> anyhow::Result<()> {
+        if on {
+            return self.rotate_log(id).map(|_| ());
+        }
+        let sessions = self.sessions.read();
+        let h = sessions
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        if matches!(h.kind, SessionKind::Offline) {
+            return Err(anyhow::anyhow!("离线会话不落盘"));
+        }
+        h.write_tx
+            .send(PortCmd::RecOff)
+            .map_err(|_| anyhow::anyhow!("通道已关闭（会话未连接）"))
     }
 
     // ===== REST 桥访问器（同 crate 读取，不暴露 SessionHandle） =====
@@ -691,6 +748,35 @@ impl PortManager {
 /// 默认日志路径：`sessions_dir/{id}.log`（桌面端传 app_data_dir()/sessions）。
 fn default_log_path(sessions_dir: &std::path::Path, id: &str) -> PathBuf {
     sessions_dir.join(format!("{}.log", id))
+}
+
+/// 分段日志路径：在基准路径扩展名前插入 `-YYYYMMDD-HHMMSS`；同秒内再次分段
+/// 用 `-2`/`-3` 递增去重。`exists` 由调用方注入（真实 fs / 测试桩），保持纯函数可测。
+fn next_segment_path(
+    base: &std::path::Path,
+    now: &chrono::DateTime<chrono::Local>,
+    exists: impl Fn(&std::path::Path) -> bool,
+) -> PathBuf {
+    let stamp = now.format("%Y%m%d-%H%M%S").to_string();
+    let dir = base.parent().unwrap_or(std::path::Path::new(""));
+    let stem = base
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "session".into());
+    let ext = base.extension().map(|s| s.to_string_lossy().into_owned());
+    let name = |n: Option<u32>| match (&ext, n) {
+        (Some(e), Some(n)) => format!("{stem}-{stamp}-{n}.{e}"),
+        (Some(e), None) => format!("{stem}-{stamp}.{e}"),
+        (None, Some(n)) => format!("{stem}-{stamp}-{n}"),
+        (None, None) => format!("{stem}-{stamp}"),
+    };
+    let mut cand = dir.join(name(None));
+    let mut n = 2;
+    while exists(&cand) {
+        cand = dir.join(name(Some(n)));
+        n += 1;
+    }
+    cand
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -875,6 +961,28 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
                         let _ = w.clear();
                     }
                     ring.clear();
+                }
+                PortCmd::RecOn(path) => {
+                    // 分段/恢复录制：flush+关闭旧文件后另起新文件；创建失败则报错停写
+                    //（ring/视图不受影响），下一条 RecOn 可再试
+                    if let Some(mut w) = session_log.take() {
+                        let _ = w.flush();
+                    }
+                    session_log = match SessionLog::create(&path) {
+                        Ok(w) => Some(w),
+                        Err(e) => {
+                            sink.error(
+                                session_id,
+                                &format!("另起新日志失败 {}: {}", path.display(), e),
+                            );
+                            None
+                        }
+                    };
+                }
+                PortCmd::RecOff => {
+                    if let Some(mut w) = session_log.take() {
+                        let _ = w.flush();
+                    }
                 }
             }
         }
@@ -1278,6 +1386,7 @@ mod tests {
                 stop,
                 write_tx: tx,
                 log_path: PathBuf::from("x.log"),
+                log_base: PathBuf::from("x.log"),
                 join: None,
                 buf: ring,
                 plot: Arc::new(RwLock::new(PlotConfig::default())),
@@ -1365,5 +1474,33 @@ mod tests {
         assert_eq!(m.bridge_annotations(&id).unwrap(), notes);
         assert!(!m.bridge_set_annotations("nope", vec![]));
         assert!(m.bridge_annotations("nope").is_none());
+    }
+
+    #[test]
+    fn segment_path_inserts_stamp_before_extension() {
+        use chrono::TimeZone;
+        let dt = chrono::Local.with_ymd_and_hms(2026, 9, 4, 15, 30, 12).unwrap();
+        // 默认命名 {id}.log：时间戳插在扩展名前
+        let p = next_segment_path(std::path::Path::new("/data/sessions/s1.log"), &dt, |_| false);
+        assert_eq!(
+            p,
+            PathBuf::from("/data/sessions/s1-20260904-153012.log")
+        );
+        // 无扩展名路径同样成立
+        let p = next_segment_path(std::path::Path::new("/logs/COM3"), &dt, |_| false);
+        assert_eq!(p, PathBuf::from("/logs/COM3-20260904-153012"));
+    }
+
+    #[test]
+    fn segment_path_avoids_collision_with_counter_suffix() {
+        use chrono::TimeZone;
+        let dt = chrono::Local.with_ymd_and_hms(2026, 9, 4, 15, 30, 12).unwrap();
+        // 首个候选已存在（同秒内再次分段）：-2 递增去重
+        let seen = std::cell::Cell::new(0);
+        let p = next_segment_path(std::path::Path::new("/data/s1.log"), &dt, |_| {
+            seen.set(seen.get() + 1);
+            seen.get() == 1
+        });
+        assert_eq!(p, PathBuf::from("/data/s1-20260904-153012-2.log"));
     }
 }

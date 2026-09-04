@@ -79,6 +79,29 @@ pub fn session_log_path_cmd(
         .map_err(|e| e.to_string())
 }
 
+/// 日志分段：关闭当前日志文件，从当前时刻另起带时间戳的新文件继续落盘。
+/// 返回新文件完整路径。
+#[tauri::command]
+pub fn rotate_log_cmd(session_id: String, state: State<'_, AppState>) -> Result<String, String> {
+    state
+        .manager
+        .rotate_log(&session_id)
+        .map_err(|e| e.to_string())
+}
+
+/// 落盘录制开关：false=暂停写日志文件；true=另起新分段文件继续录制。
+#[tauri::command]
+pub fn set_recording_cmd(
+    session_id: String,
+    on: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .manager
+        .set_recording(&session_id, on)
+        .map_err(|e| e.to_string())
+}
+
 /// 将前端给出的日志文本写入用户通过文件对话框选择的路径。
 #[tauri::command]
 pub fn export_text_cmd(path: String, content: String) -> Result<(), String> {

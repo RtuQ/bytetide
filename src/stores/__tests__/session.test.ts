@@ -1,9 +1,13 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useSessionStore, registerParserOnClear } from '../session'
 import { DEFAULT_PLOT_CONFIG } from '../../types'
 import type { DecodedFrame } from '../../types/parser'
 import type { PortConfig, RawLogLine } from '../../types'
+
+// invoke 全文件打桩：录制开关/重连等动作在无 Tauri 后端的测试环境可走通
+const invokeMock = vi.hoisted(() => vi.fn(async () => null as unknown))
+vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }))
 
 function mkDecoded(no: number): DecodedFrame {
   return {
@@ -335,5 +339,43 @@ describe('decoded 解码帧（plan-parser-v1）', () => {
     const fresh = store.createLocalSession('dec-5b', CFG)
     expect(store.sessions[fresh]!.decoded).toEqual([])
     // 迁移语义由 useParserEngine 的 order diff 清旧 id 引擎状态兜底
+  })
+})
+
+describe('落盘录制 recOn（录制/分段）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    invokeMock.mockReset()
+    invokeMock.mockResolvedValue(null)
+    vi.stubGlobal('alert', vi.fn())
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('makeSession 默认开启录制；setRec 乐观置位并下发后端', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('local-rec', CFG)
+    expect(store.sessions[id]!.recOn).toBe(true)
+    await store.setRec(id, false)
+    expect(store.sessions[id]!.recOn).toBe(false)
+    expect(invokeMock).toHaveBeenCalledWith('set_recording_cmd', { sessionId: id, on: false })
+  })
+
+  it('setRec 后端失败回滚本地状态', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('local-rec-fail', CFG)
+    invokeMock.mockRejectedValueOnce(new Error('通道已关闭'))
+    await store.setRec(id, false)
+    expect(store.sessions[id]!.recOn).toBe(true)
+  })
+
+  it('重连迁移 recOn：暂停状态带到新会话并补发暂停', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('local-rec-reconn', CFG)
+    store.sessions[id]!.recOn = false
+    invokeMock.mockResolvedValueOnce('s99') // connect_cmd 返回新会话 id
+    await store.reconnectSession(id)
+    expect(store.sessions[id]).toBeUndefined()
+    expect(store.sessions['s99']!.recOn).toBe(false)
+    expect(invokeMock).toHaveBeenCalledWith('set_recording_cmd', { sessionId: 's99', on: false })
   })
 })

@@ -177,6 +177,8 @@ pub fn run() {
             commands::send_cmd,
             commands::clear_log_cmd,
             commands::session_log_path_cmd,
+            commands::rotate_log_cmd,
+            commands::set_recording_cmd,
             commands::export_text_cmd,
             commands::append_perf_diag_cmd,
             commands::ring_lines_no_cmd,
