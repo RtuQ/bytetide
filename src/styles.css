@@ -960,6 +960,16 @@ input[type="color"]:focus-visible {
 .nc-port-row .select {
   flex: 1;
 }
+/* 波特率自定义输入行：输入框占满 + 切回下拉的按钮 */
+.baud-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.baud-row .input {
+  flex: 1;
+  min-width: 0;
+}
 .row2,
 .row3 {
   display: grid;

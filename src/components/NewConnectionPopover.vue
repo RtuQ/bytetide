@@ -30,6 +30,31 @@ const transport = computed<Transport>({
 
 const baudPresets = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600]
 
+// 波特率两态：常用值下拉 / 自定义输入。cfg.baudRate 始终存数字（TabBar/状态栏直接读），
+// 自由输入的合法性统一在 connect() 校验回写；非法输入暂存 0，由校验拦下。
+const baudCustom = ref(false)
+const baudText = ref('115200')
+// 当前值不是常用值且合法时，下拉里动态补一项展示，保证显示与实际连接值一致
+const showCustomBaudOption = computed(() => {
+  const b = Number(props.cfg.baudRate)
+  return Number.isInteger(b) && b >= 1 && !baudPresets.includes(b)
+})
+function onBaudSelect(e: Event) {
+  const v = (e.target as HTMLSelectElement).value
+  if (v === 'custom') {
+    baudText.value = String(props.cfg.baudRate ?? '')
+    baudCustom.value = true
+    return
+  }
+  props.cfg.baudRate = Number(v)
+}
+function onBaudInput(e: Event) {
+  const raw = (e.target as HTMLInputElement).value.trim()
+  baudText.value = raw
+  const n = Number(raw)
+  props.cfg.baudRate = Number.isFinite(n) && n >= 1 ? n : 0
+}
+
 // 网络源展示名（同时用于日志模板中的 %p 占位与标签页名）
 function composeNetName(): string | null {
   const host = (props.cfg.tcpHost ?? '').trim()
@@ -60,6 +85,13 @@ async function connect() {
       err.value = '请选择端口'
       return
     }
+    // 自定义波特率：连接前钳成整数回写，非法值在前端拦下（后端 u32，TabBar/状态栏直接读该数字）
+    const baud = Number(props.cfg.baudRate)
+    if (!Number.isInteger(baud) || baud < 1 || baud > 12_000_000) {
+      err.value = '波特率需为 1–12000000 的整数'
+      return
+    }
+    props.cfg.baudRate = baud
     props.cfg.transport = null
   }
   busy.value = true
@@ -129,12 +161,41 @@ function applyPreset(id: string) {
       </div>
 
       <div class="row3">
-        <div class="field">
-          <span class="field-label">波特率</span>
-          <select class="select" v-model="cfg.baudRate" title="波特率">
-            <option v-for="b in baudPresets" :key="b" :value="b">{{ b }}</option>
-          </select>
+      <div class="field">
+        <span class="field-label">波特率</span>
+        <select
+          v-if="!baudCustom"
+          class="select"
+          :value="cfg.baudRate"
+          title="波特率：选常用值，或选自定义输入"
+          @change="onBaudSelect"
+        >
+          <option v-if="showCustomBaudOption" :value="cfg.baudRate">{{ cfg.baudRate }}（自定义）</option>
+          <option v-for="b in baudPresets" :key="b" :value="b">{{ b }}</option>
+          <option value="custom">自定义…</option>
+        </select>
+        <div v-else class="baud-row">
+          <input
+            class="input input-mono"
+            type="text"
+            inputmode="numeric"
+            :value="baudText"
+            title="自定义波特率"
+            placeholder="如 250000"
+            spellcheck="false"
+            @input="onBaudInput"
+          />
+          <button
+            class="btn btn-ghost btn-icon"
+            type="button"
+            title="返回常用波特率列表"
+            aria-label="返回常用波特率列表"
+            @click="baudCustom = false"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
         </div>
+      </div>
         <div class="field">
           <span class="field-label">数据位</span>
           <select class="select" v-model="cfg.dataBits" title="数据位">
