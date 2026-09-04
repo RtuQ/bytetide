@@ -65,6 +65,11 @@ serial-tool-*-src.zip
 /demo/
 /docs/plan-*.md
 
-# 本地工作草稿（评审原型/计划文档，不进仓库）
-/demo/
-/docs/plan-*.md
+# 发布说明草稿（正文只进 GitHub Releases，不进仓库）
+/release-notes-*.md
+
+# 性能诊断导出（DockMonitor 导出产物，本地排查用）
+sample-data/perf-diag-*.json
+
+# 单实例锁（运行时产物，lib.rs SingleInstance 在 cwd 生成）
+/serial_tool-single-instance-lock
