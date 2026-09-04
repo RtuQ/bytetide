@@ -1047,6 +1047,9 @@ input[type="color"]:focus-visible {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* 钳住 flex 自动最小宽度：长行估宽（--log-min-w）否则会把整列撑出
+     .app-center 边界——工具栏右组被顶出窗口外、日志渗到侧栏底下 */
+  min-width: 0;
   background: var(--bg-base);
 }
 .logview-bar {
