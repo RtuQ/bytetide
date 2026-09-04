@@ -931,6 +931,18 @@ input[type="color"]:focus-visible {
 .portbar-pop.right {
   right: 12px;
 }
+/* 新建连接弹层：宽度随最长显示名（串口「名 · 产品名」/预设名）自适应加宽；
+   上限钳在窗口内，超限后靠下面 min-width:0 让 select 原生省略，不再撑破面板 */
+.portbar-pop.nc-pop {
+  width: fit-content;
+  min-width: 340px;
+  max-width: min(640px, calc(100vw - 24px));
+}
+.nc-pop .field,
+.nc-pop .select,
+.nc-pop .input {
+  min-width: 0;
+}
 .portbar-pop-head {
   display: flex;
   align-items: center;

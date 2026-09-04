@@ -88,7 +88,7 @@ function applyPreset(id: string) {
     <span>{{ busy ? '连接中…' : '新建连接' }}</span>
   </button>
 
-  <div v-if="open" class="portbar-pop left" @click.stop>
+  <div v-if="open" class="portbar-pop left nc-pop" @click.stop>
     <div class="portbar-pop-head">
       <span>新建连接</span>
       <button class="btn btn-ghost btn-icon btn-sm" type="button" title="关闭" aria-label="关闭" @click="close">
