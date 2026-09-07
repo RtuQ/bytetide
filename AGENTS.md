@@ -88,7 +88,11 @@
      │   │   │                  （flex-basis 按日志内容高参与分配会挤压 plot/cmp 区——勿"修"回）
      │   │   ├─ .hsplit    ← 日志↔图表拖拽分割条（20–80% 钳制，serialtool.centerSplit）
      │   │   ├─ PlotView   ← centerView 'split'/'plot' 时渲染（useResizeObserver 自适应尺寸）
-     │   │   └─ CompareView ← compareMode 时占中心区（双会话时间对齐；ComparePanel 已退役）
+     │   │   └─ CompareView ← compareMode 时占中心区（双会话 diff：useCompare 纯函数层
+     │   │                  ——锚点序列对齐（Hunt–Szymanski，文本相等+时间窗，候选超限回退
+     │   │                  贪心）+缝隙 changed/insert 分类+行内多段 LCS 高亮（>512 回退三段）；
+     │   │                  只看差异/差异统计条/B 侧偏移输入（live↔offline 对表）；
+     │   │                  ComparePanel 已退役）
      │   ├─ DockView   ← 底部 dock 页签：解码(DockDecode 实时解码列表；仅解析脚本启用时
      │   │              出现)/告警历史(AlertPanel 拆出)/监控(MatchStats 迁入)；可拖高可收起
      │   │              （serialtool.dock）
@@ -125,6 +129,18 @@ body 用 `.panel-body`；需限高滚动的用 `.kw-body` / `.ar-body`（已带 
 - 更新检查（`useUpdateChecker`）：启动延迟 5s 静默查 GitHub Releases API（24h 节流，失败也记间隔）；`UPDATE_REPO` 常量已定 `RtuQ/bytetide`（与 scripts/portable-README.txt 主页链接联动，改一处必改另一处）。免安装版策略 = 只提示 + 跳转下载页，不做自更新；TitleBar 版本徽标在 `status==='available'` 时亮起，「忽略此版本」按 tag 记忆。
 - **长跑性能红线**：`lines` 元素必须在 `appendLines`/`appendPulled` 处 `markRaw`（日志行不可变，禁 Proxy 开销）；侧栏折叠面板 body 仍处于挂载态，**禁止无守卫的全量行 computed**——折叠/空态必须早退或停算（参考 SearchPanel 命中节 hitsOpen、BookmarkPanel 空书签早退）。
 - **数据流 = 拉模型（feat/pull-based-view 起）**：后端 ring 是唯一真相（`no` 游标单调递增、清屏不回退）；前端 `useTauriEvents` 每 200ms 按会话 `pullNo` 调 `ring_lines_no_cmd` 拉 delta（`appendPulled` 入表），**不再有 `log` 事件流**（40ms 推事件曾把 WebView2 渲染进程调度饿死成死亡螺旋，实测积压 15 分钟、1s 定时器饿到 48s 才醒）。渲染进程被节流时最坏滞后=一个拉取周期，醒来一次拉齐即收敛。新增实时数据通道时走游标拉取，勿回加高频 emit。CLI（bytetide-cli）是 ring 的第二个消费者：每 50ms 调 `ring_lines_after_no` 游标拉取、零事件流，新增消费者照此办理。`RING_CAP` = 100000（manager.rs，≈17MB/会话）；前端 `PULL_MAX_PAGES` = 24（24×5000=12 万 ≥ RING_CAP，一轮必收敛）——**调 RING_CAP 必须同步复核 PULL_MAX_PAGES**；`appendPulled` 在去重过滤之前按游标缺口累计 `ringDropped`（首行 ringNo > pullNo+1 即有行被 ring 覆盖）。
+  **翻页补旧行（方案 B，feat/backfill-and-diff）**：上滑近顶（scrollTop<40 且未跟随尾部）触发
+  `requestBackfill`（useTauriEvents 导出，`backfilling` 在途守卫）——先 `ring_bounds_cmd` 判可补，
+  再 `ring_lines_before_cmd`（beforeNo=视图头行 rn，页 2000）经 `prependBackfill` 回补到视图头部：
+  **沿用被裁前原行号**（no=headNo−k+i 连续延伸，保 SearchPanel O(1) 映射与书签/跳转），
+  **不推进** lineCounter/pullNo、不动 droppedLines/ringDropped/evictedPending（尾部是 live 边缘
+  不回裁，下一批 append 按 cap 从头收敛）；新会话字段 `reconnectNo`（重连时=迁移 lineCounter，
+  标记新 ring 纪元下界，no≤它的迁移行不可补——旧 rn 会与新 ring 撞号）/`backfillTotal`/
+  `backfillExhausted`/`backfillPending`（三处同步：makeSession 默认、**重连不迁移**、清屏归零）。
+  `backfillTotal` 兼作 prepend 重建信号：useHighlighter 第 5 参 `getPrepends`（变化即增量游标
+  归零全量重建，防下标位移漏扫/重扫）、useLineStats/usePlotData 补同源 watch 触发。
+  补行**不喂 feedParser**（framer 是 (sessionId,dir) 有序状态机，乱序历史行破坏切帧）。
+  仅 live 会话适用（离线行无 rn）；后端 `RingBuf::lines_before_no`/`ring_bounds` 在 manager.rs。
 - **协议解析引擎（feat/parser-v1，规范见 docs/parser-spec.md）**：导入 `bytetide.parser v1`
   脚本（声明式字段层为主 / JS parse 兜底 / 纯切帧器），把 RX/TX 帧实时翻译为解码行。
   **切帧在主线程**（`src/parser/framer.ts` 状态机按 (sessionId,dir) 隔离），声明式解码零代码执行；
@@ -147,9 +163,15 @@ body 用 `.panel-body`；需限高滚动的用 `.kw-body` / `.ar-body`（已带 
 ### 后续迭代计划（未排期）
 - AI 分析入口：前端内嵌调用 REST 桥的对话式分析（离线选区→“让 AI 解释”）
 - 时序回放（离线日志按原间隔重放为伪实时会话）
-- 对比视图完整 diff 算法；tcp-server 多并发接入；UDP 对端发送
+- tcp-server 多并发接入；UDP 对端发送
 - 解析引擎 V1.1：LogView 行内类型徽章（shallowRef Map<no,tag> 驱动可见行重渲染；
   V1 评审定为可砍项已砍，解码列表在底部 dock「解码」页签）
+- 对比增强余项：时钟偏移自动估计（当前为手动偏移输入 + 量级悬殊提示）；
+  CompareView 虚拟滚动（现 SHOW_CAP 1000 + 只看差异）
+
+### 已完成大功能存档
+- 方案 B 翻页补旧行 + 对比视图完整 diff（feat/backfill-and-diff）：见「数据流 = 拉模型」
+  段「翻页补旧行」与布局树 CompareView 条目
 
 ### 连接控制（停止 / 重连 / 关闭）
 - **停止**：`store.stopSession(id)` —— 断开串口但保留标签页与日志，状态 → `disconnected`

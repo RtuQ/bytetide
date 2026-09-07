@@ -3044,11 +3044,31 @@ body.dock-resizing .dock-resize {
   white-space: nowrap;
   cursor: default;
 }
-.cmp-v-hint {
-  margin-left: auto;
+.cmp-v-onlydiff {
   font-size: 11px;
-  color: var(--text-dim);
+  color: var(--text-muted);
   white-space: nowrap;
+}
+
+/* 差异统计条（表格上方、不随内容滚动） */
+.cmp-v-stats {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.cmp-v-stat-ok {
+  color: var(--ok);
+}
+.cmp-v-stat-chg {
+  color: var(--warn);
+}
+.cmp-v-stat-warn {
+  margin-left: auto;
+  color: var(--err);
 }
 
 /* 空态引导 */
@@ -3073,7 +3093,14 @@ body.dock-resizing .dock-resize {
   opacity: 0.4;
 }
 
-/* 时间对齐表格（宽容器，表头 sticky） */
+/* 时间对齐表格（宽容器：统计条固定 + 表体滚动，表头 sticky） */
+.cmp-v-table-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 .cmp-v-table {
   flex: 1;
   min-height: 0;
@@ -3133,6 +3160,19 @@ body.dock-resizing .dock-resize {
 .cmp-v-delta.hot {
   color: var(--err);
   font-weight: 700;
+}
+
+/* 落单行徽标（仅A/仅B） */
+.cmp-v-badge {
+  display: inline-block;
+  margin-top: 2px;
+  padding: 0 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  font-family: var(--font-ui);
+  font-size: 9.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
 }
 
 /* A/B 行单元格：行号跳转 + 差异高亮文本 */
