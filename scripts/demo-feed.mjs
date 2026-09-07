@@ -31,6 +31,20 @@ function onServer(sockets, name, backfill) {
   }
 }
 
+/** 监听失败（尤其端口被占）时给可处置的提示并干净退出，不甩未处理异常堆栈。 */
+function listenOrDie(server, port, name) {
+  server.on('error', (err) => {
+    if (err?.code === 'EADDRINUSE') {
+      console.error(`[demo-feed] 端口 ${port} 已被占用——多半是上一个 demo-feed 还在运行（或被 Ctrl+Z 挂起未退出）。`)
+      console.error(`  处置：lsof -nP -i :${port} 查到 PID 后 kill 掉，再重跑本脚本；旧实例若健康，直接连现有流即可。`)
+    } else {
+      console.error(`[demo-feed] ${name} 监听失败: ${err?.message ?? err}`)
+    }
+    process.exit(1)
+  })
+  server.listen(port, '127.0.0.1', () => console.log(`[demo-feed] ${name} tcp://127.0.0.1:${port}`))
+}
+
 // ============ 流一：ASCII 设备控制台（:50101） ============
 
 const SGR = { DEBUG: '36', INFO: '32', WARN: '33', ERROR: '31' } // 级别 token 颜色
@@ -102,7 +116,7 @@ const asciiServer = net.createServer(
     for (let i = 8; i > 0; i--) sock.write(nextAsciiLine(i * 7, Date.now() - i * 700))
   }),
 )
-asciiServer.listen(PORT_ASCII, '127.0.0.1', () => console.log(`[demo-feed] ASCII 控制台流 tcp://127.0.0.1:${PORT_ASCII}`))
+listenOrDie(asciiServer, PORT_ASCII, `ASCII 控制台流`)
 
 let asciiTick = 0
 setInterval(() => {
@@ -145,7 +159,7 @@ const binServer = net.createServer(
     }
   }),
 )
-binServer.listen(PORT_BIN, '127.0.0.1', () => console.log(`[demo-feed] 电源监控帧流 tcp://127.0.0.1:${PORT_BIN}`))
+listenOrDie(binServer, PORT_BIN, `电源监控帧流`)
 
 setInterval(() => {
   const frame = powerFrame(Date.now())
@@ -153,3 +167,4 @@ setInterval(() => {
 }, 500)
 
 process.on('SIGINT', () => process.exit(0))
+process.on('SIGTERM', () => process.exit(0))
