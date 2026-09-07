@@ -146,7 +146,7 @@ pub fn set_live_rules_cmd(
         .map_err(|e| e.to_string())
 }
 
-/// 视图拉模型数据通道：取 ring 中 `no > sinceNo` 的行（封顶 20000=ring 容量）。
+/// 视图拉模型数据通道：取 ring 中 `no > sinceNo` 的行（封顶 100000=ring 容量）。
 /// `no` 单调递增且清屏不回退，游标语义下不重不漏。
 #[tauri::command]
 pub fn ring_lines_no_cmd(

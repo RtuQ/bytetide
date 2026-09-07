@@ -147,6 +147,7 @@ fn run_session(
     let log_config = logfmt::LogConfig {
         log_path_template: args.record.clone().filter(|s| !s.is_empty()),
         line_ts_format: args.ts_format.clone().filter(|s| !s.is_empty()),
+        midnight_rotate: None, // CLI 无午夜分段开关：--record 单文件录制不受影响
     };
     // 空 sessions_dir = 缺省不落盘（core 语义：仅 --record 模板给出时录制）
     let sessions_dir = PathBuf::new();
