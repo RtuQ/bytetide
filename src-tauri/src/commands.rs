@@ -79,6 +79,29 @@ pub fn session_log_path_cmd(
         .map_err(|e| e.to_string())
 }
 
+/// 日志分段：关闭当前日志文件，从当前时刻另起带时间戳的新文件继续落盘。
+/// 返回新文件完整路径。
+#[tauri::command]
+pub fn rotate_log_cmd(session_id: String, state: State<'_, AppState>) -> Result<String, String> {
+    state
+        .manager
+        .rotate_log(&session_id)
+        .map_err(|e| e.to_string())
+}
+
+/// 落盘录制开关：false=暂停写日志文件；true=另起新分段文件继续录制。
+#[tauri::command]
+pub fn set_recording_cmd(
+    session_id: String,
+    on: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .manager
+        .set_recording(&session_id, on)
+        .map_err(|e| e.to_string())
+}
+
 /// 将前端给出的日志文本写入用户通过文件对话框选择的路径。
 #[tauri::command]
 pub fn export_text_cmd(path: String, content: String) -> Result<(), String> {
@@ -123,7 +146,7 @@ pub fn set_live_rules_cmd(
         .map_err(|e| e.to_string())
 }
 
-/// 视图拉模型数据通道：取 ring 中 `no > sinceNo` 的行（封顶 20000=ring 容量）。
+/// 视图拉模型数据通道：取 ring 中 `no > sinceNo` 的行（封顶 100000=ring 容量）。
 /// `no` 单调递增且清屏不回退，游标语义下不重不漏。
 #[tauri::command]
 pub fn ring_lines_no_cmd(
@@ -136,6 +159,30 @@ pub fn ring_lines_no_cmd(
         .manager
         .ring_lines_after_no(&session_id, since_no, max.unwrap_or(5000))
         .map_err(|e| e.to_string())
+}
+
+/// 往前翻页补拉：取 ring 中 `no < beforeNo` 的最新 max 行（升序）。
+/// 视图缓冲裁掉旧行后用户上滑回看时，从 ring 回补仍存活的旧行。
+#[tauri::command]
+pub fn ring_lines_before_cmd(
+    session_id: String,
+    before_no: u64,
+    max: Option<usize>,
+    state: State<'_, AppState>,
+) -> Result<Vec<bytetide_core::serial::manager::BridgeLine>, String> {
+    state
+        .manager
+        .ring_lines_before_no(&session_id, before_no, max.unwrap_or(2000))
+        .map_err(|e| e.to_string())
+}
+
+/// ring 现存行号边界（空环全 0）：前端判断「上滑还有没有旧行可回补」。
+#[tauri::command]
+pub fn ring_bounds_cmd(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<bytetide_core::serial::manager::RingBounds, String> {
+    state.manager.ring_bounds(&session_id).map_err(|e| e.to_string())
 }
 
 /// 读取用户通过打开文件对话框选择的日志文件，返回 lossy UTF-8 文本（供离线分析）。

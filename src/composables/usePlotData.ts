@@ -19,6 +19,7 @@ export function usePlotData(
   getConfig: () => PlotConfig,
   getLines: () => LogLine[],
   getVersion: () => number,
+  getPrepends: () => number = () => 0,
 ): PlotData {
   const configSig = computed(() => JSON.stringify(getConfig()))
   const points = ref<PlotPoint[]>([])
@@ -39,7 +40,8 @@ export function usePlotData(
     lastError.value = r.lastError
   }, 300)
 
-  watch([configSig, getVersion], () => recompute(), { immediate: true })
+  // getPrepends（backfillTotal）：头部回补不推进 lineCounter，需独立触发重解析
+  watch([configSig, getVersion, getPrepends], () => recompute(), { immediate: true })
 
   return { points, frameCount, lastError }
 }

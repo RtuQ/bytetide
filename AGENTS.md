@@ -31,7 +31,7 @@
 - 日志视图常开渲染 SGR：重置/加粗、16 色（`--ansi-*`/`--ansi-bright-*` token，深浅主题各一套）、256 色（cube/灰阶公式转 `rgb()`）、真彩透传 `rgb()`（设备数据直出，属不走 token 的合理例外）；非 SGR CSI、游离 ESC、行尾未闭合段整体吞掉。
 - 管线：`parseAnsi` 切样式游程 → 游程内跑 `segmentsFor` 叠加搜索/关键词高亮（高亮优先，`hlStyle` 覆盖 ANSI 色）→ LogView `rowSegments/segStyle` 渲染。
 - 性能：无 ESC 行走 `indexOf` 快速路径；`rowMinWidth` 估宽对含 ESC 行按 `stripAnsi` 后长度。
-- 限制：每行独立解析状态（嵌入式日志惯例行内自带 reset），跨行颜色延续不做；搜索/过滤/导出/HEX 仍基于含转义的原文。
+- 限制：每行独立解析状态（嵌入式日志惯例行内自带 reset），跨行颜色延续不做；搜索/过滤/导出仍基于含转义的原文。HEX 渲染走 `useHexDump.lineHexDump`：**优先行原始字节**（`LogLine.bytes`，后端仅对该行含非法 UTF-8 时附带），纯文本行才回退 text 的 UTF-8 编码——二进制帧行禁止把 lossy 文本（U+FFFD）再编码当字节用。
 
 ### 字体
 - UI 文字（标签/按钮/正文）：`--font-ui`，系统无衬线（Segoe UI 优先，Windows 友好，离线可用）
@@ -83,18 +83,26 @@
      ├─ .app-center (column)            ← 单列模式
      │   ├─ .viewbar    ← 视图四态 seg（日志/分屏/图表/对比）：任何模式常驻，兼作对比退出
      │   ├─ .center-body
-     │   │   ├─ LogView    ← 工具栏 + 虚拟滚动日志(横向可滚) + 空状态
+     │   │   ├─ LogView    ← 工具栏 + 虚拟滚动日志(横向可滚) + 空状态；
+     │   │   │                  'plot'（仅图表）/对比模式下 log-wrap 必须 display:none 退出布局
+     │   │   │                  （flex-basis 按日志内容高参与分配会挤压 plot/cmp 区——勿"修"回）
      │   │   ├─ .hsplit    ← 日志↔图表拖拽分割条（20–80% 钳制，serialtool.centerSplit）
      │   │   ├─ PlotView   ← centerView 'split'/'plot' 时渲染（useResizeObserver 自适应尺寸）
-     │   │   └─ CompareView ← compareMode 时占中心区（双会话时间对齐；ComparePanel 已退役）
-     │   ├─ DockView   ← 底部 dock 三页签：解码(parser V1 空态)/告警历史(AlertPanel 拆出)/
-     │   │              监控(MatchStats 迁入)；可拖高可收起（serialtool.dock）
+     │   │   └─ CompareView ← compareMode 时占中心区（双会话 diff：useCompare 纯函数层
+     │   │                  ——锚点序列对齐（Hunt–Szymanski，文本相等+时间窗，候选超限回退
+     │   │                  贪心）+缝隙 changed/insert 分类+行内多段 LCS 高亮（>512 回退三段）；
+     │   │                  只看差异/差异统计条/B 侧偏移输入（live↔offline 对表）；
+     │   │                  ComparePanel 已退役）
+     │   ├─ DockView   ← 底部 dock 页签：解码(DockDecode 实时解码列表；仅解析脚本启用时
+     │   │              出现)/告警历史(AlertPanel 拆出)/监控(MatchStats 迁入)；可拖高可收起
+     │   │              （serialtool.dock）
      │   └─ SendPanel  ← 发送区（<details> 折叠条，默认收起）
      ├─ .sidebar-handle ← 侧栏拖宽(240–560px)/收起手柄（serialtool.sidebar）
      └─ .app-sidebar   ← 分组粘头（.group-head sticky）四组，overflow-y:auto：
-         查找(SearchPanel+命中列表/BookmarkPanel) · 规则(KeywordPanel/AutoReplyPanel/
-         AlertPanel=告警规则) · 数据(PlotConfigPanel) · 库(ConfigPresetsPanel/AiNotesPanel)
- └─ StatusBar   ← 底部状态栏：状态点+端口/传输参数 | RX/TX 速率 | 丢行(>0 红) | 滞后/批均
+         查找(SearchPanel+命中列表/BookmarkPanel) · 规则(KeywordPanel/ParserPanel=
+         协议解析脚本管理+试运行+统计/AutoReplyPanel/AlertPanel=告警规则) ·
+         数据(PlotConfigPanel) · 库(ConfigPresetsPanel/AiNotesPanel)
+ └─ StatusBar   ← 底部状态栏：状态点+端口/传输参数 | RX/TX 速率 | 丢行/Ring丢(>0 红) | 滞后/批均
                   | RX/TX 行数（跟随活动会话；解析器状态位待 parser V1 点亮）
 ```
 
@@ -116,13 +124,38 @@ body 用 `.panel-body`；需限高滚动的用 `.kw-body` / `.ar-body`（已带 
 
 ### 数据源与新增会话级字段
 - `PortConfig.transport`：None/'serial' 串口；'tcp-client'/'tcp-server'/'udp' 网络源（serde default，旧 JSON 兼容）。后端串口/网络共用 `stream_loop`（core 的 `serial/manager.rs`），加新传输=扩展 `establish_link` 即可。
-- 会话级 UI 偏好字段（showLineNo/showDir/droppedLines/bookmarks/aiNotes/alerts/filters…）**必须同时**改三处：`makeSession` 默认值、`reconnectSession` 的 carried 迁移清单、相关 actions。clearLog 会重置 lineCounter 与 droppedLines 并清空 bookmarks 与 aiNotes（aiNotes 同时回写后端镜像清空；droppedLines 在重连迁移中保留）。
+- 会话级 UI 偏好字段（showLineNo/showDir/droppedLines/bookmarks/aiNotes/alerts/filters…）**必须同时**改三处：`makeSession` 默认值、`reconnectSession` 的 carried 迁移清单、相关 actions。clearLog 会重置 lineCounter 与 droppedLines 并清空 bookmarks 与 aiNotes（aiNotes 同时回写后端镜像清空；droppedLines 在重连迁移中保留）。`ringDropped`（ring 覆盖缺口，StatusBar「Ring 丢 N」）与 `evictedPending`（视口锚定待补偿，`takeEvicted(id)` 取走即清零）同走三处纪律，但两者**重连不迁移、清屏归零**（新 ring/新视图从零计）。
 - localStorage 键：`serialtool.theme/.lastPortConfig/.logConfig/.searchHistory/.portPresets/.configPresets/.alertSound/.update.lastCheck/.update.dismissedVersion/.sidebar(宽+收起)/.panels(侧栏面板开合)/.centerSplit(日志↔图表高度比)/.dock(底部dock高度/收起/页签)`。预设库 payload 各类别形状校验在 `applyConfigPreset/importConfigPresets`。
 - 更新检查（`useUpdateChecker`）：启动延迟 5s 静默查 GitHub Releases API（24h 节流，失败也记间隔）；`UPDATE_REPO` 常量已定 `RtuQ/bytetide`（与 scripts/portable-README.txt 主页链接联动，改一处必改另一处）。免安装版策略 = 只提示 + 跳转下载页，不做自更新；TitleBar 版本徽标在 `status==='available'` 时亮起，「忽略此版本」按 tag 记忆。
 - **长跑性能红线**：`lines` 元素必须在 `appendLines`/`appendPulled` 处 `markRaw`（日志行不可变，禁 Proxy 开销）；侧栏折叠面板 body 仍处于挂载态，**禁止无守卫的全量行 computed**——折叠/空态必须早退或停算（参考 SearchPanel 命中节 hitsOpen、BookmarkPanel 空书签早退）。
-- **数据流 = 拉模型（feat/pull-based-view 起）**：后端 ring 是唯一真相（`no` 游标单调递增、清屏不回退）；前端 `useTauriEvents` 每 200ms 按会话 `pullNo` 调 `ring_lines_no_cmd` 拉 delta（`appendPulled` 入表），**不再有 `log` 事件流**（40ms 推事件曾把 WebView2 渲染进程调度饿死成死亡螺旋，实测积压 15 分钟、1s 定时器饿到 48s 才醒）。渲染进程被节流时最坏滞后=一个拉取周期，醒来一次拉齐即收敛。新增实时数据通道时走游标拉取，勿回加高频 emit。CLI（bytetide-cli）是 ring 的第二个消费者：每 50ms 调 `ring_lines_after_no` 游标拉取、零事件流，新增消费者照此办理。
+- **数据流 = 拉模型（feat/pull-based-view 起）**：后端 ring 是唯一真相（`no` 游标单调递增、清屏不回退）；前端 `useTauriEvents` 每 200ms 按会话 `pullNo` 调 `ring_lines_no_cmd` 拉 delta（`appendPulled` 入表），**不再有 `log` 事件流**（40ms 推事件曾把 WebView2 渲染进程调度饿死成死亡螺旋，实测积压 15 分钟、1s 定时器饿到 48s 才醒）。渲染进程被节流时最坏滞后=一个拉取周期，醒来一次拉齐即收敛。新增实时数据通道时走游标拉取，勿回加高频 emit。CLI（bytetide-cli）是 ring 的第二个消费者：每 50ms 调 `ring_lines_after_no` 游标拉取、零事件流，新增消费者照此办理。`RING_CAP` = 100000（manager.rs，≈17MB/会话）；前端 `PULL_MAX_PAGES` = 24（24×5000=12 万 ≥ RING_CAP，一轮必收敛）——**调 RING_CAP 必须同步复核 PULL_MAX_PAGES**；`appendPulled` 在去重过滤之前按游标缺口累计 `ringDropped`（首行 ringNo > pullNo+1 即有行被 ring 覆盖）。
+  **翻页补旧行（方案 B，feat/backfill-and-diff）**：上滑近顶（scrollTop<40 且未跟随尾部）触发
+  `requestBackfill`（useTauriEvents 导出，`backfilling` 在途守卫）——先 `ring_bounds_cmd` 判可补，
+  再 `ring_lines_before_cmd`（beforeNo=视图头行 rn，页 2000）经 `prependBackfill` 回补到视图头部：
+  **沿用被裁前原行号**（no=headNo−k+i 连续延伸，保 SearchPanel O(1) 映射与书签/跳转），
+  **不推进** lineCounter/pullNo、不动 droppedLines/ringDropped/evictedPending（尾部是 live 边缘
+  不回裁，下一批 append 按 cap 从头收敛）；新会话字段 `reconnectNo`（重连时=迁移 lineCounter，
+  标记新 ring 纪元下界，no≤它的迁移行不可补——旧 rn 会与新 ring 撞号）/`backfillTotal`/
+  `backfillExhausted`/`backfillPending`（三处同步：makeSession 默认、**重连不迁移**、清屏归零）。
+  `backfillTotal` 兼作 prepend 重建信号：useHighlighter 第 5 参 `getPrepends`（变化即增量游标
+  归零全量重建，防下标位移漏扫/重扫）、useLineStats/usePlotData 补同源 watch 触发。
+  补行**不喂 feedParser**（framer 是 (sessionId,dir) 有序状态机，乱序历史行破坏切帧）。
+  仅 live 会话适用（离线行无 rn）；后端 `RingBuf::lines_before_no`/`ring_bounds` 在 manager.rs。
+- **协议解析引擎（feat/parser-v1，规范见 docs/parser-spec.md）**：导入 `bytetide.parser v1`
+  脚本（声明式字段层为主 / JS parse 兜底 / 纯切帧器），把 RX/TX 帧实时翻译为解码行。
+  **切帧在主线程**（`src/parser/framer.ts` 状态机按 (sessionId,dir) 隔离），声明式解码零代码执行；
+  脚本层 parse 跑 blob module Worker 沙箱（`bootstrap.ts`，reqId 看门狗 ack 3s/results 10s 超时即
+  terminate+卸载，滚动 1000 帧错误率 >30% 熔断自动停用）。数据入口：拉取循环尾部与离线载入处调
+  `feedParser(sessionId, lines)`；解码行入 `session.decoded`（markRaw + 1000 条 FIFO，
+  `applyDecoded` 200ms 节流；重连不迁移、clearLog 清空并经 `registerParserOnClear` 注入回调复位
+  framer+gen）。导入/启用时对每会话最近 2000 行回溯补解码并整表替换；试运行三分类
+  （无数据直接启用 / 0 帧或 CRC 全败停留启用前 / 通过自动启用）。**CSP 红线**：`tauri.conf.json`
+  现为 `csp: null`，blob Worker + 动态 `import()` 成立；将来引入 CSP 必须含 `script-src blob:` 与
+  `worker-src blob:`，否则脚本层静默挂掉（声明式层不受影响）。ABI 改动三处同步：
+  `src/parser/parser-abi.d.ts` → `src/types/parser.ts` → `docs/parser-spec.md`。
 - **自动回复/告警 = Rust 侧评估（feat/pull-based-view 第 2 步）**：设备交互的正确性不依赖前端存活。规则存 `SessionHandle.auto_reply/alert_cfg`（前端 `pushLiveRules` 整体覆盖推送：连接时+规则变更时）；`stream_loop` 逐 RX 行在 core 的 `serial/rules.rs`（纯函数：`build_test_matcher` 语义对齐前端 `buildTestMatcher`、`auto_reply_payload`、`alert_eval` 窗口/冷却状态机）评估：自动回复命中在读线程内直接回写设备（TX 回显照常进 ring/落盘）；告警命中攒批写后端 mirror（REST `/alerts`）+ `alert-hit` 稀疏事件——通知/提示音/历史入 UI 在事件监听侧执行（`useTauriEvents`），行号用 LogLine.rn（ring no）回查 UI no。改规则语义时 Rust 与前端两处测试都要动。
 - **事件出口 = `EventSink` trait（core 去 tauri 化）**：core 不再 import tauri；状态/错误/告警（`status`/`error`/`alert_hits`）经 `sink.rs` 的 `EventSink` trait 送出，桌面端 `src-tauri/src/gui_sink.rs` 转发为原事件名（`session-status`/`session-error`/`alert-hit`）。改事件名必须同步前端 `useTauriEvents`。`PortManager::connect` 现签名 `(config, log_config, sink: Arc<dyn EventSink>, sessions_dir)`，`sessions_dir` 传空 = 不落盘（CLI 默认）。
+- **落盘录制开关/分段（recOn）**：会话级 `recOn`（默认 true，重连迁移，三处同步照旧；关=仅停写文件，ring/视图不受影响）。工具栏「录制」→ `set_recording_cmd`（关=`PortCmd::RecOff` flush+关文件；开=另起新分段）；「分段」→ `rotate_log_cmd` 始终另起 `{基准名}-YYYYMMDD-HHMMSS.log`（基准名=连接时解析路径，存 `SessionHandle.log_base` 防 stem 越叠越长；同秒冲突 `-2/-3` 递增；`log_path` 随最新分段更新，「打开日志」指向当前文件）。两命令经 `PortCmd::RecOn/RecOff` 在读线程内切 writer；重连后原会话若暂停会补发暂停。**午夜自动分段**（`logConfig.midnightRotate`，连接/重连时生效）：读线程内 1 秒节流查本地日期（纯函数 `segment_due`），跨天且 writer 在位时经 `next_segment_path` 另起新分段——与「分段」命令同在读线程串行切 writer，互斥天然成立；录制关闭只推进日期不建文件。`SessionHandle.log_path` 是 `Arc<RwLock<PathBuf>>` 共享单元（只护路径本身、锁序恒为 sessions→log_path，writer 切换只发生在读线程内）。路径模板经 `logfmt::format_path` 解析（`format_tokens` 保持原签名向后兼容），token 替换值做文件名清洗（`sanitize_filename`：`\/:*?"<>|` 与控制符→`_`；模板本身 `\` `/` 分隔符与时间戳 token 不清洗），新 token `%S`=主机地址（网络源 host:port，串口源=端口名，实参来自 connect 的 `host_of`）。前端 `logConfig` 新增 `viewBufCap`（视图缓冲上限，默认 20 万、clamp [1万,100万]，仅前端消费——Rust 侧 LogConfig 不加此字段，serde 忽略未知字段）与 `midnightRotate`（默认 false）；localStorage 键不变（复用 `serialtool.logConfig`）。
 - **后台/锁屏不实时根因 = Windows EcoQoS**：进程后台化或锁屏时系统把窗口化进程降入节能队列，IPC 派发被推迟到数十秒级（症状：`batchMs` 仅 2-6ms 但 `lagMs` 飙到 30s）。治本在 `lib.rs::disable_power_throttling()`，进程启动即调 `SetProcessInformation(ProcessPowerThrottling, StateMask=0)` 退出限流；`windows-sys` 仅 Windows target 引入。哨兵 `usePerfWatch` 的 `DiagEntry.vis` 记录每条滞后发生时的窗口可见性，`hidden` 时滞后=系统限流，`visible` 时滞后=真积压，一眼可辨。注意：`--disable-features=CalculateNativeWinOcclusion` 生效时被遮挡窗口也报 `visible`，此时 vis 判读失效，需以后端 `perf-heartbeat.log` 对照。
 - **存储位置规范**：会话录制（用户数据）在 `app_data_dir()/sessions/`（Roaming）；诊断日志（perf-frontend.log / perf-heartbeat.log）统一走 `lib.rs::open_diag_log` → `app_log_dir()`（Win: %LOCALAPPDATA%\<id>\logs；macOS: ~/Library/Logs/<id>；Linux: XDG state），超 5MB 打开时截断轮转。新增日志写点一律走 `open_diag_log`，勿再散落 app_data 根目录。
 - **serialport feature 纪律**：core 的 serialport 是 `default-features = false` + 可选 `udev` feature——桌面端开（USB 元数据），CLI 永不开（musl 静态构建依赖此）。升级 serialport 时桌面 / CLI 两条线都要验证。
@@ -130,7 +163,15 @@ body 用 `.panel-body`；需限高滚动的用 `.kw-body` / `.ar-body`（已带 
 ### 后续迭代计划（未排期）
 - AI 分析入口：前端内嵌调用 REST 桥的对话式分析（离线选区→“让 AI 解释”）
 - 时序回放（离线日志按原间隔重放为伪实时会话）
-- 对比视图完整 diff 算法；tcp-server 多并发接入；UDP 对端发送
+- tcp-server 多并发接入；UDP 对端发送
+- 解析引擎 V1.1：LogView 行内类型徽章（shallowRef Map<no,tag> 驱动可见行重渲染；
+  V1 评审定为可砍项已砍，解码列表在底部 dock「解码」页签）
+- 对比增强余项：时钟偏移自动估计（当前为手动偏移输入 + 量级悬殊提示）；
+  CompareView 虚拟滚动（现 SHOW_CAP 1000 + 只看差异）
+
+### 已完成大功能存档
+- 方案 B 翻页补旧行 + 对比视图完整 diff（feat/backfill-and-diff）：见「数据流 = 拉模型」
+  段「翻页补旧行」与布局树 CompareView 条目
 
 ### 连接控制（停止 / 重连 / 关闭）
 - **停止**：`store.stopSession(id)` —— 断开串口但保留标签页与日志，状态 → `disconnected`
@@ -152,7 +193,7 @@ UI 层与逻辑层严格分离：
 |---|---|---|
 | **core（Rust 纯逻辑）** | `crates/bytetide-core/**` | 串口/会话/ring/规则/落盘；桌面与 CLI 共用，改这里必须跑 core+src-tauri 两边测试 |
 | **CLI** | `crates/bytetide-cli/**` | args / render / pick / input；纯函数单测同 core 规范 |
-| **逻辑（改 UI 时勿动）** | `src/types/index.ts`、`src/stores/session.ts`、`src/composables/*`、`src/main.ts`、`src-tauri/src/**`（GUI 壳：commands/bridge/hotplug/gui_sink） | 业务/数据/事件逻辑。只做纯 UI 时不要改这里 |
+| **逻辑（改 UI 时勿动）** | `src/types/index.ts`、`src/types/parser.ts`、`src/parser/**`（framer/fields/crc/engine/bootstrap/lineBytes，ABI 形状在 parser-abi.d.ts）、`src/stores/session.ts`、`src/composables/*`、`src/main.ts`、`src-tauri/src/**`（GUI 壳：commands/bridge/hotplug/gui_sink） | 业务/数据/事件逻辑。只做纯 UI 时不要改这里 |
 | **UI** | `src/App.vue`、`src/components/*.vue` 的 `<template>`、`src/styles.css`、`index.html`、`src-tauri/tauri.conf.json`(窗口) | 自由改 |
 
 - 改 `.vue` 时**只动 `<template>`**，`<script setup>` 原样保留，除非确需新增 UI 交互态（如本地的折叠/切换 ref）

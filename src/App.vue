@@ -25,6 +25,7 @@ import StatusBar from './components/StatusBar.vue'
 import SearchPanel from './components/SearchPanel.vue'
 import BookmarkPanel from './components/BookmarkPanel.vue'
 import KeywordPanel from './components/KeywordPanel.vue'
+import ParserPanel from './components/ParserPanel.vue'
 import AutoReplyPanel from './components/AutoReplyPanel.vue'
 import AlertPanel from './components/AlertPanel.vue'
 import ConfigPresetsPanel from './components/ConfigPresetsPanel.vue'
@@ -44,6 +45,8 @@ const highlighter = useHighlighter(
   () => store.active?.keywords ?? [],
   () => store.active?.lines ?? [],
   () => store.active?.lineCounter ?? 0,
+  // 方案 B 头部回补信号：backfillTotal 变化强制高亮统计全量重建（下标已位移）
+  () => store.active?.backfillTotal ?? 0,
 )
 provide(HIGHLIGHTER_KEY, highlighter)
 
@@ -53,6 +56,7 @@ const plotData = usePlotData(
   () => store.active?.plot ?? DEFAULT_PLOT_CONFIG,
   () => store.active?.lines ?? [],
   () => store.active?.lineCounter ?? 0,
+  () => store.active?.backfillTotal ?? 0,
 )
 provide(PLOT_DATA_KEY, plotData)
 
@@ -93,10 +97,15 @@ function setView(v: 'log' | 'split' | 'plot') {
 }
 
 // ---- 日志↔图表 分屏高度比（拖拽手柄逻辑对齐侧栏手柄的 moved-while-down 模式） ----
+// 「图表」（仅图表）与对比模式下日志区必须退出布局（display:none）：log-wrap 的
+// flex-basis 按日志内容高度（可达成千上万行像素）参与分配，会把 plot-wrap /
+// cmp-view（flex:1 = basis 0）挤压到只剩一点——即「点图表没变化/对比只露一点」的根因。
 const splitPct = ref(loadCenterSplit())
-const logWrapStyle = computed(() =>
-  activeView.value === 'split' ? { flex: `0 0 ${splitPct.value}%` } : undefined,
-)
+const logWrapStyle = computed(() => {
+  if (compareOn.value || activeView.value === 'plot') return { display: 'none' }
+  if (activeView.value === 'split') return { flex: `0 0 ${splitPct.value}%` }
+  return undefined
+})
 
 let splitDragging = false
 let splitMoved = false
@@ -234,7 +243,10 @@ function onPanelToggle(e: Event, id: string) {
               <button
                 class="seg-item"
                 :class="{ active: compareOn }"
-                title="双会话时间对齐对比（占中心区）"
+                :disabled="store.order.length < 2"
+                :title="store.order.length < 2
+                  ? '双会话时间对齐对比：需先打开第二个会话（离线日志也可）'
+                  : '双会话时间对齐对比（占中心区）'"
                 type="button"
                 @click="store.toggleCompareMode()"
               >对比</button>
@@ -293,6 +305,7 @@ function onPanelToggle(e: Event, id: string) {
 
         <div class="group-head">规则</div>
         <KeywordPanel :open="panel.isOpen('keywords')" @toggle="onPanelToggle($event, 'keywords')" />
+        <ParserPanel :open="panel.isOpen('parser')" @toggle="onPanelToggle($event, 'parser')" />
         <AutoReplyPanel :open="panel.isOpen('autoreply')" @toggle="onPanelToggle($event, 'autoreply')" />
         <AlertPanel :open="panel.isOpen('alerts')" @toggle="onPanelToggle($event, 'alerts')" />
 

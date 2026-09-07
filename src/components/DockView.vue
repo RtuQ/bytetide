@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useAlertStore } from '../stores/alerts'
+import { useParserEngine } from '../composables/useParserEngine'
 import {
   clampDockHeight,
   loadDockPrefs,
@@ -13,19 +14,35 @@ import DockMonitor from './DockMonitor.vue'
 
 /** 底部 dock 容器（docs/plan-layout-v1.md §2-③）：
  *  页签（解码 / 告警历史 / 监控）+ 上缘拖高 + 收起；状态持久化到 serialtool.dock。
+ *  开合入口：右侧箭头 / 已停留页签再点（收起）/ 收起态点任意页签（展开并切换）。
  *  无 props / emits，由布局集成层挂载。 */
 const alerts = useAlertStore()
+// 解析开关（plan-parser-v1）：解码页签仅在脚本启用时出现
+const { ui } = useParserEngine()
 
 const initial = loadDockPrefs(window.innerHeight)
 const height = ref(initial.height)
 const collapsed = ref(initial.collapsed)
 const tab = ref<DockTab>(initial.tab)
 
-const TABS: { key: DockTab; label: string }[] = [
-  { key: 'decode', label: '解码' },
+const tabs = computed<{ key: DockTab; label: string }[]>(() => [
+  ...(ui.enabled ? [{ key: 'decode' as DockTab, label: '解码' }] : []),
   { key: 'alerts', label: '告警历史' },
   { key: 'monitor', label: '监控' },
-]
+])
+
+// 解析停用后解码页签消失：若正停留其上则回落到告警历史
+// （immediate：启动时记忆的页签是 decode 但解析未启用，同样回落）
+watch(
+  () => ui.enabled,
+  (on) => {
+    if (!on && tab.value === 'decode') {
+      tab.value = 'alerts'
+      persist()
+    }
+  },
+  { immediate: true },
+)
 
 function persist() {
   saveDockPrefs({ height: height.value, collapsed: collapsed.value, tab: tab.value })
@@ -40,9 +57,24 @@ const dockStyle = computed(() =>
 )
 
 function switchTab(key: DockTab) {
-  if (tab.value === key) return
+  if (tab.value === key) {
+    // 已停留页签再点 = 收起/展开（IntelliJ 工具窗口惯例）：页签条本身即开关，免去瞄准右侧小箭头
+    toggleCollapsed()
+    return
+  }
   tab.value = key
+  // 收起态点任意页签 = 展开并切换
+  if (collapsed.value) collapsed.value = false
   persist()
+}
+
+/** 页签 tooltip 随收起态/是否停留变化，让「点页签开合」可被发现 */
+function tabTitle(key: DockTab) {
+  const label = tabs.value.find((t) => t.key === key)?.label ?? key
+  if (tab.value === key) {
+    return collapsed.value ? `${label}：点击展开面板` : `${label}：再次点击收起面板`
+  }
+  return collapsed.value ? `${label}：点击展开并切换` : label
 }
 
 function toggleCollapsed() {
@@ -91,11 +123,11 @@ function onResizeEnd() {
     ></div>
     <div class="dock-tabs">
       <button
-        v-for="t in TABS"
+        v-for="t in tabs"
         :key="t.key"
         class="dock-tab"
         :class="{ active: tab === t.key }"
-        :title="t.label"
+        :title="tabTitle(t.key)"
         :aria-pressed="tab === t.key"
         @click="switchTab(t.key)"
       >

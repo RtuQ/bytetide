@@ -72,6 +72,7 @@ const { lineHist, gapStats: gaps, gapSamples, byteHist } = useLineStats(
   () => active.value?.lines ?? [],
   () => totalBytes.value,
   () => active.value?.lineCounter ?? 0,
+  () => active.value?.backfillTotal ?? 0,
 )
 const lineVals = computed(() => lineHist.value.map((b) => b.lines))
 const maxLineRate = computed(() => Math.max(0, ...lineVals.value))

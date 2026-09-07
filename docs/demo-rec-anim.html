@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>录制按钮动画 Demo — ByteTide</title>
+<style>
+  /* ===== 与 src/styles.css token 完全一致 ===== */
+  :root {
+    --bg-base: #0b1220;
+    --bg-surface: #0f172a;
+    --bg-elevated: #1e293b;
+    --bg-hover: #334155;
+    --border: #1e293b;
+    --border-strong: #334155;
+    --text: #f1f5f9;
+    --text-muted: #94a3b8;
+    --text-dim: #64748b;
+    --accent: #3b82f6;
+    --err: #f87171;
+    --r-sm: 6px;
+    --r-md: 8px;
+    --r-lg: 10px;
+    --t-fast: 120ms;
+    --t: 200ms;
+    --ease: cubic-bezier(0.4, 0, 0.2, 1);
+    --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --font-mono: "Cascadia Code", "JetBrains Mono", "Fira Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg-base);
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    line-height: 1.6;
+    padding: 32px 16px 64px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--text-muted); margin: 0 0 20px; }
+  .sub code { font-family: var(--font-mono); font-size: 12px; color: var(--accent); }
+
+  /* ===== 顶部控制条 ===== */
+  .ctrl {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; margin-bottom: 20px;
+    background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-md);
+    color: var(--text-muted); font-size: 12px;
+  }
+  .ctrl label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+  .ctrl input { accent-color: var(--accent); cursor: pointer; }
+
+  /* ===== 方案卡片 ===== */
+  .card {
+    background: var(--bg-surface); border: 1px solid var(--border);
+    border-radius: var(--r-lg); padding: 16px 18px; margin-bottom: 16px;
+  }
+  .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 2px; }
+  .card-head .idx {
+    width: 20px; height: 20px; border-radius: 50%; flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--bg-elevated); border: 1px solid var(--border-strong);
+    font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
+  }
+  .card-head h2 { font-size: 14px; margin: 0; }
+  .chip {
+    font-size: 10px; padding: 1px 8px; border-radius: 999px;
+    border: 1px solid var(--border-strong); color: var(--text-dim);
+  }
+  .chip.rec { border-color: rgba(59,130,246,.5); color: var(--accent); }
+  .desc { color: var(--text-muted); font-size: 12px; margin: 2px 0 14px; }
+
+  .stage {
+    display: flex; align-items: center; justify-content: center; gap: 40px;
+    padding: 18px 12px 14px; border-radius: var(--r-md);
+    background: var(--bg-base); border: 1px solid var(--border);
+  }
+  .stage .cell { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .stage .cap { font-size: 11px; color: var(--text-dim); font-family: var(--font-mono); }
+
+  /* ===== 复刻 .btn / .btn-sm / .btn-ghost ===== */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    height: 28px; padding: 0 12px; border-radius: var(--r-sm);
+    border: 1px solid var(--border-strong); background: var(--bg-elevated);
+    color: var(--text); font-size: 12px; font-weight: 500;
+    font-family: var(--font-ui); cursor: pointer;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+                border-color var(--t-fast) var(--ease);
+  }
+  .btn svg { width: 15px; height: 15px; flex: 0 0 auto; }
+  .btn-sm { height: 24px; padding: 0 8px; font-size: 11px; }
+  .btn-sm svg { width: 13px; height: 13px; }
+  .btn-ghost { background: transparent; border-color: transparent; color: var(--text-muted); }
+  .btn-ghost:hover { background: var(--bg-elevated); color: var(--text); border-color: var(--border-strong); }
+
+  /* 录制开关基线（与 styles.css 现状一致）：录制中红点实心 */
+  .rec-btn.rec-on { color: var(--err); }
+  .rec-btn.rec-on svg circle { fill: currentColor; }
+
+  /* ==========================================================
+     方案 A · 呼吸光晕 —— 红点外发光缓慢呼吸，克制、专业
+     接入：styles.css .rec-btn 处 +6 行
+     ========================================================== */
+  .va.rec-on svg { animation: rec-glow 2s var(--ease) infinite; }
+  @keyframes rec-glow {
+    0%, 100% { filter: drop-shadow(0 0 0.5px var(--err)); }
+    50%      { filter: drop-shadow(0 0 4px var(--err)); }
+  }
+
+  /* ==========================================================
+     方案 B · 雷达扩散圈 —— 圆点向外扩散涟漪，"正在录"最直观
+     接入：styles.css .rec-btn 处 +12 行（伪元素叠在图标上）
+     ========================================================== */
+  .vb.rec-on { position: relative; }
+  .vb.rec-on::before {
+    content: "";
+    position: absolute;
+    left: 8px; top: 50%;
+    width: 13px; height: 13px; margin-top: -6.5px;
+    border: 1px solid var(--err); border-radius: 50%;
+    pointer-events: none;
+    animation: rec-ping 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+  @keyframes rec-ping {
+    0%   { transform: scale(1);   opacity: 0.7; }
+    80%, 100% { transform: scale(2.1); opacity: 0; }
+  }
+
+  /* ==========================================================
+     方案 C · OSD 闪烁点 —— 取景器式硬闪烁，摄像机 REC 惯例
+     接入：styles.css +4 行（复用已有 @keyframes pulse 1.2s）
+     ========================================================== */
+  .vc.rec-on svg { animation: pulse 1.2s var(--ease) infinite; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+  }
+
+  /* ==========================================================
+     方案 D · 旋转进度弧 —— 圆点变成旋转圆弧，强调"写入进行中"
+     接入：styles.css +9 行
+     ========================================================== */
+  .vd.rec-on svg circle {
+    fill: none;
+    stroke-dasharray: 40 16.5;            /* r=9 周长 ≈56.5，留缺口弧 */
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: rec-spin 1.4s linear infinite;
+  }
+  @keyframes rec-spin { to { transform: rotate(360deg); } }
+
+  /* ==========================================================
+     方案 E · 电平条 —— 图标换成跳动的录音电平条，录音棚风格
+     接入：模板图标处 +1 行 <span class="rec-eq">… + CSS 14 行
+     ========================================================== */
+  .ve.rec-on svg { display: none; }
+  .rec-eq {
+    display: none;
+    width: 13px; height: 13px;
+    align-items: flex-end; justify-content: center; gap: 2px;
+    flex: 0 0 auto;
+  }
+  .ve.rec-on .rec-eq { display: inline-flex; }
+  .rec-eq i {
+    width: 3px; height: 13px; border-radius: 1px;
+    background: var(--err);
+    transform-origin: bottom;
+    animation: rec-eq 1s var(--ease) infinite;
+  }
+  .rec-eq i:nth-child(1) { animation-delay: -0.35s; }
+  .rec-eq i:nth-child(2) { animation-delay: -0.7s; }
+  .rec-eq i:nth-child(3) { animation-delay: -0.05s; }
+  @keyframes rec-eq {
+    0%, 100% { transform: scaleY(0.3); }
+    50%      { transform: scaleY(1); }
+  }
+
+  /* ===== 组合预览：拟真工具栏（方案 A 上身） ===== */
+  .ctxbar {
+    display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+    padding: 6px 12px; margin-top: 16px;
+    background: var(--bg-base); border: 1px solid var(--border); border-radius: var(--r-md);
+  }
+  .ctxbar .sep { width: 1px; height: 16px; background: var(--border-strong); }
+  .btn-stop { color: var(--err); }
+  .ctxnote { margin-top: 8px; font-size: 11px; color: var(--text-dim); }
+
+  /* 暂停动画开关 + 系统减弱动态效果 */
+  body.no-anim .stage *, body.no-anim .ctxbar * { animation: none !important; }
+  @media (prefers-reduced-motion: reduce) {
+    .stage *, .ctxbar * { animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>录制按钮动画 Demo</h1>
+  <p class="sub">
+    五种「录制中」动效候选，色彩/尺寸复刻 <code>src/styles.css</code> 现状（红点实心为基线）。
+    选定后只需往 <code>styles.css</code> 的 <code>.rec-btn.rec-on</code> 段落加对应几行。
+  </p>
+
+  <div class="ctrl">
+    <label><input type="checkbox" id="freeze" /> 暂停全部动画（逐帧对比）</label>
+    <span>·</span>
+    <span>若系统开了「减弱动态效果」，页面会自动静止，用上面开关预览即可</span>
+  </div>
+
+  <!-- A -->
+  <div class="card">
+    <div class="card-head">
+      <span class="idx">A</span><h2>呼吸光晕 <span class="chip rec">推荐</span></h2>
+      <span class="chip">仅 CSS ≈6 行</span>
+    </div>
+    <p class="desc">红点外圈红色光晕缓慢呼吸（2s 一循环），克制不抢注意力，和「数据密集仪表盘」气质最搭；距离远也能一眼看出在录。</p>
+    <div class="stage">
+      <div class="cell">
+        <button class="btn btn-ghost btn-sm rec-btn va"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg><span>录制</span></button>
+        <span class="cap">暂停</span>
+      </div>
+      <div class="cell">
+        <button class="btn btn-ghost btn-sm rec-btn va rec-on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg><span>录制</span></button>
+        <span class="cap">录制中</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- B -->
+  <div class="card">
+    <div class="card-head"><span class="idx">B</span><h2>雷达扩散圈</h2><span class="chip">仅 CSS ≈12 行</span></div>
+    <p class="desc">圆点向外扩散涟漪环（Tailwind ping 风格），"正在录"的状态感最强烈，适合想让它更醒目的方向；视觉噪音也最大。</p>
+    <div class="stage">
+      <div class="cell">
+        <button class="btn btn-ghost btn-sm rec-btn vb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg><span>录制</span></button>
+        <span class="cap">暂停</span>
+      </div>
+      <div class="cell">
+        <button class="btn btn-ghost btn-sm rec-btn vb rec-on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg><span>录制</span></button>
+        <span class="cap">录制中</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- C -->
+  <div class="card">
+    <div class="card-head"><span class="idx">C</span><h2>OSD 闪烁点</h2><span class="chip">仅 CSS ≈4 行</span></div>
+    <p class="desc">摄像机取景器 REC 式闪烁（1.2s，复用项目已有 <code>@keyframes pulse</code>，与 tab「连接中」状态点同一节奏），成本最低、惯例最强。</p>
+    <div class="stage">
+      <div class="cell">
+        <button class="btn btn-ghost btn-sm rec-btn vc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg><span>录制</span></button>
+        <span class="cap">暂停</span>
+      </div>
+      <div class="cell">
+        <button class="btn btn-ghost btn-sm rec-btn vc rec-on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg><span>录制</span></button>
+        <span class="cap">录制中</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- D -->
+  <div class="card">
+    <div class="card-head"><span class="idx">D</span><h2>旋转进度弧</h2><span class="chip">仅 CSS ≈9 行</span></div>
+    <p class="desc">实心圆点变成带缺口的旋转圆弧，强调"正在写入文件"的过程感；但红点语义被弱化，"REC"的辨识度不如 A/C。</p>
+    <div class="stage">
+      <div class="cell">
+        <button class="btn btn-ghost btn-sm rec-btn vd"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg><span>录制</span></button>
+        <span class="cap">暂停</span>
+      </div>
+      <div class="cell">
+        <button class="btn btn-ghost btn-sm rec-btn vd rec-on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg><span>录制</span></button>
+        <span class="cap">录制中</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- E -->
+  <div class="card">
+    <div class="card-head"><span class="idx">E</span><h2>电平条</h2><span class="chip">模板 +1 行 · CSS ≈14 行</span></div>
+    <p class="desc">图标替换为三根跳动的录音电平条（scaleY 驱动，不动布局），录音棚风格、最有"数据在流动"的感觉；需要动一点模板，改动面最大。</p>
+    <div class="stage">
+      <div class="cell">
+        <button class="btn btn-ghost btn-sm rec-btn ve"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg><span>录制</span></button>
+        <span class="cap">暂停</span>
+      </div>
+      <div class="cell">
+        <button class="btn btn-ghost btn-sm rec-btn ve rec-on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg><span class="rec-eq" aria-hidden="true"><i></i><i></i><i></i></span><span>录制</span></button>
+        <span class="cap">录制中</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 组合预览 -->
+  <div class="card">
+    <div class="card-head"><span class="idx">✓</span><h2>组合预览（方案 A 上身 · 拟真工具栏）</h2></div>
+    <p class="desc">按 LogView 工具栏右组的真实按钮排布，看动画放进实际界面的效果。</p>
+    <div class="ctxbar">
+      <button class="btn btn-ghost btn-sm btn-stop"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></svg><span>停止</span></button>
+      <button class="btn btn-ghost btn-sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg><span>清屏</span></button>
+      <button class="btn btn-ghost btn-sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>导出</span></button>
+      <span class="sep"></span>
+      <button class="btn btn-ghost btn-sm rec-btn va rec-on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg><span>录制</span></button>
+      <button class="btn btn-ghost btn-sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M15 18v-6"/><path d="M12 15h6"/></svg><span>分段</span></button>
+    </div>
+    <p class="ctxnote">接入位置：<code style="font-family:var(--font-mono);color:var(--accent)">styles.css</code> 末尾「录制开关」段（.rec-btn.rec-on），全局 prefers-reduced-motion 兜底已覆盖，无需额外处理。</p>
+  </div>
+</div>
+
+<script>
+  document.getElementById('freeze').addEventListener('change', function () {
+    document.body.classList.toggle('no-anim', this.checked);
+  });
+</script>
+</body>
+</html>

@@ -4,10 +4,13 @@ import { RecycleScroller } from 'vue-virtual-scroller'
 import { useThrottleFn } from '@vueuse/core'
 import { save } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore, type Session } from '../stores/session'
 import { HIGHLIGHTER_KEY, buildTestMatcher, hlStyle } from '../composables/useHighlighter'
 import { parseAnsi, stripAnsi, type AnsiStyle } from '../composables/useAnsi'
+import { anchoredTop } from '../composables/useScrollAnchor'
+import { lineHexDump, lineHexLen } from '../composables/useHexDump'
 import { useRate, humanizeBytes, humanizeMs } from '../composables/useRate'
+import { requestBackfill } from '../composables/useTauriEvents'
 import type { LogLine } from '../types'
 
 const props = defineProps<{ sessionId: string }>()
@@ -44,11 +47,10 @@ function segStyle(seg: RowSeg) {
   return Object.keys(st).length ? st : undefined
 }
 const matchSet = computed(() => new Set(stats.value.matchLines))
-// 显示行集：先过过滤链（include/exclude 与“搜索”独立），再叠加“只看命中”
-const viewItems = computed(() => {
-  const s = session.value
-  if (!s) return []
-  let arr = s.lines
+// 过滤链（include/exclude 与“搜索”独立，再叠加“只看命中”）作用于任意行集：
+// viewItems 与回补行的渲染计数共用，保证 scrollTop 补偿口径与实际渲染一致
+function filterLines(s: Session, lines: LogLine[]): LogLine[] {
+  let arr = lines
   for (const f of s.filters) {
     if (!f.enabled || !f.text) continue
     const re = buildTestMatcher({
@@ -70,6 +72,12 @@ const viewItems = computed(() => {
     arr = arr.filter((l) => ms.has(l.no))
   }
   return arr
+}
+// 显示行集：头部裁剪/回补都会改变行集几何，scrollTop 补偿统一走跟随 watcher
+const viewItems = computed(() => {
+  const s = session.value
+  if (!s) return []
+  return filterLines(s, s.lines)
 })
 
 const hexView = computed(() => session.value?.hexView ?? false)
@@ -97,7 +105,8 @@ const recomputeRowMinWidth = useThrottleFn(
       const t = it.text
       // 含 ANSI 序列的行按剥离后的显示长度估宽（守卫先行走快速路径，避免全量正则）
       const disp = t.indexOf('\x1b') === -1 ? t.length : stripAnsi(t).length
-      const len = it.ts.length + (hexView.value ? disp * 3 + 2 : disp)
+      // HEX 视图按实际渲染字节数估宽：有原始字节用字节长（lossy 文本的 U+FFFD 长度不准）
+      const len = it.ts.length + (hexView.value ? lineHexLen(t, it.bytes) * 3 + 2 : disp)
       if (len > m) m = len
     }
     const chars = Math.min(m, 20000)
@@ -107,7 +116,7 @@ const recomputeRowMinWidth = useThrottleFn(
   300,
   true,
 )
-watch([() => session.value?.lineCounter ?? 0, hexView, showLineNo, showDir, showDelta], recomputeRowMinWidth, {
+watch([() => session.value?.lineCounter ?? 0, () => session.value?.backfillTotal ?? 0, hexView, showLineNo, showDir, showDelta], recomputeRowMinWidth, {
   immediate: true,
 })
 
@@ -137,6 +146,12 @@ const totalBytes = computed(() => {
 })
 const bps = useRate(() => totalBytes.value)
 
+// 落盘录制/分段仅对读线程存活的会话可用（已连接或连接中），未连接时命令通道已关
+const recLive = computed(() => {
+  const st = session.value?.status
+  return st === 'connected' || st === 'connecting'
+})
+
 function deltaMs(item: LogLine, index: number): string {
   if (index <= 0) return '-'
   const prev = viewItems.value[index - 1]
@@ -144,14 +159,8 @@ function deltaMs(item: LogLine, index: number): string {
   return humanizeMs(item.epochMillis - prev.epochMillis)
 }
 
-// HEX 视图：把行文本按 UTF-8 字节转成大写十六进制串（封顶 512 字节，超出显示省略号）
-function hexDump(text: string): string {
-  const bytes = new TextEncoder().encode(text)
-  const n = Math.min(bytes.length, 512)
-  let out = ''
-  for (let i = 0; i < n; i++) out += bytes[i].toString(16).padStart(2, '0').toUpperCase() + ' '
-  return out.trim() + (bytes.length > n ? ' …' : '')
-}
+// HEX 视图行渲染已抽为纯函数 lineHexDump（composables/useHexDump.ts）：
+// 有原始字节（后端对非法 UTF-8 行随行附带）优先用字节，纯文本行才按 UTF-8 编码 text。
 
 // 导出当前会话可见行到用户通过对话框选择的文件
 async function exportLog() {
@@ -179,6 +188,11 @@ function onScroll() {
   if (!scrollEl || !session.value) return
   const atBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 30
   store.setFollowTail(props.sessionId, atBottom)
+  // 上滑近顶（方案 B）：向前翻页回补仍在 ring 里的被裁旧行；
+  // 仅未跟随尾部时触发（跟随时无回看语义），requestBackfill 内部有在途守卫
+  if (!atBottom && scrollEl.scrollTop < 40 && !session.value.backfillExhausted) {
+    void requestBackfill(props.sessionId)
+  }
 }
 
 function bindScroll() {
@@ -194,25 +208,52 @@ watch(session, () => {
   nextTick(bindScroll)
 })
 
-// 跟随尾部：有新行且开启跟随时滚动到底
+// 跟随尾部：有新行且开启跟随时滚动到底。
+// 取消跟随时做视口锚定（plan-buffer-logging-v1 §2.3）：头部行被滑动窗口裁剪
+// 会让内容高度收缩、浏览器钳制 scrollTop，视口整体上移——watcher 默认 pre-flush，
+// 此刻 DOM 还是旧几何，先记 oldTop；nextTick 后按被裁行数等量回补（双向钳制）。
+// takeEvicted 取走即清零，防同 tick 多批次漏计。
+// 方案 B 同一 watcher 统一补偿：上滑回补把行插到头部，内容高度增长会把视口
+// 内容相对下推 N 行，按回补行数（仅计通过过滤链、真正渲染占高的）等量下移抵消。
+const ROW_HEIGHT = 22 // 与模板 :item-size="22" 联动；改行高须同步 .log-row height（AGENTS 红线）
 watch(
-  () => session.value?.lineCounter,
+  // backfillTotal 入列：补行不推进 lineCounter，需独立触发源
+  [() => session.value?.lineCounter, () => session.value?.backfillTotal],
   async () => {
-    if (session.value?.followTail) {
+    const s = session.value
+    if (!s) return
+    const oldTop = scrollEl?.scrollTop ?? 0 // pre-flush：DOM 还是旧几何
+    const evicted = store.takeEvicted(props.sessionId)
+    const backfilled = store.takeBackfilled(props.sessionId)
+    if (s.followTail) {
       await nextTick()
       scroller.value?.scrollToItem?.(viewItems.value.length - 1)
+    } else if (evicted > 0 || backfilled.length > 0) {
+      // 补行中只有通过过滤链的才真正渲染占高，补偿按渲染行数计
+      const rendered = backfilled.length > 0 ? filterLines(s, backfilled).length : 0
+      await nextTick()
+      if (scrollEl) {
+        scrollEl.scrollTop = anchoredTop(oldTop, evicted, rendered, ROW_HEIGHT, scrollEl.scrollHeight, scrollEl.clientHeight)
+      }
     }
   },
 )
 
-// 从 MatchStats 点击行号跳转
+// 从 MatchStats / 解码列表点击行号跳转：滚动定位并闪烁目标行 1.2s
+const flashNo = ref<number | null>(null)
 watch(
   () => session.value?.jump,
   async (j) => {
     if (!j) return
     await nextTick()
     const idx = viewItems.value.findIndex((l) => l.no === j.no)
-    if (idx >= 0) scroller.value?.scrollToItem?.(idx)
+    if (idx >= 0) {
+      scroller.value?.scrollToItem?.(idx)
+      flashNo.value = j.no
+      setTimeout(() => {
+        if (flashNo.value === j.no) flashNo.value = null
+      }, 1200)
+    }
   },
 )
 
@@ -337,6 +378,33 @@ onBeforeUnmount(() => {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           <span>导出</span>
         </button>
+        <button
+          v-if="session.kind !== 'offline'"
+          class="btn btn-ghost btn-sm rec-btn"
+          :class="{ 'rec-on': session.recOn }"
+          :disabled="!recLive"
+          :title="session.recOn
+            ? '落盘录制中，点击暂停写入日志文件（日志视图不受影响）'
+            : '录制已暂停，点击另起新文件继续落盘'"
+          aria-label="切换日志落盘录制"
+          @click="store.setRec(props.sessionId, !session.recOn)"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/></svg>
+          <span>录制</span>
+        </button>
+        <button
+          v-if="session.kind !== 'offline'"
+          class="btn btn-ghost btn-sm"
+          :disabled="!recLive"
+          :title="session.recOn
+            ? '日志分段：关闭当前文件，从当前时刻另起带时间戳的新文件继续落盘（旧文件保留）'
+            : '日志分段：另起带时间戳的新文件并恢复落盘'"
+          aria-label="另起新日志分段文件"
+          @click="store.rotateLog(props.sessionId)"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M15 18v-6"/><path d="M12 15h6"/></svg>
+          <span>分段</span>
+        </button>
         <button v-if="session.kind !== 'offline'" class="btn btn-ghost btn-sm" title="打开日志文件路径" @click="store.openLogPath(props.sessionId)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
           <span>日志</span>
@@ -361,7 +429,7 @@ onBeforeUnmount(() => {
     >
       <div
         class="log-row"
-        :class="[item.dir, { selected: item.no === selectedNo }]"
+        :class="[item.dir, { selected: item.no === selectedNo, flash: item.no === flashNo }]"
         @click="selectedNo = item.no"
       >
         <span class="bm-gutter">
@@ -373,7 +441,7 @@ onBeforeUnmount(() => {
         <span v-if="showDelta" class="col-dt">{{ deltaMs(item, index) }}</span>
         <span v-if="showDir" class="col-dir">{{ item.dir === 'rx' ? 'RX' : 'TX' }}</span>
         <span class="col-tx">
-          <span v-if="hexView" class="hex">{{ hexDump(item.text) }}</span>
+          <span v-if="hexView" class="hex">{{ lineHexDump(item.text, item.bytes) }}</span>
           <template v-else>
             <span
               v-for="(seg, i) in rowSegments(item.text)"
@@ -393,10 +461,18 @@ onBeforeUnmount(() => {
       <span
         v-if="session.droppedLines"
         class="drop-note"
-        title="前端缓冲上限 50000 行，超出即从最旧行开始丢弃（自连接或上次清屏起累计）"
+        :title="`前端缓冲上限 ${store.logConfig.viewBufCap.toLocaleString()} 行，超出即从最旧行开始丢弃（自连接或上次清屏起累计）`"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 20h16a2 2 0 0 0 1.73-2Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
         已丢弃 {{ session.droppedLines.toLocaleString() }} 行
+      </span>
+      <span
+        v-if="session.backfillTotal"
+        class="drop-note"
+        :title="`上滑到顶时已从 ring 回补 ${session.backfillTotal.toLocaleString()} 行（仍在 ring 窗口内的被裁旧行）。更早的行已被 ring 覆盖或属上一连接，无法回补`"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19V5"/><path d="m5 12 7 7 7-7"/></svg>
+        已回补 {{ session.backfillTotal.toLocaleString() }} 行
       </span>
     </div>
 

@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useSessionStore } from '../stores/session'
+import { feedParser } from './useParserEngine'
 import type { PortConfig } from '../types'
 
 /** PortBar 退役后的共享挂点（布局重构 V1）：上次连接参数记忆 + 打开离线日志。
@@ -73,7 +74,11 @@ export function useOpenLog() {
       })
       const path = typeof sel === 'string' ? sel : Array.isArray(sel) ? sel[0] : null
       if (!path) return
-      await useSessionStore().loadOfflineSession(path)
+      const store = useSessionStore()
+      const id = await store.loadOfflineSession(path)
+      // 离线会话不走拉取循环（行经 appendLines 一次入表），解码引擎在此喂数
+      const s = store.sessions[id]
+      if (s) feedParser(id, s.lines)
     } catch (e: unknown) {
       alert(String(e instanceof Error ? e.message : e))
     } finally {

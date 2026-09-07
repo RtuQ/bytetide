@@ -15,8 +15,8 @@ use crate::session::SessionLog;
 use crate::serial::rules::{alert_eval, auto_reply_payload, AlertCfg, AlertWinState, AutoReplyCfg};
 use crate::sink::EventSink;
 
-/// 桥接环形缓冲容量（带原始字节的近期分析窗口）。
-pub const RING_CAP: usize = 20000;
+/// 桥接环形缓冲容量（带原始字节的近期分析窗口；≈170B/行 × 10 万 ≈ 17MB/会话）。
+pub const RING_CAP: usize = 100000;
 
 /// 绘图/解码配置（与前端 `PlotConfig` camelCase 对齐；供 REST 桥 `/decode` 复用文法）。
 #[derive(Clone, Serialize, Deserialize)]
@@ -72,6 +72,16 @@ pub struct MatchHit {
     pub offset: u64,
     pub length: u64,
     pub field: String,
+}
+
+/// ring 现存行号边界（前端「翻页补旧行」判断还能不能往前翻）。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RingBounds {
+    pub first_no: u64,
+    pub last_no: u64,
+    pub size: usize,
+    pub ring_cap: usize,
 }
 
 /// 会话列表项（REST `/sessions`）。
@@ -224,6 +234,15 @@ impl RingBuf {
         ring.iter().skip(from).take(max).cloned().collect()
     }
 
+    /// 往前翻页：`no < before_no` 的最新 max 行（视图缓冲裁掉旧行后从 ring 回补用，
+    /// 仍按 no 升序返回；ring 已翻到最早行时返回不足 max 或空）。
+    pub fn lines_before_no(&self, before_no: u64, max: usize) -> Vec<BridgeLine> {
+        let ring = self.ring.lock();
+        let end = ring.partition_point(|l| l.no < before_no);
+        let start = end.saturating_sub(max);
+        ring.iter().skip(start).take(end - start).cloned().collect()
+    }
+
     /// 当前末行 `no`（空环返回 0）。
     pub fn last_no(&self) -> u64 {
         self.ring.lock().back().map(|l| l.no).unwrap_or(0)
@@ -280,6 +299,12 @@ pub struct SendRequest {
 pub enum PortCmd {
     Send(SendRequest),
     Clear,
+    /// 日志落盘控制（录制开关/分段共用）：携带新分段完整路径，读线程内
+    /// flush+关闭当前文件后从该路径另起新文件继续录制。分段= manager 计算好
+    /// 带时间戳的路径后发此命令；恢复录制=同上。
+    RecOn(PathBuf),
+    /// 暂停落盘：flush+关闭当前文件（ring/视图不受影响，仅停止写文件）。
+    RecOff,
 }
 
 /// 会话类型：实时串口 / 离线加载的日志文件。
@@ -294,7 +319,12 @@ struct SessionHandle {
     kind: SessionKind,
     stop: Arc<AtomicBool>,
     write_tx: mpsc::Sender<PortCmd>,
-    log_path: PathBuf,
+    /// 当前日志文件路径（「分段」/读线程午夜轮转后随最新分段更新；「打开日志」指向当前文件）。
+    /// 共享单元（短临界区只护路径本身）：writer 的切换全部在读线程内串行（「分段」命令
+    /// 也经 PortCmd 进读线程），此处仅登记最新路径；严禁持它的锁再去锁 sessions（无死锁面）。
+    log_path: Arc<RwLock<PathBuf>>,
+    /// 连接时解析出的基准路径：分段命名始终基于它，避免 stem 越叠越长
+    log_base: PathBuf,
     join: Option<thread::JoinHandle<()>>,
     buf: Arc<RingBuf>,
     plot: Arc<RwLock<PlotConfig>>,
@@ -337,17 +367,20 @@ impl PortManager {
         let buf = Arc::new(RingBuf::new());
         let plot = Arc::new(RwLock::new(PlotConfig::default()));
         let (write_tx, write_rx) = mpsc::channel::<PortCmd>();
-        // 日志路径：模板非空则按当时时间+端口名解析，否则用默认 sessions_dir 路径
+        // 日志路径：模板非空则按当时时间+端口名+主机地址解析（token 替换值做文件名清洗），
+        // 否则用默认 sessions_dir 路径
+        let host = host_of(&config);
         let (log_path, custom_path) = match log_config
             .log_path_template
             .as_deref()
             .filter(|s| !s.is_empty())
         {
             Some(tmpl) => (
-                PathBuf::from(logfmt::format_tokens(
+                PathBuf::from(logfmt::format_path(
                     tmpl,
                     &chrono::Local::now(),
                     &config.name,
+                    &host,
                 )),
                 true,
             ),
@@ -356,6 +389,7 @@ impl PortManager {
             None => (default_log_path(&sessions_dir, &id), false),
         };
         let ts_format = log_config.line_ts_format.filter(|s| !s.is_empty());
+        let midnight_rotate = log_config.midnight_rotate.unwrap_or(false);
 
         let cfg = config.clone();
         let id2 = id.clone();
@@ -368,6 +402,10 @@ impl PortManager {
         let al2 = alert_cfg.clone();
         let am2 = alerts_mirror.clone();
         let lp = log_path.clone();
+        // lb = 午夜分段的基准路径；ls = 与 SessionHandle 共享的当前路径单元
+        let lb = log_path.clone();
+        let log_shared = Arc::new(RwLock::new(log_path.clone()));
+        let ls = log_shared.clone();
 
         let handle = thread::Builder::new()
             .name(format!("reader-{}", id))
@@ -375,13 +413,13 @@ impl PortManager {
                 // 串口与 TCP/UDP 源共用同一装配路径，按传输类型选择循环
                 if is_net_transport(&cfg) {
                     net_loop(
-                        cfg, id2, sink, stop2, write_rx, lp, ts_format, custom_path, buf2, ar2,
-                        al2, am2,
+                        cfg, id2, sink, stop2, write_rx, lp, lb, midnight_rotate, ls, ts_format,
+                        custom_path, buf2, ar2, al2, am2,
                     )
                 } else {
                     reader_loop(
-                        cfg, id2, sink, stop2, write_rx, lp, ts_format, custom_path, buf2, ar2,
-                        al2, am2,
+                        cfg, id2, sink, stop2, write_rx, lp, lb, midnight_rotate, ls, ts_format,
+                        custom_path, buf2, ar2, al2, am2,
                     )
                 }
             })
@@ -394,7 +432,8 @@ impl PortManager {
                 kind: SessionKind::Live,
                 stop,
                 write_tx,
-                log_path,
+                log_path: log_shared,
+                log_base: log_path,
                 join: Some(handle),
                 buf,
                 plot,
@@ -431,7 +470,8 @@ impl PortManager {
                 kind: SessionKind::Offline,
                 stop: Arc::new(AtomicBool::new(false)),
                 write_tx,
-                log_path: path,
+                log_path: Arc::new(RwLock::new(path.clone())),
+                log_base: path,
                 join: None,
                 buf,
                 plot,
@@ -523,6 +563,32 @@ impl PortManager {
         Ok(h.buf.lines_after_no(since_no, max))
     }
 
+    /// 往前翻页补拉：返回 ring 中 `no < before_no` 的最新 max 行（升序）。
+    /// 与 `ring_lines_after_no` 同一套 clamp 与会话守卫；前端视图缓冲裁掉旧行后回补用。
+    pub fn ring_lines_before_no(
+        &self,
+        id: &str,
+        before_no: u64,
+        max: usize,
+    ) -> anyhow::Result<Vec<BridgeLine>> {
+        let sessions = self.sessions.read();
+        let h = sessions
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        let max = max.clamp(1, RING_CAP);
+        Ok(h.buf.lines_before_no(before_no, max))
+    }
+
+    /// ring 现存行号边界（空环全 0）：前端判断「上滑还有没有旧行可回补」。
+    pub fn ring_bounds(&self, id: &str) -> anyhow::Result<RingBounds> {
+        let sessions = self.sessions.read();
+        let h = sessions
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        let (first_no, last_no, _, _, _, _, size) = h.buf.bounds();
+        Ok(RingBounds { first_no, last_no, size, ring_cap: RING_CAP })
+    }
+
     /// 前端推送实时规则（自动回复/告警）：拉模型下评估在后端读线程，
     /// 规则变更与连接建立时由前端整体覆盖推送。
     pub fn set_live_rules(
@@ -546,7 +612,51 @@ impl PortManager {
         let h = sessions
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
-        Ok(h.log_path.to_string_lossy().into_owned())
+        // 先落局部变量再构造 Ok：路径读守卫的临时值不能活到块尾（晚于 sessions 释放）
+        let p = h.log_path.read().clone().to_string_lossy().into_owned();
+        Ok(p)
+    }
+
+    /// 日志分段（「分段」按钮）：关闭当前日志文件，从当前时刻另起带时间戳的
+    /// 新文件继续落盘，旧文件保留；录制暂停中调用会顺带恢复录制。
+    /// 返回新文件完整路径。
+    pub fn rotate_log(&self, id: &str) -> anyhow::Result<String> {
+        let sessions = self.sessions.read();
+        let h = sessions
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        if matches!(h.kind, SessionKind::Offline) {
+            return Err(anyhow::anyhow!("离线会话不落盘"));
+        }
+        if h.log_base.as_os_str().is_empty() {
+            return Err(anyhow::anyhow!("该会话未启用日志落盘"));
+        }
+        let np = next_segment_path(&h.log_base, &chrono::Local::now(), |p| p.exists());
+        h.write_tx
+            .send(PortCmd::RecOn(np.clone()))
+            .map_err(|_| anyhow::anyhow!("通道已关闭（会话未连接）"))?;
+        // 「打开日志」与下次分段都应基于新文件：只锁路径单元、不取 sessions 写锁
+        //（读线程午夜轮转同样只写该单元，锁序恒为 sessions -> log_path，无死锁面）
+        *h.log_path.write() = np.clone();
+        Ok(np.to_string_lossy().into_owned())
+    }
+
+    /// 落盘录制开关（「录制」按钮）：关=暂停写文件（数据仍进 ring/视图）；
+    /// 开=另起新分段文件继续录制。
+    pub fn set_recording(&self, id: &str, on: bool) -> anyhow::Result<()> {
+        if on {
+            return self.rotate_log(id).map(|_| ());
+        }
+        let sessions = self.sessions.read();
+        let h = sessions
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        if matches!(h.kind, SessionKind::Offline) {
+            return Err(anyhow::anyhow!("离线会话不落盘"));
+        }
+        h.write_tx
+            .send(PortCmd::RecOff)
+            .map_err(|_| anyhow::anyhow!("通道已关闭（会话未连接）"))
     }
 
     // ===== REST 桥访问器（同 crate 读取，不暴露 SessionHandle） =====
@@ -693,6 +803,63 @@ fn default_log_path(sessions_dir: &std::path::Path, id: &str) -> PathBuf {
     sessions_dir.join(format!("{}.log", id))
 }
 
+/// `%S`（主机地址）实参：网络源 = host:port（tcp-client 目标 / tcp-server、udp 监听地址，
+/// 缺省值与 `establish_link` 一致）；串口源 = 端口名（与 `%H` 相同）。
+fn host_of(config: &PortConfig) -> String {
+    match config.transport.as_deref() {
+        Some("tcp-client") => format!(
+            "{}:{}",
+            config.tcp_host.clone().unwrap_or_else(|| "127.0.0.1".into()),
+            config.tcp_port.unwrap_or(23)
+        ),
+        Some("tcp-server") => format!(
+            "{}:{}",
+            bind_host_of(config),
+            config.tcp_port.unwrap_or(9000)
+        ),
+        Some("udp") => format!(
+            "{}:{}",
+            bind_host_of(config),
+            config.udp_local_port.unwrap_or(0)
+        ),
+        _ => config.name.clone(),
+    }
+}
+
+/// 分段日志路径：在基准路径扩展名前插入 `-YYYYMMDD-HHMMSS`；同秒内再次分段
+/// 用 `-2`/`-3` 递增去重。`exists` 由调用方注入（真实 fs / 测试桩），保持纯函数可测。
+fn next_segment_path(
+    base: &std::path::Path,
+    now: &chrono::DateTime<chrono::Local>,
+    exists: impl Fn(&std::path::Path) -> bool,
+) -> PathBuf {
+    let stamp = now.format("%Y%m%d-%H%M%S").to_string();
+    let dir = base.parent().unwrap_or(std::path::Path::new(""));
+    let stem = base
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "session".into());
+    let ext = base.extension().map(|s| s.to_string_lossy().into_owned());
+    let name = |n: Option<u32>| match (&ext, n) {
+        (Some(e), Some(n)) => format!("{stem}-{stamp}-{n}.{e}"),
+        (Some(e), None) => format!("{stem}-{stamp}.{e}"),
+        (None, Some(n)) => format!("{stem}-{stamp}-{n}"),
+        (None, None) => format!("{stem}-{stamp}"),
+    };
+    let mut cand = dir.join(name(None));
+    let mut n = 2;
+    while exists(&cand) {
+        cand = dir.join(name(Some(n)));
+        n += 1;
+    }
+    cand
+}
+
+/// 午夜分段判定：开关启用且本地日期相对上次检查已变更（跨天 / 时钟跳变）才成立。
+fn segment_due(enabled: bool, last_date: chrono::NaiveDate, now_date: chrono::NaiveDate) -> bool {
+    enabled && last_date != now_date
+}
+
 #[allow(clippy::too_many_arguments)]
 fn reader_loop(
     config: PortConfig,
@@ -701,6 +868,9 @@ fn reader_loop(
     stop: Arc<AtomicBool>,
     write_rx: mpsc::Receiver<PortCmd>,
     log_path: PathBuf,
+    log_base: PathBuf,
+    midnight_rotate: bool,
+    log_shared: Arc<RwLock<PathBuf>>,
     ts_format: Option<String>,
     custom_path: bool,
     ring: Arc<RingBuf>,
@@ -734,6 +904,9 @@ fn reader_loop(
         write_rx,
         &ts_fmt,
         session_log,
+        log_base,
+        midnight_rotate,
+        log_shared,
         ring,
         auto_reply,
         alert_cfg,
@@ -833,6 +1006,9 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
     write_rx: mpsc::Receiver<PortCmd>,
     ts_fmt: &str,
     mut session_log: Option<SessionLog>,
+    log_base: PathBuf,
+    midnight_rotate: bool,
+    log_shared: Arc<RwLock<PathBuf>>,
     ring: Arc<RingBuf>,
     auto_reply: Arc<RwLock<AutoReplyCfg>>,
     alert_cfg: Arc<RwLock<AlertCfg>>,
@@ -844,6 +1020,9 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
     // 告警窗口/冷却状态（每会话独占，随读线程生灭）与待上报命中
     let mut alert_states: HashMap<String, AlertWinState> = HashMap::new();
     let mut fired_alerts: Vec<BridgeAlert> = Vec::new();
+    // 午夜自动分段：当前分段所属的本地日期 + 1 秒节流的检查时钟
+    let mut seg_date = chrono::Local::now().date_naive();
+    let mut last_date_check = Instant::now();
 
     while !stop.load(Ordering::Relaxed) {
         while let Ok(cmd) = write_rx.try_recv() {
@@ -875,6 +1054,59 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
                         let _ = w.clear();
                     }
                     ring.clear();
+                }
+                PortCmd::RecOn(path) => {
+                    // 分段/恢复录制：flush+关闭旧文件后另起新文件；创建失败则报错停写
+                    //（ring/视图不受影响），下一条 RecOn 可再试
+                    if let Some(mut w) = session_log.take() {
+                        let _ = w.flush();
+                    }
+                    session_log = match SessionLog::create(&path) {
+                        Ok(w) => Some(w),
+                        Err(e) => {
+                            sink.error(
+                                session_id,
+                                &format!("另起新日志失败 {}: {}", path.display(), e),
+                            );
+                            None
+                        }
+                    };
+                }
+                PortCmd::RecOff => {
+                    if let Some(mut w) = session_log.take() {
+                        let _ = w.flush();
+                    }
+                }
+            }
+        }
+
+        // 午夜自动分段（1 秒节流）：本地日期变更时无条件推进 seg_date；writer 在位才轮转
+        //（录制关闭时不建文件，恢复录制本就会另起新文件）。与 RecOn/RecOff 同在读线程内
+        // 串行切 writer，互斥天然成立；log_shared 只写路径单元，不碰 sessions 锁。
+        if last_date_check.elapsed() >= Duration::from_secs(1) {
+            last_date_check = Instant::now();
+            let now = chrono::Local::now();
+            if segment_due(midnight_rotate, seg_date, now.date_naive()) {
+                seg_date = now.date_naive();
+                if session_log.is_some() {
+                    if let Some(mut w) = session_log.take() {
+                        let _ = w.flush();
+                    }
+                    let np = next_segment_path(&log_base, &now, |p| p.exists());
+                    session_log = match SessionLog::create(&np) {
+                        Ok(w) => {
+                            // 「打开日志」/REST 导出指向最新分段
+                            *log_shared.write() = np.clone();
+                            Some(w)
+                        }
+                        Err(e) => {
+                            sink.error(
+                                session_id,
+                                &format!("午夜另起新日志失败 {}: {}", np.display(), e),
+                            );
+                            None
+                        }
+                    };
                 }
             }
         }
@@ -1118,6 +1350,9 @@ fn net_loop(
     stop: Arc<AtomicBool>,
     write_rx: mpsc::Receiver<PortCmd>,
     log_path: PathBuf,
+    log_base: PathBuf,
+    midnight_rotate: bool,
+    log_shared: Arc<RwLock<PathBuf>>,
     ts_format: Option<String>,
     custom_path: bool,
     ring: Arc<RingBuf>,
@@ -1149,6 +1384,9 @@ fn net_loop(
         write_rx,
         &ts_fmt,
         session_log,
+        log_base,
+        midnight_rotate,
+        log_shared,
         ring,
         auto_reply,
         alert_cfg,
@@ -1230,6 +1468,35 @@ mod tests {
     }
 
     #[test]
+    fn lines_before_no_pages_backwards() {
+        // 往前翻页：no<before 的最新 max 行，升序返回；翻到 ring 最早行返空
+        let buf = RingBuf::new();
+        for i in 0..10 {
+            buf.push(&mk_log("t", Dir::Rx, "x", None, i));
+        }
+        let p1 = buf.lines_before_no(10, 4);
+        assert_eq!(p1.iter().map(|l| l.no).collect::<Vec<_>>(), vec![6, 7, 8, 9]);
+        let p2 = buf.lines_before_no(6, 4);
+        assert_eq!(p2.iter().map(|l| l.no).collect::<Vec<_>>(), vec![2, 3, 4, 5]);
+        let p3 = buf.lines_before_no(2, 4);
+        assert_eq!(p3.iter().map(|l| l.no).collect::<Vec<_>>(), vec![1]);
+        // 已翻到最早：安全返空；before_no 超前（比最新还大）取最新 max 行
+        assert!(buf.lines_before_no(1, 4).is_empty());
+        let p4 = buf.lines_before_no(999, 3);
+        assert_eq!(p4.iter().map(|l| l.no).collect::<Vec<_>>(), vec![8, 9, 10]);
+        assert!(buf.lines_before_no(0, 4).is_empty());
+    }
+
+    #[test]
+    fn lines_before_no_empty_ring() {
+        let buf = RingBuf::new();
+        assert!(buf.lines_before_no(100, 4).is_empty());
+        buf.push(&mk_log("t", Dir::Rx, "x", None, 0));
+        assert!(buf.lines_before_no(1, 4).is_empty());
+        assert_eq!(buf.lines_before_no(2, 4)[0].no, 1);
+    }
+
+    #[test]
     fn bounds_and_clear_keeps_seq_monotonic() {
         let buf = RingBuf::new();
         buf.push(&mk_log("01:00:00.000", Dir::Rx, "a", None, 3600000));
@@ -1277,7 +1544,8 @@ mod tests {
                 alert_cfg: Arc::new(RwLock::new(AlertCfg::default())),
                 stop,
                 write_tx: tx,
-                log_path: PathBuf::from("x.log"),
+                log_path: Arc::new(RwLock::new(PathBuf::from("x.log"))),
+                log_base: PathBuf::from("x.log"),
                 join: None,
                 buf: ring,
                 plot: Arc::new(RwLock::new(PlotConfig::default())),
@@ -1365,5 +1633,75 @@ mod tests {
         assert_eq!(m.bridge_annotations(&id).unwrap(), notes);
         assert!(!m.bridge_set_annotations("nope", vec![]));
         assert!(m.bridge_annotations("nope").is_none());
+    }
+
+    #[test]
+    fn segment_path_inserts_stamp_before_extension() {
+        use chrono::TimeZone;
+        let dt = chrono::Local.with_ymd_and_hms(2026, 9, 4, 15, 30, 12).unwrap();
+        // 默认命名 {id}.log：时间戳插在扩展名前
+        let p = next_segment_path(std::path::Path::new("/data/sessions/s1.log"), &dt, |_| false);
+        assert_eq!(
+            p,
+            PathBuf::from("/data/sessions/s1-20260904-153012.log")
+        );
+        // 无扩展名路径同样成立
+        let p = next_segment_path(std::path::Path::new("/logs/COM3"), &dt, |_| false);
+        assert_eq!(p, PathBuf::from("/logs/COM3-20260904-153012"));
+    }
+
+    #[test]
+    fn segment_path_avoids_collision_with_counter_suffix() {
+        use chrono::TimeZone;
+        let dt = chrono::Local.with_ymd_and_hms(2026, 9, 4, 15, 30, 12).unwrap();
+        // 首个候选已存在（同秒内再次分段）：-2 递增去重
+        let seen = std::cell::Cell::new(0);
+        let p = next_segment_path(std::path::Path::new("/data/s1.log"), &dt, |_| {
+            seen.set(seen.get() + 1);
+            seen.get() == 1
+        });
+        assert_eq!(p, PathBuf::from("/data/s1-20260904-153012-2.log"));
+    }
+
+    #[test]
+    fn segment_due_only_when_enabled_and_date_changed() {
+        let d7 = chrono::NaiveDate::from_ymd_opt(2026, 9, 7).unwrap();
+        let d8 = chrono::NaiveDate::from_ymd_opt(2026, 9, 8).unwrap();
+        assert!(!segment_due(false, d7, d8)); // 开关关闭永不轮转
+        assert!(!segment_due(true, d7, d7)); // 同日不轮转
+        assert!(segment_due(true, d7, d8)); // 跨天轮转
+        assert!(segment_due(true, d8, d7)); // 时钟回拨视为变更（一次性轮转）
+    }
+
+    #[test]
+    fn host_of_network_and_serial() {
+        // tcp-client：目标 host:port
+        let tcp = PortConfig {
+            transport: Some("tcp-client".into()),
+            tcp_host: Some("192.168.1.9".into()),
+            tcp_port: Some(9000),
+            ..PortConfig::default()
+        };
+        assert_eq!(host_of(&tcp), "192.168.1.9:9000");
+        // tcp-server：监听地址缺省 0.0.0.0（与 establish_link 一致）
+        let srv = PortConfig {
+            transport: Some("tcp-server".into()),
+            tcp_port: Some(9000),
+            ..PortConfig::default()
+        };
+        assert_eq!(host_of(&srv), "0.0.0.0:9000");
+        // udp：本地监听端口
+        let udp = PortConfig {
+            transport: Some("udp".into()),
+            udp_local_port: Some(5000),
+            ..PortConfig::default()
+        };
+        assert_eq!(host_of(&udp), "0.0.0.0:5000");
+        // 串口源：端口名（与 %H 相同）
+        let serial = PortConfig {
+            name: "COM3".into(),
+            ..PortConfig::default()
+        };
+        assert_eq!(host_of(&serial), "COM3");
     }
 }

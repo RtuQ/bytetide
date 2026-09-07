@@ -18,6 +18,7 @@ const highlighter = useHighlighter(
   () => session.value?.keywords ?? [],
   () => session.value?.lines ?? [],
   () => session.value?.lineCounter ?? 0,
+  () => session.value?.backfillTotal ?? 0,
 )
 provide(HIGHLIGHTER_KEY, highlighter)
 
