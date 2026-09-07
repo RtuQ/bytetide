@@ -103,7 +103,7 @@ const drySamples = computed(() => ui.trialReport?.samples.slice(0, 5) ?? [])
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1" /><path d="M16 21h1a2 2 0 0 0 2-2v-5c0-1.1.9-2 2-2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1" /></svg>
         <div class="parser-empty-title">还没有加载解析脚本</div>
         <div class="parser-empty-desc">
-          导入 bytetide.parser v1 格式的 .js 脚本<br />
+          导入 .js 解析脚本<br />
           RX 帧将实时翻译为自然语言
         </div>
         <button class="btn btn-primary btn-sm" @click="pickFile">
@@ -179,7 +179,7 @@ const drySamples = computed(() => ui.trialReport?.samples.slice(0, 5) ?? [])
           </button>
         </div>
         <div class="parser-modal-body">
-          <div class="parser-pane-label">脚本内容（bytetide.parser v1 · 只读预览）</div>
+          <div class="parser-pane-label">脚本内容（只读预览）</div>
           <pre class="parser-code">{{ ui.source }}</pre>
           <div v-if="ui.trialReport" class="parser-dry">
             <div class="parser-dry-head">
