@@ -85,6 +85,7 @@ export function useLineStats(
   getLines: () => LogLine[],
   getTotalBytes: () => number,
   getVersion: () => number,
+  getPrepends: () => number = () => 0,
 ) {
   const lineHist = ref<RateBucket[]>([])
   const gapStats = ref<GapStats>({ count: 0, min: 0, avg: 0, p95: 0, max: 0 })
@@ -102,7 +103,8 @@ export function useLineStats(
     300,
     true,
   )
-  watch(getVersion, recompute, { immediate: true })
+  // getPrepends（backfillTotal）：头部回补不推进 lineCounter，需独立触发全量重算
+  watch([getVersion, getPrepends], recompute, { immediate: true })
 
   let prevTotal = getTotalBytes()
   const timer = window.setInterval(() => {

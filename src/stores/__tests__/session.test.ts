@@ -552,3 +552,87 @@ describe('logConfig viewBufCap / midnightRotate（plan-buffer-logging-v1）', ()
     expect(store.logConfig.midnightRotate).toBe(false)
   })
 })
+
+describe('prependBackfill 翻页补旧行（方案 B）', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  function mkPulledBf(ringNo: number, text?: string) {
+    return { ...mkRaw(ringNo), text: text ?? `l${ringNo}`, ringNo }
+  }
+
+  it('回补行按原行号插到头部，no 保持连续且不推进 lineCounter/pullNo', () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('bf-1', CFG)
+    // rn 1..10 入表（no=1..10），再抬高 cap 后追加 rn=11：total=11 裁掉前 7 行，
+    // 视图剩 no/rn [8,9,10,11]（模拟滑动窗口淘汰）
+    store.appendPulled(id, Array.from({ length: 10 }, (_, i) => mkPulledBf(i + 1)))
+    store.logConfig.viewBufCap = 4
+    store.appendPulled(id, Array.from({ length: 1 }, (_, i) => mkPulledBf(11 + i)))
+    const s = store.sessions[id]!
+    expect(s.lines.map((l) => l.no)).toEqual([8, 9, 10, 11])
+    const beforeCounter = s.lineCounter
+    const beforePullNo = s.pullNo
+    // 回补 rn 6..7（2 行）→ 沿用原行号 no=6,7，插到头部
+    const back = store.prependBackfill(id, [mkPulledBf(6), mkPulledBf(7)])
+    expect(back.map((l) => l.no)).toEqual([6, 7])
+    expect(back.map((l) => l.rn)).toEqual([6, 7])
+    expect(s.lines.map((l) => l.no)).toEqual([6, 7, 8, 9, 10, 11])
+    expect(s.lines.map((l) => l.rn)).toEqual([6, 7, 8, 9, 10, 11])
+    // 不动四个计数/游标
+    expect(s.lineCounter).toBe(beforeCounter)
+    expect(s.pullNo).toBe(beforePullNo)
+    expect(s.droppedLines).toBe(7) // lifetime 累计不回退
+    expect(s.backfillTotal).toBe(2)
+  })
+
+  it('takeBackfilled 取走即清空；未知会话返回空', () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('bf-2', CFG)
+    // cap=2 裁掉 rn 1..2，头部 rn=3 可向前补
+    store.logConfig.viewBufCap = 2
+    store.appendPulled(id, Array.from({ length: 4 }, (_, i) => mkPulledBf(i + 1)))
+    store.prependBackfill(id, [mkPulledBf(2)])
+    expect(store.takeBackfilled(id)).toHaveLength(1)
+    expect(store.takeBackfilled(id)).toHaveLength(0)
+    expect(store.takeBackfilled('nope')).toEqual([])
+  })
+
+  it('守卫：offline / 空视图 / 旧 ring 纪元（no <= reconnectNo）不可回补；带回 ≥ head.rn 的行被过滤', () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('bf-3', CFG)
+    // 空 lines 的会话不可补
+    const empty = store.createLocalSession('bf-3-empty', CFG)
+    expect(store.prependBackfill(empty, [mkPulledBf(1)])).toEqual([])
+    // cap=2 裁掉 rn 1..2 → 头部 rn=3；回补批次混入 rn>=3 的重复行被防御过滤
+    // （调用方按 ring 升序传入，契约同 appendPulled）
+    store.logConfig.viewBufCap = 2
+    store.appendPulled(id, Array.from({ length: 4 }, (_, i) => mkPulledBf(i + 1)))
+    const back = store.prependBackfill(id, [mkPulledBf(1), mkPulledBf(2), mkPulledBf(3)])
+    expect(back.map((l) => l.rn)).toEqual([1, 2])
+    expect(back.map((l) => l.no)).toEqual([1, 2])
+    expect(store.sessions[id]!.backfillTotal).toBe(2)
+    // 旧 ring 纪元：reconnectNo 抬到当前 lineCounter 后头部不可补
+    store.sessions[id]!.reconnectNo = store.sessions[id]!.lineCounter
+    expect(store.prependBackfill(id, [mkPulledBf(0)])).toEqual([])
+    // offline 会话不可补（离线行无 rn，无 ring 翻页语义）
+    const off = store.createLocalSession('bf-3-off', CFG)
+    store.sessions[off]!.kind = 'offline'
+    expect(store.prependBackfill(off, [mkPulledBf(1)])).toEqual([])
+  })
+
+  it('clearLog 归零 backfill 状态；重连不迁移（carried 用 makeSession 默认值）', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('bf-4', CFG)
+    // 小 cap 制造回补场景：cap=2 吞掉 rn 1..2，头部 rn=3 可向前补
+    store.logConfig.viewBufCap = 2
+    store.appendPulled(id, Array.from({ length: 4 }, (_, i) => mkPulledBf(i + 1)))
+    expect(store.prependBackfill(id, [mkPulledBf(2)])).toHaveLength(1)
+    expect(store.sessions[id]!.backfillTotal).toBe(1)
+    await store.clearLog(id)
+    const s = store.sessions[id]!
+    expect(s.backfillTotal).toBe(0)
+    expect(s.backfillPending).toEqual([])
+    expect(s.backfillExhausted).toBe(false)
+    expect(s.reconnectNo).toBe(0)
+  })
+})

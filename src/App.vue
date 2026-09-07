@@ -45,6 +45,8 @@ const highlighter = useHighlighter(
   () => store.active?.keywords ?? [],
   () => store.active?.lines ?? [],
   () => store.active?.lineCounter ?? 0,
+  // 方案 B 头部回补信号：backfillTotal 变化强制高亮统计全量重建（下标已位移）
+  () => store.active?.backfillTotal ?? 0,
 )
 provide(HIGHLIGHTER_KEY, highlighter)
 
@@ -54,6 +56,7 @@ const plotData = usePlotData(
   () => store.active?.plot ?? DEFAULT_PLOT_CONFIG,
   () => store.active?.lines ?? [],
   () => store.active?.lineCounter ?? 0,
+  () => store.active?.backfillTotal ?? 0,
 )
 provide(PLOT_DATA_KEY, plotData)
 

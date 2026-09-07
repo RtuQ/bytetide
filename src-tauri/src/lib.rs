@@ -182,6 +182,8 @@ pub fn run() {
             commands::export_text_cmd,
             commands::append_perf_diag_cmd,
             commands::ring_lines_no_cmd,
+            commands::ring_lines_before_cmd,
+            commands::ring_bounds_cmd,
             commands::set_live_rules_cmd,
             commands::read_text_file_cmd,
             commands::create_offline_session_cmd,

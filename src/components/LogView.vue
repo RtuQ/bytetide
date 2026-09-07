@@ -4,12 +4,13 @@ import { RecycleScroller } from 'vue-virtual-scroller'
 import { useThrottleFn } from '@vueuse/core'
 import { save } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore, type Session } from '../stores/session'
 import { HIGHLIGHTER_KEY, buildTestMatcher, hlStyle } from '../composables/useHighlighter'
 import { parseAnsi, stripAnsi, type AnsiStyle } from '../composables/useAnsi'
 import { anchoredTop } from '../composables/useScrollAnchor'
 import { lineHexDump, lineHexLen } from '../composables/useHexDump'
 import { useRate, humanizeBytes, humanizeMs } from '../composables/useRate'
+import { requestBackfill } from '../composables/useTauriEvents'
 import type { LogLine } from '../types'
 
 const props = defineProps<{ sessionId: string }>()
@@ -46,11 +47,10 @@ function segStyle(seg: RowSeg) {
   return Object.keys(st).length ? st : undefined
 }
 const matchSet = computed(() => new Set(stats.value.matchLines))
-// 显示行集：先过过滤链（include/exclude 与“搜索”独立），再叠加“只看命中”
-const viewItems = computed(() => {
-  const s = session.value
-  if (!s) return []
-  let arr = s.lines
+// 过滤链（include/exclude 与“搜索”独立，再叠加“只看命中”）作用于任意行集：
+// viewItems 与回补行的渲染计数共用，保证 scrollTop 补偿口径与实际渲染一致
+function filterLines(s: Session, lines: LogLine[]): LogLine[] {
+  let arr = lines
   for (const f of s.filters) {
     if (!f.enabled || !f.text) continue
     const re = buildTestMatcher({
@@ -72,6 +72,12 @@ const viewItems = computed(() => {
     arr = arr.filter((l) => ms.has(l.no))
   }
   return arr
+}
+// 显示行集：头部裁剪/回补都会改变行集几何，scrollTop 补偿统一走跟随 watcher
+const viewItems = computed(() => {
+  const s = session.value
+  if (!s) return []
+  return filterLines(s, s.lines)
 })
 
 const hexView = computed(() => session.value?.hexView ?? false)
@@ -110,7 +116,7 @@ const recomputeRowMinWidth = useThrottleFn(
   300,
   true,
 )
-watch([() => session.value?.lineCounter ?? 0, hexView, showLineNo, showDir, showDelta], recomputeRowMinWidth, {
+watch([() => session.value?.lineCounter ?? 0, () => session.value?.backfillTotal ?? 0, hexView, showLineNo, showDir, showDelta], recomputeRowMinWidth, {
   immediate: true,
 })
 
@@ -182,6 +188,11 @@ function onScroll() {
   if (!scrollEl || !session.value) return
   const atBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 30
   store.setFollowTail(props.sessionId, atBottom)
+  // 上滑近顶（方案 B）：向前翻页回补仍在 ring 里的被裁旧行；
+  // 仅未跟随尾部时触发（跟随时无回看语义），requestBackfill 内部有在途守卫
+  if (!atBottom && scrollEl.scrollTop < 40 && !session.value.backfillExhausted) {
+    void requestBackfill(props.sessionId)
+  }
 }
 
 function bindScroll() {
@@ -202,20 +213,28 @@ watch(session, () => {
 // 会让内容高度收缩、浏览器钳制 scrollTop，视口整体上移——watcher 默认 pre-flush，
 // 此刻 DOM 还是旧几何，先记 oldTop；nextTick 后按被裁行数等量回补（双向钳制）。
 // takeEvicted 取走即清零，防同 tick 多批次漏计。
+// 方案 B 同一 watcher 统一补偿：上滑回补把行插到头部，内容高度增长会把视口
+// 内容相对下推 N 行，按回补行数（仅计通过过滤链、真正渲染占高的）等量下移抵消。
 const ROW_HEIGHT = 22 // 与模板 :item-size="22" 联动；改行高须同步 .log-row height（AGENTS 红线）
 watch(
-  () => session.value?.lineCounter,
+  // backfillTotal 入列：补行不推进 lineCounter，需独立触发源
+  [() => session.value?.lineCounter, () => session.value?.backfillTotal],
   async () => {
     const s = session.value
     if (!s) return
     const oldTop = scrollEl?.scrollTop ?? 0 // pre-flush：DOM 还是旧几何
     const evicted = store.takeEvicted(props.sessionId)
+    const backfilled = store.takeBackfilled(props.sessionId)
     if (s.followTail) {
       await nextTick()
       scroller.value?.scrollToItem?.(viewItems.value.length - 1)
-    } else if (evicted > 0 && scrollEl) {
+    } else if (evicted > 0 || backfilled.length > 0) {
+      // 补行中只有通过过滤链的才真正渲染占高，补偿按渲染行数计
+      const rendered = backfilled.length > 0 ? filterLines(s, backfilled).length : 0
       await nextTick()
-      scrollEl.scrollTop = anchoredTop(oldTop, evicted, ROW_HEIGHT, scrollEl.scrollHeight, scrollEl.clientHeight)
+      if (scrollEl) {
+        scrollEl.scrollTop = anchoredTop(oldTop, evicted, rendered, ROW_HEIGHT, scrollEl.scrollHeight, scrollEl.clientHeight)
+      }
     }
   },
 )
@@ -446,6 +465,14 @@ onBeforeUnmount(() => {
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 20h16a2 2 0 0 0 1.73-2Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
         已丢弃 {{ session.droppedLines.toLocaleString() }} 行
+      </span>
+      <span
+        v-if="session.backfillTotal"
+        class="drop-note"
+        :title="`上滑到顶时已从 ring 回补 ${session.backfillTotal.toLocaleString()} 行（仍在 ring 窗口内的被裁旧行）。更早的行已被 ring 覆盖或属上一连接，无法回补`"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19V5"/><path d="m5 12 7 7 7-7"/></svg>
+        已回补 {{ session.backfillTotal.toLocaleString() }} 行
       </span>
     </div>
 

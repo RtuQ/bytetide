@@ -56,6 +56,19 @@ export interface Session {
   /** 视口锚定待补偿：已被裁剪但尚未被 LogView 消费的行数（takeEvicted 取走即清零；
    *  重连不迁移；清屏归零） */
   evictedPending: number
+  /** 新 ring 纪元的行号下界：重连时记录迁移自旧会话的 lineCounter——迁移行携带
+   *  旧 ring 的 rn，而新 ring no 从 1 重新计数，no <= reconnectNo 的行不可往前
+   *  翻页回补（旧 ring 已销毁）。makeSession=0；clearLog 重置 0。 */
+  reconnectNo: number
+  /** 翻页补旧行累计（方案 B）：视图缓冲裁掉的行从 ring 回补的总行数（兼作
+   *  useHighlighter/useLineStats/usePlotData 的 prepend 重建信号）；
+   *  重连不迁移（新 ring 无旧史可补）；清屏归零 */
+  backfillTotal: number
+  /** ring 最早行已翻到（上滑无可再补），重连/清屏归 false */
+  backfillExhausted: boolean
+  /** 本批已回补但尚未被 LogView 消费的行（takeBackfilled 取走即清空；
+   *  重连不迁移；清屏清空） */
+  backfillPending: LogLine[]
   /** 书签行号（升序；随 lines 环形淘汰自然失效——跳转前由 UI 校验行仍存在） */
   bookmarks: number[]
   /** AI 批注（REST 桥写入、事件实时同步；no 为行号，行被淘汰或清屏后标记自动隐藏） */
@@ -106,6 +119,10 @@ function makeSession(id: string, config: PortConfig): Session {
     droppedLines: 0,
     ringDropped: 0,
     evictedPending: 0,
+    reconnectNo: 0,
+    backfillTotal: 0,
+    backfillExhausted: false,
+    backfillPending: [],
     bookmarks: [],
     aiNotes: [],
     decoded: [],
@@ -476,6 +493,8 @@ export const useSessionStore = defineStore('session', {
         lines: s.lines,
         lineCounter: s.lineCounter,
         droppedLines: s.droppedLines,
+        // 新 ring 纪元下界：迁移行携带旧 ring 的 rn，no <= 此值的行不可往前翻页回补
+        reconnectNo: s.lineCounter,
         bookmarks: [...s.bookmarks],
         aiNotes: s.aiNotes.map((n) => ({ ...n })),
         sendHistory: s.sendHistory,
@@ -531,6 +550,11 @@ export const useSessionStore = defineStore('session', {
       // ring 覆盖缺口与锚定待补偿同理绑定“当前视图”，一并归零（pullNo 保持单调不重置）
       s.ringDropped = 0
       s.evictedPending = 0
+      // 翻页补行状态同理绑定当前视图：ring 已清空无可回补，纪元下界与计数归零
+      s.reconnectNo = 0
+      s.backfillTotal = 0
+      s.backfillExhausted = false
+      s.backfillPending = []
       // AI 批注锚定行号，同样失义：本地清空并同步后端镜像
       s.aiNotes = []
       // 解码帧同样锚定行号：清空并由解析引擎复位该会话切帧状态（gen+1）
@@ -653,6 +677,44 @@ export const useSessionStore = defineStore('session', {
       const n = s.evictedPending
       s.evictedPending = 0
       return n
+    },
+    /** 翻页补旧行（方案 B）：视图缓冲裁掉的行若仍在后端 ring 窗口内，上滑时回补
+     *  到头部。沿用被裁前的原行号（no = headNo-k+i 连续延伸——no 连续性是
+     *  SearchPanel O(1) 映射与书签/跳转的前提），不推进 lineCounter/pullNo，
+     *  不动 droppedLines/ringDropped/evictedPending。仅 live 会话且视图头属当前
+     *  ring 纪元（head.no > reconnectNo）时可补；返回本次回补的行。 */
+    prependBackfill(
+      id: string,
+      lines: (RawLogLine & { ringNo: number })[],
+    ): LogLine[] {
+      const s = this.sessions[id]
+      if (!s || s.kind !== 'live' || lines.length === 0) return []
+      const head = s.lines[0]
+      if (!head || head.no <= s.reconnectNo) return []
+      // 防御性去重：调用方以 head.rn 为 beforeNo 拉取，正常不会带回 ≥ 它的行
+      const headRn = head.rn ?? Number.MAX_SAFE_INTEGER
+      const arr = lines.filter((l) => l.ringNo < headRn)
+      if (arr.length === 0) return []
+      const k = arr.length
+      const base = head.no - k
+      const fresh: LogLine[] = arr.map((r, i) =>
+        markRaw({ no: base + i, ts: r.ts, dir: r.dir, text: r.text, bytes: r.bytes, epochMillis: r.epochMillis, rn: r.ringNo }),
+      )
+      // concat 产生新数组引用，保证虚拟滚动器感知变化；暂不回裁容量——
+      // 尾部是 live 边缘不可裁（pullNo 已越过），下一批 append 会按 cap 从头部重新收敛
+      s.lines = fresh.concat(s.lines)
+      s.backfillTotal += k
+      s.backfillPending = s.backfillPending.concat(fresh)
+      return fresh
+    },
+    /** 视口锚定补偿（头部插入方向）：返回本批回补的行并清空暂存（未知会话返回 []）。
+     *  LogView 由此统计通过过滤链的渲染行数，做 scrollTop 等量下移补偿。 */
+    takeBackfilled(id: string): LogLine[] {
+      const s = this.sessions[id]
+      if (!s || s.backfillPending.length === 0) return []
+      const out = s.backfillPending
+      s.backfillPending = []
+      return out
     },
     /** 解析引擎落表：解码帧追加（元素 markRaw + 1000 条 FIFO；replace=true 用于回溯整表替换）。
      *  200ms 节流批量由调用方（useParserEngine）负责，这里只管入表。 */

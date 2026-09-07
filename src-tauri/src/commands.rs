@@ -161,6 +161,30 @@ pub fn ring_lines_no_cmd(
         .map_err(|e| e.to_string())
 }
 
+/// 往前翻页补拉：取 ring 中 `no < beforeNo` 的最新 max 行（升序）。
+/// 视图缓冲裁掉旧行后用户上滑回看时，从 ring 回补仍存活的旧行。
+#[tauri::command]
+pub fn ring_lines_before_cmd(
+    session_id: String,
+    before_no: u64,
+    max: Option<usize>,
+    state: State<'_, AppState>,
+) -> Result<Vec<bytetide_core::serial::manager::BridgeLine>, String> {
+    state
+        .manager
+        .ring_lines_before_no(&session_id, before_no, max.unwrap_or(2000))
+        .map_err(|e| e.to_string())
+}
+
+/// ring 现存行号边界（空环全 0）：前端判断「上滑还有没有旧行可回补」。
+#[tauri::command]
+pub fn ring_bounds_cmd(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<bytetide_core::serial::manager::RingBounds, String> {
+    state.manager.ring_bounds(&session_id).map_err(|e| e.to_string())
+}
+
 /// 读取用户通过打开文件对话框选择的日志文件，返回 lossy UTF-8 文本（供离线分析）。
 #[tauri::command]
 pub fn read_text_file_cmd(path: String) -> Result<String, String> {

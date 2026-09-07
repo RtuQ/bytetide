@@ -188,6 +188,7 @@ export function useHighlighter(
   getKeywords: () => Keyword[],
   getLines: () => LogLine[],
   getVersion: () => number,
+  getPrepends: () => number = () => 0,
 ) {
   const searchMatcher = computed(() => buildMatcher(getSearch()))
   const keywordMatchers = computed(() => buildKeywordMatchers(getKeywords()))
@@ -195,15 +196,19 @@ export function useHighlighter(
   // 增量游标：上次已扫到的行数组下标 + 参与过统计的匹配器身份。
   // 匹配器/关键词变化或缓冲截断（长度小于游标）时全量重建；否则只扫新增行--
   // 搜索激活时长跑大缓冲不再每 300ms 全量重扫（吞吐赤字根因之一）。
+  // 方案 B 头部回补不推进 lineCounter 但使全部下标位移，getPrepends 变化
+  // （= backfillTotal 增长）同样强制全量重建，否则游标错位漏扫/重扫。
   let cursor = 0
   let lastSm: RegExp | null = null
   let lastKms: KeywordMatcher[] | null = null
+  let lastBp = getPrepends()
   const acc: MatchStats = { total: 0, matchLines: [], kwCounts: {} }
 
   const recompute = useThrottleFn(() => {
     const sm = searchMatcher.value
     const kms = keywordMatchers.value
     const lines = getLines()
+    const bp = getPrepends()
     // 空载早退：无搜索词且无关键词时跳过扫描（长跑监控的常态路径）
     if (!sm && kms.length === 0) {
       cursor = 0
@@ -213,9 +218,10 @@ export function useHighlighter(
       stats.value = { total: 0, matchLines: [], kwCounts: {} }
       lastSm = sm
       lastKms = kms
+      lastBp = bp
       return
     }
-    if (sm !== lastSm || kms !== lastKms || lines.length < cursor) {
+    if (sm !== lastSm || kms !== lastKms || lines.length < cursor || bp !== lastBp) {
       cursor = 0
       acc.total = 0
       acc.matchLines.length = 0
@@ -228,9 +234,10 @@ export function useHighlighter(
     }
     lastSm = sm
     lastKms = kms
+    lastBp = bp
     stats.value = { total: acc.total, matchLines: acc.matchLines, kwCounts: { ...acc.kwCounts } }
   }, 300)
-  watch([searchMatcher, keywordMatchers, getVersion], () => recompute(), { immediate: true })
+  watch([searchMatcher, keywordMatchers, getVersion, getPrepends], () => recompute(), { immediate: true })
   const segmentsFor = (text: string) =>
     segmentsMulti(text, searchMatcher.value, keywordMatchers.value)
   return { searchMatcher, keywordMatchers, stats, segmentsFor }

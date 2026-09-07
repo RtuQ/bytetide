@@ -30,6 +30,8 @@ const PULL_INTERVAL_MS = 200
 const PULL_PAGE_MAX = 5000
 /** 单次 drain 最多翻页数：24×5000=12 万行 ≥ ring 容量 10 万，一轮必收敛 */
 const PULL_MAX_PAGES = 24
+/** 上滑回补单页行数：比正向拉取小，保证滚动响应即时（可连续触发多页） */
+const BACKFILL_PAGE_MAX = 2000
 
 interface PulledLine {
   no: number
@@ -42,6 +44,68 @@ interface PulledLine {
 
 /** 正在拉取的会话集合（防同会话并发 drain 导致游标回退覆盖） */
 const draining = new Set<string>()
+/** 正在往前翻页回补的会话集合（防同会话并发回补重复插入同一批行） */
+const backfilling = new Set<string>()
+
+/**
+ * 翻页补旧行（方案 B）：用户上滑到视图缓冲头时，把仍在后端 ring 窗口内的
+ * 被裁旧行按原行号回补到头部。与正向拉取完全独立——不碰 pullNo/ringDropped，
+ * beforeNo 取视图头行的 rn；ring 翻空即置 backfillExhausted 不再白发请求。
+ * 由 LogView onScroll 触发（scrollTop < 阈值且未跟随尾部时）。
+ */
+export async function requestBackfill(sessionId: string): Promise<void> {
+  if (backfilling.has(sessionId)) return
+  const store = useSessionStore()
+  const s = store.sessions[sessionId]
+  if (!s || s.kind !== 'live' || s.backfillExhausted) return
+  const head = s.lines[0]
+  // 无可补视图（空/清屏后）或视图头属旧 ring 纪元（重连迁移行，旧 ring 已销毁）
+  if (!head || head.rn === undefined || head.no <= s.reconnectNo) return
+  // ring 最早行不早于视图头：没有更旧的行可补（省一次 invoke）
+  try {
+    const bounds = await invoke<{ firstNo: number }>('ring_bounds_cmd', { sessionId })
+    if (bounds.firstNo >= head.rn) {
+      s.backfillExhausted = true
+      return
+    }
+  } catch {
+    return // 无后端（浏览器冒烟）或会话已移除，静默
+  }
+  backfilling.add(sessionId)
+  try {
+    let pulled: PulledLine[]
+    try {
+      pulled = await invoke<PulledLine[]>('ring_lines_before_cmd', {
+        sessionId,
+        beforeNo: head.rn,
+        max: BACKFILL_PAGE_MAX,
+      })
+    } catch {
+      return // 会话已断开/移除，静默
+    }
+    const s2 = store.sessions[sessionId]
+    if (!s2) return
+    if (pulled.length === 0) {
+      s2.backfillExhausted = true // ring 内更早的行已全部回补完
+      return
+    }
+    store.prependBackfill(
+      sessionId,
+      pulled.map((l) => ({
+        ts: l.ts,
+        dir: l.dir,
+        text: l.text,
+        bytes: l.bytes,
+        epochMillis: l.epochMillis,
+        ringNo: l.no,
+      })),
+    )
+    // 注意：不给解析引擎喂补行——framer 是 (sessionId,dir) 有序状态机，
+    // 乱序喂历史行会破坏切帧；解码回看由「导入时回溯 2000 行」既有机制覆盖
+  } finally {
+    backfilling.delete(sessionId)
+  }
+}
 
 async function drainSession(sessionId: string): Promise<void> {
   if (draining.has(sessionId)) return

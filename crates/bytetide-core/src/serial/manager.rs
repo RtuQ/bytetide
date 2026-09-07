@@ -74,6 +74,16 @@ pub struct MatchHit {
     pub field: String,
 }
 
+/// ring 现存行号边界（前端「翻页补旧行」判断还能不能往前翻）。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RingBounds {
+    pub first_no: u64,
+    pub last_no: u64,
+    pub size: usize,
+    pub ring_cap: usize,
+}
+
 /// 会话列表项（REST `/sessions`）。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -222,6 +232,15 @@ impl RingBuf {
         let ring = self.ring.lock();
         let from = ring.partition_point(|l| l.no <= since_no);
         ring.iter().skip(from).take(max).cloned().collect()
+    }
+
+    /// 往前翻页：`no < before_no` 的最新 max 行（视图缓冲裁掉旧行后从 ring 回补用，
+    /// 仍按 no 升序返回；ring 已翻到最早行时返回不足 max 或空）。
+    pub fn lines_before_no(&self, before_no: u64, max: usize) -> Vec<BridgeLine> {
+        let ring = self.ring.lock();
+        let end = ring.partition_point(|l| l.no < before_no);
+        let start = end.saturating_sub(max);
+        ring.iter().skip(start).take(end - start).cloned().collect()
     }
 
     /// 当前末行 `no`（空环返回 0）。
@@ -542,6 +561,32 @@ impl PortManager {
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
         let max = max.clamp(1, RING_CAP);
         Ok(h.buf.lines_after_no(since_no, max))
+    }
+
+    /// 往前翻页补拉：返回 ring 中 `no < before_no` 的最新 max 行（升序）。
+    /// 与 `ring_lines_after_no` 同一套 clamp 与会话守卫；前端视图缓冲裁掉旧行后回补用。
+    pub fn ring_lines_before_no(
+        &self,
+        id: &str,
+        before_no: u64,
+        max: usize,
+    ) -> anyhow::Result<Vec<BridgeLine>> {
+        let sessions = self.sessions.read();
+        let h = sessions
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        let max = max.clamp(1, RING_CAP);
+        Ok(h.buf.lines_before_no(before_no, max))
+    }
+
+    /// ring 现存行号边界（空环全 0）：前端判断「上滑还有没有旧行可回补」。
+    pub fn ring_bounds(&self, id: &str) -> anyhow::Result<RingBounds> {
+        let sessions = self.sessions.read();
+        let h = sessions
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        let (first_no, last_no, _, _, _, _, size) = h.buf.bounds();
+        Ok(RingBounds { first_no, last_no, size, ring_cap: RING_CAP })
     }
 
     /// 前端推送实时规则（自动回复/告警）：拉模型下评估在后端读线程，
@@ -1420,6 +1465,35 @@ mod tests {
         let after = buf.lines_after_no(5, 4);
         assert_eq!(after.iter().map(|l| l.no).collect::<Vec<_>>(), vec![6]);
         assert_eq!(after[0].text, "new");
+    }
+
+    #[test]
+    fn lines_before_no_pages_backwards() {
+        // 往前翻页：no<before 的最新 max 行，升序返回；翻到 ring 最早行返空
+        let buf = RingBuf::new();
+        for i in 0..10 {
+            buf.push(&mk_log("t", Dir::Rx, "x", None, i));
+        }
+        let p1 = buf.lines_before_no(10, 4);
+        assert_eq!(p1.iter().map(|l| l.no).collect::<Vec<_>>(), vec![6, 7, 8, 9]);
+        let p2 = buf.lines_before_no(6, 4);
+        assert_eq!(p2.iter().map(|l| l.no).collect::<Vec<_>>(), vec![2, 3, 4, 5]);
+        let p3 = buf.lines_before_no(2, 4);
+        assert_eq!(p3.iter().map(|l| l.no).collect::<Vec<_>>(), vec![1]);
+        // 已翻到最早：安全返空；before_no 超前（比最新还大）取最新 max 行
+        assert!(buf.lines_before_no(1, 4).is_empty());
+        let p4 = buf.lines_before_no(999, 3);
+        assert_eq!(p4.iter().map(|l| l.no).collect::<Vec<_>>(), vec![8, 9, 10]);
+        assert!(buf.lines_before_no(0, 4).is_empty());
+    }
+
+    #[test]
+    fn lines_before_no_empty_ring() {
+        let buf = RingBuf::new();
+        assert!(buf.lines_before_no(100, 4).is_empty());
+        buf.push(&mk_log("t", Dir::Rx, "x", None, 0));
+        assert!(buf.lines_before_no(1, 4).is_empty());
+        assert_eq!(buf.lines_before_no(2, 4)[0].no, 1);
     }
 
     #[test]
