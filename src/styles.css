@@ -1722,9 +1722,13 @@ input[type="color"]:focus-visible {
 .star-btn.bm-on svg polygon {
   fill: currentColor;
 }
-/* 录制开关：录制中红点实心（同告警/停止的红），暂停时灰点空心 */
+/* 录制开关：录制中红点实心（同告警/停止的红）+ 取景器 REC 式闪烁
+   （复用 tab 连接中的 @keyframes pulse），暂停时灰点空心 */
 .rec-btn.rec-on {
   color: var(--err);
+}
+.rec-btn.rec-on svg {
+  animation: pulse 1.2s var(--ease) infinite;
 }
 .rec-btn.rec-on svg circle {
   fill: currentColor;
