@@ -14,6 +14,7 @@ import DockMonitor from './DockMonitor.vue'
 
 /** 底部 dock 容器（docs/plan-layout-v1.md §2-③）：
  *  页签（解码 / 告警历史 / 监控）+ 上缘拖高 + 收起；状态持久化到 serialtool.dock。
+ *  开合入口：右侧箭头 / 已停留页签再点（收起）/ 收起态点任意页签（展开并切换）。
  *  无 props / emits，由布局集成层挂载。 */
 const alerts = useAlertStore()
 // 解析开关（plan-parser-v1）：解码页签仅在脚本启用时出现
@@ -56,9 +57,24 @@ const dockStyle = computed(() =>
 )
 
 function switchTab(key: DockTab) {
-  if (tab.value === key) return
+  if (tab.value === key) {
+    // 已停留页签再点 = 收起/展开（IntelliJ 工具窗口惯例）：页签条本身即开关，免去瞄准右侧小箭头
+    toggleCollapsed()
+    return
+  }
   tab.value = key
+  // 收起态点任意页签 = 展开并切换
+  if (collapsed.value) collapsed.value = false
   persist()
+}
+
+/** 页签 tooltip 随收起态/是否停留变化，让「点页签开合」可被发现 */
+function tabTitle(key: DockTab) {
+  const label = tabs.value.find((t) => t.key === key)?.label ?? key
+  if (tab.value === key) {
+    return collapsed.value ? `${label}：点击展开面板` : `${label}：再次点击收起面板`
+  }
+  return collapsed.value ? `${label}：点击展开并切换` : label
 }
 
 function toggleCollapsed() {
@@ -111,7 +127,7 @@ function onResizeEnd() {
         :key="t.key"
         class="dock-tab"
         :class="{ active: tab === t.key }"
-        :title="t.label"
+        :title="tabTitle(t.key)"
         :aria-pressed="tab === t.key"
         @click="switchTab(t.key)"
       >
