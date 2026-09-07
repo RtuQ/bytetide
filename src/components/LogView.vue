@@ -8,6 +8,7 @@ import { useSessionStore } from '../stores/session'
 import { HIGHLIGHTER_KEY, buildTestMatcher, hlStyle } from '../composables/useHighlighter'
 import { parseAnsi, stripAnsi, type AnsiStyle } from '../composables/useAnsi'
 import { anchoredTop } from '../composables/useScrollAnchor'
+import { lineHexDump, lineHexLen } from '../composables/useHexDump'
 import { useRate, humanizeBytes, humanizeMs } from '../composables/useRate'
 import type { LogLine } from '../types'
 
@@ -98,7 +99,8 @@ const recomputeRowMinWidth = useThrottleFn(
       const t = it.text
       // 含 ANSI 序列的行按剥离后的显示长度估宽（守卫先行走快速路径，避免全量正则）
       const disp = t.indexOf('\x1b') === -1 ? t.length : stripAnsi(t).length
-      const len = it.ts.length + (hexView.value ? disp * 3 + 2 : disp)
+      // HEX 视图按实际渲染字节数估宽：有原始字节用字节长（lossy 文本的 U+FFFD 长度不准）
+      const len = it.ts.length + (hexView.value ? lineHexLen(t, it.bytes) * 3 + 2 : disp)
       if (len > m) m = len
     }
     const chars = Math.min(m, 20000)
@@ -151,14 +153,8 @@ function deltaMs(item: LogLine, index: number): string {
   return humanizeMs(item.epochMillis - prev.epochMillis)
 }
 
-// HEX 视图：把行文本按 UTF-8 字节转成大写十六进制串（封顶 512 字节，超出显示省略号）
-function hexDump(text: string): string {
-  const bytes = new TextEncoder().encode(text)
-  const n = Math.min(bytes.length, 512)
-  let out = ''
-  for (let i = 0; i < n; i++) out += bytes[i].toString(16).padStart(2, '0').toUpperCase() + ' '
-  return out.trim() + (bytes.length > n ? ' …' : '')
-}
+// HEX 视图行渲染已抽为纯函数 lineHexDump（composables/useHexDump.ts）：
+// 有原始字节（后端对非法 UTF-8 行随行附带）优先用字节，纯文本行才按 UTF-8 编码 text。
 
 // 导出当前会话可见行到用户通过对话框选择的文件
 async function exportLog() {
@@ -426,7 +422,7 @@ onBeforeUnmount(() => {
         <span v-if="showDelta" class="col-dt">{{ deltaMs(item, index) }}</span>
         <span v-if="showDir" class="col-dir">{{ item.dir === 'rx' ? 'RX' : 'TX' }}</span>
         <span class="col-tx">
-          <span v-if="hexView" class="hex">{{ hexDump(item.text) }}</span>
+          <span v-if="hexView" class="hex">{{ lineHexDump(item.text, item.bytes) }}</span>
           <template v-else>
             <span
               v-for="(seg, i) in rowSegments(item.text)"

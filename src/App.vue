@@ -94,10 +94,15 @@ function setView(v: 'log' | 'split' | 'plot') {
 }
 
 // ---- 日志↔图表 分屏高度比（拖拽手柄逻辑对齐侧栏手柄的 moved-while-down 模式） ----
+// 「图表」（仅图表）与对比模式下日志区必须退出布局（display:none）：log-wrap 的
+// flex-basis 按日志内容高度（可达成千上万行像素）参与分配，会把 plot-wrap /
+// cmp-view（flex:1 = basis 0）挤压到只剩一点——即「点图表没变化/对比只露一点」的根因。
 const splitPct = ref(loadCenterSplit())
-const logWrapStyle = computed(() =>
-  activeView.value === 'split' ? { flex: `0 0 ${splitPct.value}%` } : undefined,
-)
+const logWrapStyle = computed(() => {
+  if (compareOn.value || activeView.value === 'plot') return { display: 'none' }
+  if (activeView.value === 'split') return { flex: `0 0 ${splitPct.value}%` }
+  return undefined
+})
 
 let splitDragging = false
 let splitMoved = false

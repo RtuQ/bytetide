@@ -31,7 +31,7 @@
 - 日志视图常开渲染 SGR：重置/加粗、16 色（`--ansi-*`/`--ansi-bright-*` token，深浅主题各一套）、256 色（cube/灰阶公式转 `rgb()`）、真彩透传 `rgb()`（设备数据直出，属不走 token 的合理例外）；非 SGR CSI、游离 ESC、行尾未闭合段整体吞掉。
 - 管线：`parseAnsi` 切样式游程 → 游程内跑 `segmentsFor` 叠加搜索/关键词高亮（高亮优先，`hlStyle` 覆盖 ANSI 色）→ LogView `rowSegments/segStyle` 渲染。
 - 性能：无 ESC 行走 `indexOf` 快速路径；`rowMinWidth` 估宽对含 ESC 行按 `stripAnsi` 后长度。
-- 限制：每行独立解析状态（嵌入式日志惯例行内自带 reset），跨行颜色延续不做；搜索/过滤/导出/HEX 仍基于含转义的原文。
+- 限制：每行独立解析状态（嵌入式日志惯例行内自带 reset），跨行颜色延续不做；搜索/过滤/导出仍基于含转义的原文。HEX 渲染走 `useHexDump.lineHexDump`：**优先行原始字节**（`LogLine.bytes`，后端仅对该行含非法 UTF-8 时附带），纯文本行才回退 text 的 UTF-8 编码——二进制帧行禁止把 lossy 文本（U+FFFD）再编码当字节用。
 
 ### 字体
 - UI 文字（标签/按钮/正文）：`--font-ui`，系统无衬线（Segoe UI 优先，Windows 友好，离线可用）
@@ -83,7 +83,9 @@
      ├─ .app-center (column)            ← 单列模式
      │   ├─ .viewbar    ← 视图四态 seg（日志/分屏/图表/对比）：任何模式常驻，兼作对比退出
      │   ├─ .center-body
-     │   │   ├─ LogView    ← 工具栏 + 虚拟滚动日志(横向可滚) + 空状态
+     │   │   ├─ LogView    ← 工具栏 + 虚拟滚动日志(横向可滚) + 空状态；
+     │   │   │                  'plot'（仅图表）/对比模式下 log-wrap 必须 display:none 退出布局
+     │   │   │                  （flex-basis 按日志内容高参与分配会挤压 plot/cmp 区——勿"修"回）
      │   │   ├─ .hsplit    ← 日志↔图表拖拽分割条（20–80% 钳制，serialtool.centerSplit）
      │   │   ├─ PlotView   ← centerView 'split'/'plot' 时渲染（useResizeObserver 自适应尺寸）
      │   │   └─ CompareView ← compareMode 时占中心区（双会话时间对齐；ComparePanel 已退役）
