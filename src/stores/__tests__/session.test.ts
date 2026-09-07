@@ -260,12 +260,36 @@ describe('centerView / compareMode（布局重构 V1）', () => {
     expect(store.sessions[id]!.centerView).toBe('split')
   })
 
-  it('compareMode 全局切换', () => {
+  it('compareMode 全局切换（≥2 会话）', () => {
     const store = useSessionStore()
+    store.createLocalSession('cmp-a', CFG)
+    store.createLocalSession('cmp-b', CFG)
     expect(store.compareMode).toBe(false)
     store.toggleCompareMode()
     expect(store.compareMode).toBe(true)
     store.toggleCompareMode()
+    expect(store.compareMode).toBe(false)
+  })
+
+  it('compareMode 守卫：会话不足 2 个不进入，退出不受限', () => {
+    const store = useSessionStore()
+    store.createLocalSession('cmp-only', CFG)
+    store.toggleCompareMode()
+    expect(store.compareMode).toBe(false)
+    // 兜底：异常态下已开着对比也允许退出
+    store.compareMode = true
+    store.toggleCompareMode()
+    expect(store.compareMode).toBe(false)
+  })
+
+  it('对比中关闭会话致不足 2 个时自动退出对比', async () => {
+    const store = useSessionStore()
+    const a = store.createLocalSession('cmp-x', CFG)
+    store.createLocalSession('cmp-y', CFG)
+    store.toggleCompareMode()
+    expect(store.compareMode).toBe(true)
+    await store.closeTab(a)
+    expect(store.order.length).toBe(1)
     expect(store.compareMode).toBe(false)
   })
 

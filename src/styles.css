@@ -772,12 +772,16 @@ input[type="color"]:focus-visible {
   transition: background var(--t-fast) var(--ease),
     color var(--t-fast) var(--ease);
 }
-.seg-item:hover {
+.seg-item:hover:not(:disabled) {
   color: var(--text);
 }
 .seg-item.active {
   background: var(--accent);
   color: #fff;
+}
+.seg-item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* ---------- Tabs ---------- */

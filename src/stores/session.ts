@@ -326,8 +326,10 @@ export const useSessionStore = defineStore('session', {
       this.splitMode = false
       this.columns = []
     },
-    /** 双会话时间对齐对比：全局布局态，占中心区（与 splitMode 同级） */
+    /** 双会话时间对齐对比：全局布局态，占中心区（与 splitMode 同级）；
+        会话不足 2 个时拒绝进入（退出不受限，供关闭会话后的自动退出兜底） */
     toggleCompareMode() {
+      if (!this.compareMode && this.order.length < 2) return
       this.compareMode = !this.compareMode
     },
     /** 设置某列绑定的会话；若该会话已在别列，则两列互换（避免同会话出现两次） */
@@ -423,6 +425,8 @@ export const useSessionStore = defineStore('session', {
       if (this.activeId === id) {
         this.activeId = this.order[this.order.length - 1] ?? null
       }
+      // 对比依赖 ≥2 会话：关到只剩一个时自动退出对比态，别把用户困在死界面里
+      if (this.compareMode && this.order.length < 2) this.compareMode = false
     },
     /** 断开串口但保留标签页与日志，便于稍后重连（区别于 closeTab 的彻底关闭） */
     async stopSession(id: string) {

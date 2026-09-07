@@ -235,7 +235,10 @@ function onPanelToggle(e: Event, id: string) {
               <button
                 class="seg-item"
                 :class="{ active: compareOn }"
-                title="双会话时间对齐对比（占中心区）"
+                :disabled="store.order.length < 2"
+                :title="store.order.length < 2
+                  ? '双会话时间对齐对比：需先打开第二个会话（离线日志也可）'
+                  : '双会话时间对齐对比（占中心区）'"
                 type="button"
                 @click="store.toggleCompareMode()"
               >对比</button>
