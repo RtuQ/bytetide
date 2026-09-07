@@ -50,6 +50,12 @@ export interface Session {
   pullNo: number
   /** 前端缓冲上限裁剪掉的行数（自连接或上次清屏起累计；重连迁移保留） */
   droppedLines: number
+  /** 后端 ring 覆盖丢行：拉取游标检测到的缺口（ring 容量窗口内未来得及拉取就被
+   *  覆盖的行；重连不迁移——新 ring 从零计；清屏归零） */
+  ringDropped: number
+  /** 视口锚定待补偿：已被裁剪但尚未被 LogView 消费的行数（takeEvicted 取走即清零；
+   *  重连不迁移；清屏归零） */
+  evictedPending: number
   /** 书签行号（升序；随 lines 环形淘汰自然失效——跳转前由 UI 校验行仍存在） */
   bookmarks: number[]
   /** AI 批注（REST 桥写入、事件实时同步；no 为行号，行被淘汰或清屏后标记自动隐藏） */
@@ -83,8 +89,6 @@ export interface Session {
   jump: { no: number; token: number } | null
 }
 
-/** 前端环形缓冲上限，超过则丢弃最旧行 */
-const MAX_LINES = 50000
 /** 解码帧环形上限（plan-parser-v1：1000 条/会话 FIFO） */
 const MAX_DECODED = 1000
 
@@ -100,6 +104,8 @@ function makeSession(id: string, config: PortConfig): Session {
     pulledThrough: 0,
     pullNo: 0,
     droppedLines: 0,
+    ringDropped: 0,
+    evictedPending: 0,
     bookmarks: [],
     aiNotes: [],
     decoded: [],
@@ -159,6 +165,11 @@ function loadLogConfig(): LogConfig {
     return {
       logPathTemplate: parsed.logPathTemplate ?? '',
       lineTsFormat: parsed.lineTsFormat || DEFAULT_LOG_CONFIG.lineTsFormat,
+      viewBufCap:
+        typeof parsed.viewBufCap === 'number' && Number.isFinite(parsed.viewBufCap)
+          ? parsed.viewBufCap
+          : DEFAULT_LOG_CONFIG.viewBufCap,
+      midnightRotate: parsed.midnightRotate === true,
     }
   } catch {
     return { ...DEFAULT_LOG_CONFIG }
@@ -270,9 +281,12 @@ export const useSessionStore = defineStore('session', {
       this.ports = ports
     },
     setLogConfig(patch: Partial<LogConfig>) {
-      this.logConfig = { ...this.logConfig, ...patch }
+      const next = { ...this.logConfig, ...patch }
+      // 视图缓冲上限钳制：防误设过小（裁剪风暴）或过大（内存失控）
+      next.viewBufCap = Math.min(Math.max(next.viewBufCap, 10000), 1000000)
+      this.logConfig = next
       try {
-        localStorage.setItem(LOG_CONFIG_KEY, JSON.stringify(this.logConfig))
+        localStorage.setItem(LOG_CONFIG_KEY, JSON.stringify(next))
       } catch {
         /* ignore */
       }
@@ -514,6 +528,9 @@ export const useSessionStore = defineStore('session', {
       // 丢弃计数与"当前视图缺口"绑定：清屏后缓冲从头开始，旧缺口已无意义，
       // 归零避免让人误以为当前日志仍缺数据（重连迁移保留，因日志行本身被带走）
       s.droppedLines = 0
+      // ring 覆盖缺口与锚定待补偿同理绑定“当前视图”，一并归零（pullNo 保持单调不重置）
+      s.ringDropped = 0
+      s.evictedPending = 0
       // AI 批注锚定行号，同样失义：本地清空并同步后端镜像
       s.aiNotes = []
       // 解码帧同样锚定行号：清空并由解析引擎复位该会话切帧状态（gen+1）
@@ -581,11 +598,15 @@ export const useSessionStore = defineStore('session', {
       if (arr.length === 0) return []
       // 用 concat 产生新数组引用，保证虚拟滚动器感知变化
       const fresh: LogLine[] = arr.map((r) => markRaw({ no: ++s.lineCounter, ...r }))
+      const cap = Math.max(1, this.logConfig.viewBufCap)
       const total = s.lines.length + fresh.length
       s.lines = s.lines.concat(fresh)
-      if (total > MAX_LINES) {
-        s.lines = s.lines.slice(total - MAX_LINES)
-        s.droppedLines += total - MAX_LINES
+      if (total > cap) {
+        const evicted = total - cap
+        s.lines = s.lines.slice(evicted)
+        s.droppedLines += evicted
+        // 视口锚定补偿：LogView 跟随 watcher 每批 takeEvicted 取走后按行数回补 scrollTop
+        s.evictedPending += evicted
       }
       return fresh
     },
@@ -599,6 +620,12 @@ export const useSessionStore = defineStore('session', {
     ): LogLine[] {
       const s = this.sessions[id]
       if (!s || lines.length === 0) return []
+      // ring 缺口检测（去重过滤之前）：首行 no 越过 pullNo+1 说明中间有行在 ring
+      // 容量窗口内未来得及拉取就被覆盖（前端停顿过长时发生）。ring no 从 1 起
+      // 单调递增、pullNo 初值 0，正常连续拉取不会误报。
+      if (lines[0]!.ringNo > s.pullNo + 1) {
+        s.ringDropped += lines[0]!.ringNo - (s.pullNo + 1)
+      }
       const arr = lines.filter((l) => l.ringNo > s.pullNo)
       if (arr.length === 0) return []
       // 用 concat 产生新数组引用，保证虚拟滚动器感知变化
@@ -606,14 +633,26 @@ export const useSessionStore = defineStore('session', {
       const fresh: LogLine[] = arr.map((r) =>
         markRaw({ no: ++s.lineCounter, ts: r.ts, dir: r.dir, text: r.text, bytes: r.bytes, epochMillis: r.epochMillis, rn: r.ringNo }),
       )
+      const cap = Math.max(1, this.logConfig.viewBufCap)
       const total = s.lines.length + fresh.length
       s.lines = s.lines.concat(fresh)
-      if (total > MAX_LINES) {
-        s.lines = s.lines.slice(total - MAX_LINES)
-        s.droppedLines += total - MAX_LINES
+      if (total > cap) {
+        const evicted = total - cap
+        s.lines = s.lines.slice(evicted)
+        s.droppedLines += evicted
+        s.evictedPending += evicted
       }
       s.pullNo = arr[arr.length - 1]!.ringNo
       return fresh
+    },
+    /** 视口锚定补偿：返回该会话累计的被裁行数并清零（未知会话返回 0）。
+     *  LogView 跟随 watcher 每个渲染批次消费一次，取走即清零防同 tick 多批次漏计。 */
+    takeEvicted(id: string): number {
+      const s = this.sessions[id]
+      if (!s) return 0
+      const n = s.evictedPending
+      s.evictedPending = 0
+      return n
     },
     /** 解析引擎落表：解码帧追加（元素 markRaw + 1000 条 FIFO；replace=true 用于回溯整表替换）。
      *  200ms 节流批量由调用方（useParserEngine）负责，这里只管入表。 */

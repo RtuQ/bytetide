@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useSessionStore, registerParserOnClear } from '../session'
-import { DEFAULT_PLOT_CONFIG } from '../../types'
+import { DEFAULT_LOG_CONFIG, DEFAULT_PLOT_CONFIG } from '../../types'
 import type { DecodedFrame } from '../../types/parser'
 import type { PortConfig, RawLogLine } from '../../types'
 
@@ -66,15 +66,18 @@ describe('appendPulled 拉模型摄取', () => {
     expect(store.sessions[id]!.pullNo).toBe(5)
   })
 
-  it('超过 MAX_LINES 裁剪最旧行并累计 droppedLines', () => {
+  it('超过 viewBufCap 裁剪最旧行并累计 droppedLines/evictedPending', () => {
     const store = useSessionStore()
     const id = store.createLocalSession('local-pull3', CFG)
-    const batch = Array.from({ length: 50010 }, (_, i) => mkPulled(i + 1))
+    // setLogConfig 有 [10000,1000000] 钳制，测试直接注入小 cap（不走 setLogConfig）
+    store.logConfig.viewBufCap = 20
+    const batch = Array.from({ length: 30 }, (_, i) => mkPulled(i + 1))
     store.appendPulled(id, batch)
     const s = store.sessions[id]!
-    expect(s.lines).toHaveLength(50000)
+    expect(s.lines).toHaveLength(20)
     expect(s.droppedLines).toBe(10)
-    expect(s.pullNo).toBe(50010)
+    expect(s.evictedPending).toBe(10)
+    expect(s.pullNo).toBe(30)
   })
 
   it('空批次返回空且不推进游标', () => {
@@ -84,18 +87,20 @@ describe('appendPulled 拉模型摄取', () => {
     expect(store.sessions[id]!.pullNo).toBe(0)
   })
 
-  it('clearLog 归零 droppedLines，pullNo 不回退（后端 no 单调）', async () => {
+  it('clearLog 归零 droppedLines/ringDropped，pullNo 不回退（后端 no 单调）', async () => {
     const store = useSessionStore()
     const id = store.createLocalSession('local-pull5', CFG)
-    // 超出前端缓冲上限（50000），制造 10 行丢弃
-    const batch = Array.from({ length: 50010 }, (_, i) => mkPulled(i + 1))
+    store.logConfig.viewBufCap = 20
+    // 超出前端缓冲上限，制造 10 行丢弃
+    const batch = Array.from({ length: 30 }, (_, i) => mkPulled(i + 1))
     store.appendPulled(id, batch)
     expect(store.sessions[id]!.droppedLines).toBe(10)
     await store.clearLog(id)
     // 清屏后旧缺口已无意义，丢弃计数归零
     expect(store.sessions[id]!.droppedLines).toBe(0)
+    expect(store.sessions[id]!.ringDropped).toBe(0)
     // 后端 no 游标单调不回退：清屏后旧 ringNo 不回灌，新行正常入表
-    expect(store.appendPulled(id, [mkPulled(50010), mkPulled(50011)])).toHaveLength(1)
+    expect(store.appendPulled(id, [mkPulled(30), mkPulled(31)])).toHaveLength(1)
     expect(store.sessions[id]!.lines).toHaveLength(1)
     expect(store.sessions[id]!.droppedLines).toBe(0)
   })
@@ -125,15 +130,18 @@ describe('appendPulled 拉模型摄取', () => {
     expect(store.sessions[id]!.pulledThrough).toBe(0)
   })
 
-  it('clearLog 归零 droppedLines（清屏后旧缺口已无意义）', async () => {
+  it('clearLog 归零 droppedLines 与 evictedPending（清屏后旧缺口已无意义）', async () => {
     const store = useSessionStore()
     const id = store.createLocalSession('local-drop', CFG)
-    // 超出前端缓冲上限（50000），制造 10 行丢弃
-    const batch = Array.from({ length: 50010 }, (_, i) => mkRaw(i + 1))
+    store.logConfig.viewBufCap = 20
+    // 超出前端缓冲上限，制造 10 行丢弃
+    const batch = Array.from({ length: 30 }, (_, i) => mkRaw(i + 1))
     store.appendLines(id, batch)
     expect(store.sessions[id]!.droppedLines).toBe(10)
+    expect(store.sessions[id]!.evictedPending).toBe(10)
     await store.clearLog(id)
     expect(store.sessions[id]!.droppedLines).toBe(0)
+    expect(store.sessions[id]!.evictedPending).toBe(0)
     // 清屏后继续写入，重新从 0 累计
     store.appendLines(id, [mkRaw(99999)])
     expect(store.sessions[id]!.droppedLines).toBe(0)
@@ -401,5 +409,146 @@ describe('落盘录制 recOn（录制/分段）', () => {
     expect(store.sessions[id]).toBeUndefined()
     expect(store.sessions['s99']!.recOn).toBe(false)
     expect(invokeMock).toHaveBeenCalledWith('set_recording_cmd', { sessionId: 's99', on: false })
+  })
+})
+
+describe('ringDropped ring 缺口检测（plan-buffer-logging-v1）', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  function mkPulled(ringNo: number) {
+    return { ...mkRaw(ringNo), ringNo }
+  }
+
+  it('首批即有缺口：首行 ringNo 跳变计 N（ring no 从 1 起，pullNo=0 无假阳性）', () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('rd-1', CFG)
+    // 首批从 5 起（模拟 1..4 在 ring 容量窗口内被覆盖）：缺口 4 行
+    store.appendPulled(id, [mkPulled(5), mkPulled(6)])
+    expect(store.sessions[id]!.ringDropped).toBe(4)
+  })
+
+  it('连续批次无跳变为 0；中途缺口再累计', () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('rd-2', CFG)
+    store.appendPulled(id, [mkPulled(1), mkPulled(2)])
+    expect(store.sessions[id]!.ringDropped).toBe(0)
+    store.appendPulled(id, [mkPulled(3), mkPulled(4)])
+    expect(store.sessions[id]!.ringDropped).toBe(0)
+    // 5..9 被 ring 覆盖：缺口 5
+    store.appendPulled(id, [mkPulled(10)])
+    expect(store.sessions[id]!.ringDropped).toBe(5)
+  })
+
+  it('纯重复拉取（ringNo <= pullNo）不误报缺口', () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('rd-3', CFG)
+    store.appendPulled(id, [mkPulled(1), mkPulled(2)])
+    const fresh = store.appendPulled(id, [mkPulled(1), mkPulled(2), mkPulled(3)])
+    expect(fresh).toHaveLength(1)
+    expect(store.sessions[id]!.ringDropped).toBe(0)
+  })
+
+  it('clearLog 归零 ringDropped', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('rd-4', CFG)
+    store.appendPulled(id, [mkPulled(5)])
+    expect(store.sessions[id]!.ringDropped).toBe(4)
+    await store.clearLog(id)
+    expect(store.sessions[id]!.ringDropped).toBe(0)
+  })
+
+  it('重连不迁移 ringDropped（新 ring 从零计）', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('rd-5', CFG)
+    store.setStatus(id, 'connected')
+    store.appendPulled(id, [mkPulled(5)])
+    expect(store.sessions[id]!.ringDropped).toBe(4)
+    invokeMock.mockResolvedValueOnce('s88') // connect_cmd 返回新会话 id
+    await store.reconnectSession(id)
+    expect(store.sessions[id]).toBeUndefined()
+    expect(store.sessions['s88']!.ringDropped).toBe(0)
+  })
+})
+
+describe('evictedPending / takeEvicted 视口锚定计数（plan-buffer-logging-v1）', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  function mkPulledEv(ringNo: number) {
+    return { ...mkRaw(ringNo), ringNo }
+  }
+
+  it('appendLines 裁剪累计，takeEvicted 取走即清零；未知会话返回 0', () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('ev-1', CFG)
+    store.logConfig.viewBufCap = 10
+    store.appendLines(id, Array.from({ length: 15 }, (_, i) => mkRaw(i + 1)))
+    expect(store.sessions[id]!.lines).toHaveLength(10)
+    expect(store.sessions[id]!.evictedPending).toBe(5)
+    // 同 tick 多批次：累计不丢
+    store.appendLines(id, Array.from({ length: 3 }, (_, i) => mkRaw(100 + i)))
+    expect(store.sessions[id]!.evictedPending).toBe(8)
+    expect(store.takeEvicted(id)).toBe(8)
+    expect(store.sessions[id]!.evictedPending).toBe(0)
+    // 再次取走为 0；未知会话返回 0
+    expect(store.takeEvicted(id)).toBe(0)
+    expect(store.takeEvicted('nope')).toBe(0)
+  })
+
+  it('appendPulled 裁剪同样累计；clearLog 重置', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('ev-2', CFG)
+    store.logConfig.viewBufCap = 10
+    store.appendPulled(id, Array.from({ length: 12 }, (_, i) => mkPulledEv(i + 1)))
+    expect(store.sessions[id]!.evictedPending).toBe(2)
+    expect(store.takeEvicted(id)).toBe(2)
+    await store.clearLog(id)
+    expect(store.sessions[id]!.evictedPending).toBe(0)
+  })
+})
+
+describe('logConfig viewBufCap / midnightRotate（plan-buffer-logging-v1）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    // node 环境无 localStorage：注入内存 stub（参照 useLayoutPrefs.test.ts）
+    const mem: Record<string, string> = {}
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => mem[k] ?? null,
+      setItem: (k: string, v: string) => {
+        mem[k] = v
+      },
+      removeItem: (k: string) => {
+        delete mem[k]
+      },
+    })
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('DEFAULT_LOG_CONFIG：viewBufCap=200000、midnightRotate=false', () => {
+    expect(DEFAULT_LOG_CONFIG.viewBufCap).toBe(200000)
+    expect(DEFAULT_LOG_CONFIG.midnightRotate).toBe(false)
+  })
+
+  it('setLogConfig 对 viewBufCap 钳制 [10000, 1000000]', () => {
+    const store = useSessionStore()
+    store.setLogConfig({ viewBufCap: 1 })
+    expect(store.logConfig.viewBufCap).toBe(10000)
+    store.setLogConfig({ viewBufCap: 99999999 })
+    expect(store.logConfig.viewBufCap).toBe(1000000)
+    store.setLogConfig({ viewBufCap: 200000 })
+    expect(store.logConfig.viewBufCap).toBe(200000)
+  })
+
+  it('loadLogConfig 对旧 localStorage 数据回填缺省字段', () => {
+    localStorage.setItem(
+      'serialtool.logConfig',
+      JSON.stringify({ logPathTemplate: 'D:\\log\\%H.log', lineTsFormat: '' }),
+    )
+    // loadLogConfig 在 store state 初始化时执行：重新建 pinia 触发读取
+    setActivePinia(createPinia())
+    const store = useSessionStore()
+    expect(store.logConfig.logPathTemplate).toBe('D:\\log\\%H.log')
+    expect(store.logConfig.lineTsFormat).toBe('%h:%m:%s.%t')
+    expect(store.logConfig.viewBufCap).toBe(DEFAULT_LOG_CONFIG.viewBufCap)
+    expect(store.logConfig.midnightRotate).toBe(false)
   })
 })

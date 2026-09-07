@@ -124,11 +124,17 @@ export const KEYWORD_PALETTE = [
 export interface LogConfig {
   logPathTemplate: string
   lineTsFormat: string
+  /** 视图缓冲上限（行）：日志视图内存缓冲超过即从最旧行裁剪（滑动窗口） */
+  viewBufCap: number
+  /** 午夜自动分段：录制开启时跨天自动另起新分段文件（连接/重连时生效） */
+  midnightRotate: boolean
 }
 
 export const DEFAULT_LOG_CONFIG: LogConfig = {
   logPathTemplate: '',
   lineTsFormat: '%h:%m:%s.%t',
+  viewBufCap: 200000,
+  midnightRotate: false,
 }
 
 /** 连接配置预设：命名保存的 PortConfig，可一键回填到端口栏 */

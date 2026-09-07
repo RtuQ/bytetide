@@ -51,7 +51,7 @@ function jump(no: number) {
           </span>
         </div>
         <div v-if="!live.length" class="ms-empty">
-          无书签。点击日志行选中后，按 Ctrl+F2 或工具栏“书签”按钮添加；行可能随缓冲上限（50000 行）滚动淘汰
+          无书签。点击日志行选中后，按 Ctrl+F2 或工具栏“书签”按钮添加；行可能随缓冲上限（{{ store.logConfig.viewBufCap.toLocaleString() }} 行）滚动淘汰
         </div>
       </div>
       <div class="bm-foot" v-if="live.length">

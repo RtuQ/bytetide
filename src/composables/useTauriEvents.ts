@@ -28,8 +28,8 @@ import type {
  */
 const PULL_INTERVAL_MS = 200
 const PULL_PAGE_MAX = 5000
-/** 单次 drain 最多翻页数：8×5000=4 万行 > ring 容量 2 万，一轮必收敛 */
-const PULL_MAX_PAGES = 8
+/** 单次 drain 最多翻页数：24×5000=12 万行 ≥ ring 容量 10 万，一轮必收敛 */
+const PULL_MAX_PAGES = 24
 
 interface PulledLine {
   no: number

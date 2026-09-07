@@ -52,6 +52,9 @@ const linkText = computed(() => {
     <span v-if="active.droppedLines > 0" class="sb-sect">
       <span class="sb-bad" title="前端缓冲裁剪掉的行数（重连迁移保留）">丢行 {{ active.droppedLines }}</span>
     </span>
+    <span v-if="active.ringDropped > 0" class="sb-sect">
+      <span class="sb-bad" title="后端 ring 容量窗口内未来得及拉取就被覆盖的行（前端停顿过长时发生）">Ring 丢 {{ active.ringDropped }}</span>
+    </span>
     <span class="sb-sect sb-dim" :class="perfCls" title="显示滞后=当前墙钟−最新行后端时间戳；批均=单批次处理耗时">
       滞后 {{ perf.lagMs.value }}ms · 批均 {{ perf.batchCostMs.value }}ms
     </span>

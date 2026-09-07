@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore } from '../stores/session'
 import { HIGHLIGHTER_KEY, buildTestMatcher, hlStyle } from '../composables/useHighlighter'
 import { parseAnsi, stripAnsi, type AnsiStyle } from '../composables/useAnsi'
+import { anchoredTop } from '../composables/useScrollAnchor'
 import { useRate, humanizeBytes, humanizeMs } from '../composables/useRate'
 import type { LogLine } from '../types'
 
@@ -200,13 +201,25 @@ watch(session, () => {
   nextTick(bindScroll)
 })
 
-// 跟随尾部：有新行且开启跟随时滚动到底
+// 跟随尾部：有新行且开启跟随时滚动到底。
+// 取消跟随时做视口锚定（plan-buffer-logging-v1 §2.3）：头部行被滑动窗口裁剪
+// 会让内容高度收缩、浏览器钳制 scrollTop，视口整体上移——watcher 默认 pre-flush，
+// 此刻 DOM 还是旧几何，先记 oldTop；nextTick 后按被裁行数等量回补（双向钳制）。
+// takeEvicted 取走即清零，防同 tick 多批次漏计。
+const ROW_HEIGHT = 22 // 与模板 :item-size="22" 联动；改行高须同步 .log-row height（AGENTS 红线）
 watch(
   () => session.value?.lineCounter,
   async () => {
-    if (session.value?.followTail) {
+    const s = session.value
+    if (!s) return
+    const oldTop = scrollEl?.scrollTop ?? 0 // pre-flush：DOM 还是旧几何
+    const evicted = store.takeEvicted(props.sessionId)
+    if (s.followTail) {
       await nextTick()
       scroller.value?.scrollToItem?.(viewItems.value.length - 1)
+    } else if (evicted > 0 && scrollEl) {
+      await nextTick()
+      scrollEl.scrollTop = anchoredTop(oldTop, evicted, ROW_HEIGHT, scrollEl.scrollHeight, scrollEl.clientHeight)
     }
   },
 )
@@ -433,7 +446,7 @@ onBeforeUnmount(() => {
       <span
         v-if="session.droppedLines"
         class="drop-note"
-        title="前端缓冲上限 50000 行，超出即从最旧行开始丢弃（自连接或上次清屏起累计）"
+        :title="`前端缓冲上限 ${store.logConfig.viewBufCap.toLocaleString()} 行，超出即从最旧行开始丢弃（自连接或上次清屏起累计）`"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 20h16a2 2 0 0 0 1.73-2Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
         已丢弃 {{ session.droppedLines.toLocaleString() }} 行
