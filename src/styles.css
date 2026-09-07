@@ -1132,7 +1132,6 @@ input[type="color"]:focus-visible {
   white-space: pre;
   overflow: hidden;
   padding: 0 10px;
-  border-bottom: 1px solid var(--border);
   font-family: var(--font-mono);
   font-size: 12px;
 }
