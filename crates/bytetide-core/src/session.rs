@@ -35,6 +35,16 @@ impl SessionLog {
         }
     }
 
+    /// 写入一行原始文本（现场档案头注释用；不经 TSV 三列转义，前端解析按 `#` 跳过）。
+    pub fn write_raw_line(&mut self, line: &str) {
+        let _ = writeln!(self.writer, "{line}");
+        self.pending += 1;
+        if self.pending >= 64 {
+            let _ = self.writer.flush();
+            self.pending = 0;
+        }
+    }
+
     pub fn clear(&mut self) -> std::io::Result<()> {
         let _ = self.writer.flush();
         self.writer.get_ref().set_len(0)?;

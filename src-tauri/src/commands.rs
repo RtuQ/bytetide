@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use bytetide_core::logfmt::LogConfig;
 use bytetide_core::serial::manager::{
-    BridgeAlert, BridgeAnnotation, BridgeBookmark, PlotConfig, SendMode, SendRequest,
+    BridgeAlert, BridgeAnnotation, BridgeBookmark, Pin, PlotConfig, SendMode, SendRequest,
 };
 use bytetide_core::serial::port::{list_ports, LogLine, PortConfig, PortInfo};
 use bytetide_core::serial::rules::{AlertCfg, AutoReplyCfg};
@@ -69,6 +69,24 @@ pub fn clear_log_cmd(session_id: String, state: State<'_, AppState>) -> Result<(
 }
 
 #[tauri::command]
+pub fn set_signal_cmd(
+    session_id: String,
+    pin: String,
+    level: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let pin = match pin.as_str() {
+        "dtr" => Pin::Dtr,
+        "rts" => Pin::Rts,
+        other => return Err(format!("未知信号线: {other}")),
+    };
+    state
+        .manager
+        .set_signal(&session_id, pin, level)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn session_log_path_cmd(
     session_id: String,
     state: State<'_, AppState>,
@@ -132,18 +150,90 @@ pub fn append_perf_diag_cmd(app: AppHandle, kind: String, session_id: String, la
     .map_err(|e| e.to_string())
 }
 
-/// 前端推送实时规则（自动回复/告警）到会话：拉模型下评估在后端读线程。
+/// 前端推送实时规则（自动回复/告警/现场捕获）到会话：拉模型下评估在后端读线程。
 #[tauri::command]
 pub fn set_live_rules_cmd(
     session_id: String,
     auto_reply: AutoReplyCfg,
     alerts: AlertCfg,
+    capture: bytetide_core::serial::rules::CaptureCfg,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     state
         .manager
-        .set_live_rules(&session_id, auto_reply, alerts)
+        .set_live_rules(&session_id, auto_reply, alerts, capture)
         .map_err(|e| e.to_string())
+}
+
+/// 现场档案目录（与 connect_cmd 的 sessions_dir 同源：app_data_dir()/sessions/captures）
+fn captures_dir_of(app: &AppHandle) -> PathBuf {
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("logs"))
+        .join("sessions")
+        .join("captures")
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureMeta {
+    pub file_name: String,
+    pub path: String,
+    pub size: u64,
+    pub modified_ms: u64,
+}
+
+/// 列出现场档案（sessions/captures 下的 .log，按修改时间倒序）。
+#[tauri::command]
+pub fn list_captures_cmd(app: AppHandle) -> Vec<CaptureMeta> {
+    let dir = captures_dir_of(&app);
+    let mut out: Vec<CaptureMeta> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|x| x.to_str()) != Some("log") || !p.is_file() {
+                continue;
+            }
+            let Ok(md) = e.metadata() else { continue };
+            let modified_ms = md
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            out.push(CaptureMeta {
+                file_name: p
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                path: p.to_string_lossy().into_owned(),
+                size: md.len(),
+                modified_ms,
+            });
+        }
+    }
+    out.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms));
+    out
+}
+
+/// 现场档案目录绝对路径（前端「打开目录」用；前端无法自行解析 app_data_dir）。
+#[tauri::command]
+pub fn captures_dir_cmd(app: AppHandle) -> String {
+    captures_dir_of(&app).to_string_lossy().into_owned()
+}
+
+/// 删除单个现场档案。守卫：只允许删 captures 目录内的 .log（防误删任意文件）。
+#[tauri::command]
+pub fn delete_capture_cmd(app: AppHandle, path: String) -> Result<(), String> {
+    let dir = captures_dir_of(&app)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let p = PathBuf::from(&path).canonicalize().map_err(|e| e.to_string())?;
+    if !p.starts_with(&dir) || p.extension().and_then(|x| x.to_str()) != Some("log") {
+        return Err("路径不在现场档案目录内".into());
+    }
+    std::fs::remove_file(&p).map_err(|e| e.to_string())
 }
 
 /// 视图拉模型数据通道：取 ring 中 `no > sinceNo` 的行（封顶 100000=ring 容量）。

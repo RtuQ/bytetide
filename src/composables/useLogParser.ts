@@ -25,7 +25,7 @@ export function parseTsToMs(ts: string): number {
  * - dir：RX/TX -> rx/tx，非法视为 rx
  * - bytes：恒 null（自动日志有损，不含原始字节；二进制源不可恢复）
  * - epochMillis：由 ts 解析为毫秒数；解析失败退化为行序号（保持单调）
- * - 跳过字段不足的非法行，计入 errors
+ * - 跳过 `#` 注释行（现场档案头元信息）与字段不足的非法行（后者计入 errors）
  * - 截断到 MAX_LINES（保留最后）
  */
 export function parseLogFile(content: string): ParsedLog {
@@ -35,6 +35,8 @@ export function parseLogFile(content: string): ParsedLog {
   const rawLines = content.split(/\r?\n/)
   for (const line of rawLines) {
     if (line === '') continue
+    // 注释行（现场档案的头元信息）：跳过不计错误
+    if (line.startsWith('#')) continue
     // text 内可能含 tab，故仅按前两个字 tab 切分
     const first = line.indexOf('\t')
     if (first < 0) {

@@ -30,6 +30,7 @@ import AutoReplyPanel from './components/AutoReplyPanel.vue'
 import AlertPanel from './components/AlertPanel.vue'
 import ConfigPresetsPanel from './components/ConfigPresetsPanel.vue'
 import PlotConfigPanel from './components/PlotConfigPanel.vue'
+import CapturePanel from './components/CapturePanel.vue'
 import AiNotesPanel from './components/AiNotesPanel.vue'
 import SendPanel from './components/SendPanel.vue'
 import SplitView from './components/SplitView.vue'
@@ -311,6 +312,7 @@ function onPanelToggle(e: Event, id: string) {
 
         <div class="group-head">数据</div>
         <PlotConfigPanel :open="panel.isOpen('plot')" @toggle="onPanelToggle($event, 'plot')" />
+        <CapturePanel :open="panel.isOpen('capture')" @toggle="onPanelToggle($event, 'capture')" />
 
         <div class="group-head">库</div>
         <ConfigPresetsPanel :open="panel.isOpen('presets')" @toggle="onPanelToggle($event, 'presets')" />

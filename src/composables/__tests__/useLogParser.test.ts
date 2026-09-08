@@ -60,6 +60,18 @@ describe('parseLogFile', () => {
     expect(r.errors).toBe(1) // 仅 notabline
   })
 
+  it('skips # comment lines (capture file headers)', () => {
+    const content = [
+      '# bytetide-capture v1 trigger=keyword rule=OVERTEMP at_ms=1757424631123 at=2026-09-09T21:30:31.123+08:00',
+      '# 注意：更早的行已超出 ring 窗口，部分前置现场缺失',
+      '00:00:00.000\tRX\treal line',
+    ].join('\n')
+    const r = parseLogFile(content)
+    expect(r.total).toBe(1)
+    expect(r.errors).toBe(0)
+    expect(r.lines[0]!.text).toBe('real line')
+  })
+
   it('caps to 50000 keeping the last', () => {
     const one = '00:00:00.000\tRX\tx'
     const r = parseLogFile(Array(50_001).fill(one).join('\n'))

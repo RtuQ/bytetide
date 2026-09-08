@@ -53,6 +53,32 @@ pub struct AlertCfg {
     pub rules: Vec<AlertRuleCfg>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CaptureRuleCfg {
+    pub id: String,
+    pub pattern: String,
+    pub use_regex: bool,
+    pub case_sensitive: bool,
+    pub whole_word: bool,
+    pub enabled: bool,
+}
+
+/// 触发式现场捕获配置：命中规则把 ring 里前 pre_ms 窗口转储为档案，
+/// 并继续写 post_ms 后续窗口（行车记录仪语义）。评估在读线程内逐行进行。
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CaptureCfg {
+    pub enabled: bool,
+    /// 断连/读错误时也回溯抓一段（设备重启/掉线现场）
+    pub on_disconnect: bool,
+    /// 触发前回溯窗口（毫秒）
+    pub pre_ms: u64,
+    /// 触发后继续录制窗口（毫秒）
+    pub post_ms: u64,
+    pub rules: Vec<CaptureRuleCfg>,
+}
+
 // ============ 匹配（语义对齐前端 buildTestMatcher） ============
 
 /// 非正则=字面量转义；whole_word 仅对字面量包 `\b`（与前端一致）；
@@ -164,6 +190,33 @@ pub fn alert_eval(
         fired.push(r.clone());
     }
     fired
+}
+
+// ============ 现场捕获触发（无窗口/冷却——重复触发由“armed 顺延”合并） ============
+
+/// 评估一行 RX 文本，返回命中的捕获规则（可能多个，按规则序）。
+pub fn capture_eval(cfg: &CaptureCfg, text: &str) -> Vec<CaptureRuleCfg> {
+    let mut hit = Vec::new();
+    if !cfg.enabled {
+        return hit;
+    }
+    for r in &cfg.rules {
+        if !r.enabled || r.pattern.is_empty() {
+            continue;
+        }
+        if let Some(re) = build_test_matcher(&r.pattern, r.use_regex, r.case_sensitive, r.whole_word)
+        {
+            if re.is_match(text) {
+                hit.push(r.clone());
+            }
+        }
+    }
+    hit
+}
+
+/// 窗口钳制：pre/post 下限 1s（避免 0 造成瞬时关闭）、上限 30min（防档案无限膨胀）。
+pub fn clamp_capture_window(ms: u64) -> u64 {
+    ms.clamp(1_000, 1_800_000)
 }
 
 #[cfg(test)]
@@ -288,5 +341,55 @@ mod tests {
             rules: vec![al_rule("(unclosed")],
         };
         assert!(alert_eval(&bad, &mut s, "x", 1).is_empty());
+    }
+
+    // ---------- 现场捕获触发 ----------
+
+    fn cap_rule(pattern: &str, use_regex: bool) -> CaptureRuleCfg {
+        CaptureRuleCfg {
+            id: "c1".into(),
+            pattern: pattern.into(),
+            use_regex,
+            case_sensitive: false,
+            whole_word: false,
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn capture_eval_matches_and_respects_enable() {
+        let cfg = CaptureCfg {
+            enabled: true,
+            on_disconnect: false,
+            pre_ms: 60_000,
+            post_ms: 30_000,
+            rules: vec![cap_rule("ERROR|Fault", true), cap_rule("overtemp", false)],
+        };
+        let hits = capture_eval(&cfg, "ERROR: OVERTEMP");
+        assert_eq!(hits.len(), 2); // 正则命中 ERROR + 字面量命中 OVERTEMP
+        assert!(capture_eval(&cfg, "all normal").is_empty());
+
+        let off = CaptureCfg { enabled: false, ..cfg.clone() };
+        assert!(capture_eval(&off, "ERROR").is_empty());
+
+        // 非法正则被跳过；disabled 规则被跳过
+        let bad = CaptureCfg {
+            enabled: true,
+            rules: vec![cap_rule("(unclosed", true)],
+            ..Default::default()
+        };
+        assert!(capture_eval(&bad, "x").is_empty());
+        let mut disabled = cap_rule("x", false);
+        disabled.enabled = false;
+        let cfg2 = CaptureCfg { enabled: true, rules: vec![disabled], ..Default::default() };
+        assert!(capture_eval(&cfg2, "x").is_empty());
+    }
+
+    #[test]
+    fn capture_window_clamped() {
+        assert_eq!(clamp_capture_window(0), 1_000);
+        assert_eq!(clamp_capture_window(999), 1_000);
+        assert_eq!(clamp_capture_window(60_000), 60_000);
+        assert_eq!(clamp_capture_window(u64::MAX), 1_800_000);
     }
 }

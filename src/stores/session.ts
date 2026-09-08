@@ -7,11 +7,14 @@ import {
   DEFAULT_PLOT_CONFIG,
   DEFAULT_SEARCH,
   KEYWORD_PALETTE,
+  makeCaptureCfg,
   type AiAnnotation,
   type AlertRule,
   type AlertState,
   type AutoReplyRule,
   type AutoReplyState,
+  type CaptureCfg,
+  type CaptureMeta,
   type ConfigPreset,
   type FilterStage,
   type LogConfig,
@@ -23,6 +26,9 @@ import {
   type PresetCategory,
   type RawLogLine,
   type SearchState,
+  type SendPreset,
+  type SendSequence,
+  type SeqStep,
   type SessionKind,
   type SessionStatus,
   type Keyword,
@@ -83,6 +89,9 @@ export interface Session {
   autoReply: AutoReplyState
   /** 告警规则（RX 行扫描，触发系统通知+历史） */
   alerts: AlertState
+  /** 触发式现场捕获配置（RX 行命中规则/告警联动/断连 → ring 回溯转储档案；
+   *  会话级，重连迁移；评估在后端读线程） */
+  capture: CaptureCfg
   plot: PlotConfig
   /** 中心区视图模式（会话级偏好，重连迁移；clearLog 不清——视图偏好非数据） */
   centerView: CenterView
@@ -132,6 +141,7 @@ function makeSession(id: string, config: PortConfig): Session {
     keywords: [],
     autoReply: { enabled: false, rules: [] },
     alerts: { ...DEFAULT_ALERT_STATE, rules: [] },
+    capture: makeCaptureCfg(),
     plot: { ...DEFAULT_PLOT_CONFIG },
     centerView: 'log',
     followTail: true,
@@ -231,6 +241,64 @@ function savePresets(list: PortPreset[]) {
   }
 }
 
+const SEND_PRESETS_KEY = 'serialtool.sendPresets'
+const SEND_PRESETS_CAP = 50
+function loadSendPresets(): SendPreset[] {
+  try {
+    const raw = localStorage.getItem(SEND_PRESETS_KEY)
+    if (!raw) return []
+    const arr = JSON.parse(raw)
+    if (!Array.isArray(arr)) return []
+    return arr.filter(
+      (x): x is SendPreset =>
+        !!x &&
+        typeof x.id === 'string' &&
+        typeof x.name === 'string' &&
+        typeof x.payload === 'string' &&
+        (x.mode === 'ascii' || x.mode === 'hex'),
+    )
+  } catch {
+    return []
+  }
+}
+
+const SEND_SEQUENCES_KEY = 'serialtool.sendSequences'
+function isSeqStep(x: unknown): x is SeqStep {
+  if (!x || typeof x !== 'object') return false
+  const s = x as Partial<SeqStep>
+  if (s.kind === 'send')
+    return (
+      typeof s.payload === 'string' &&
+      (s.mode === 'ascii' || s.mode === 'hex') &&
+      typeof s.appendNewline === 'boolean'
+    )
+  if (s.kind === 'delay') return typeof s.ms === 'number' && Number.isFinite(s.ms) && s.ms >= 0
+  if (s.kind === 'signal') return (s.pin === 'dtr' || s.pin === 'rts') && typeof s.level === 'boolean'
+  return false
+}
+function loadSendSequences(): SendSequence[] {
+  try {
+    const raw = localStorage.getItem(SEND_SEQUENCES_KEY)
+    if (!raw) return []
+    const arr = JSON.parse(raw)
+    if (!Array.isArray(arr)) return []
+    return arr
+      .filter(
+        (x): x is SendSequence =>
+          !!x &&
+          typeof x.id === 'string' &&
+          typeof x.name === 'string' &&
+          Array.isArray(x.steps) &&
+          typeof x.loop === 'boolean' &&
+          typeof x.intervalMs === 'number' &&
+          Number.isFinite(x.intervalMs),
+      )
+      .map((x) => ({ ...x, steps: x.steps.filter(isSeqStep) }))
+  } catch {
+    return []
+  }
+}
+
 const CONFIG_PRESETS_KEY = 'serialtool.configPresets'
 const CONFIG_PRESET_CATEGORIES: PresetCategory[] = ['filters', 'keywords', 'autoReply', 'plots']
 /** 类别名→预设数量上限（防 localStorage 膨胀） */
@@ -265,6 +333,26 @@ function saveConfigPresets(list: ConfigPreset[]) {
 
 let presetSeq = 0
 
+/** 序列运行进度（UI 实时显示：轮次/步骤）；同一时刻全局最多一个序列在跑 */
+export interface SeqRunState {
+  sessionId: string
+  seqId: string
+  round: number
+  step: number
+}
+/** 当前运行的停止旗标（模块级：无需响应式，run 循环内轮询） */
+let seqStopFlag: { stopped: boolean } | null = null
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+/** 可中断休眠：50ms 粒度轮询停止旗标，保证「停止」按钮即时生效 */
+async function sleepInterruptible(ms: number, flag: { stopped: boolean }) {
+  let left = Math.max(0, ms)
+  while (left > 0 && !flag.stopped) {
+    const chunk = Math.min(50, left)
+    await sleep(chunk)
+    left -= chunk
+  }
+}
+
 export const useSessionStore = defineStore('session', {
   state: () => ({
     sessions: {} as Record<string, Session>,
@@ -275,6 +363,11 @@ export const useSessionStore = defineStore('session', {
     searchHistory: loadSearchHistory(),
     configPresets: loadConfigPresets(),
     presets: loadPresets(),
+    sendPresets: loadSendPresets(),
+    sendSequences: loadSendSequences(),
+    seqRun: null as SeqRunState | null,
+    /** 现场档案列表（sessions/captures；loadCaptures/capture-saved 事件刷新） */
+    captures: [] as CaptureMeta[],
     splitMode: false,
     compareMode: false,
     columns: [] as (string | null)[],
@@ -327,6 +420,121 @@ export const useSessionStore = defineStore('session', {
       if (!trimmed) return
       this.presets = this.presets.map((p) => (p.id === id ? { ...p, name: trimmed } : p))
       savePresets(this.presets)
+    },
+    /** 保存快捷帧：带 id 为改名/改内容，否则新增（超出上限丢最旧） */
+    saveSendPreset(input: { id?: string; name: string; payload: string; mode: 'ascii' | 'hex' }) {
+      const name = input.name.trim()
+      if (!name) return
+      if (input.id) {
+        this.sendPresets = this.sendPresets.map((p) =>
+          p.id === input.id ? { ...p, name, payload: input.payload, mode: input.mode } : p,
+        )
+      } else {
+        presetSeq += 1
+        const p: SendPreset = {
+          id: `q${Date.now().toString(36)}${presetSeq}`,
+          name,
+          payload: input.payload,
+          mode: input.mode,
+        }
+        this.sendPresets = [...this.sendPresets, p]
+        if (this.sendPresets.length > SEND_PRESETS_CAP) {
+          this.sendPresets = this.sendPresets.slice(this.sendPresets.length - SEND_PRESETS_CAP)
+        }
+      }
+      try {
+        localStorage.setItem(SEND_PRESETS_KEY, JSON.stringify(this.sendPresets))
+      } catch {
+        /* ignore */
+      }
+    },
+    removeSendPreset(id: string) {
+      this.sendPresets = this.sendPresets.filter((p) => p.id !== id)
+      try {
+        localStorage.setItem(SEND_PRESETS_KEY, JSON.stringify(this.sendPresets))
+      } catch {
+        /* ignore */
+      }
+    },
+    /** 保存发送序列（整体覆盖同 id；intervalMs 钳制 ≥50ms 防定时器风暴） */
+    saveSendSequence(seq: SendSequence) {
+      const name = seq.name.trim()
+      if (!name) return
+      const next: SendSequence = {
+        ...seq,
+        name,
+        steps: seq.steps.filter(isSeqStep),
+        intervalMs: Math.max(50, seq.intervalMs),
+      }
+      if (this.sendSequences.some((x) => x.id === next.id)) {
+        this.sendSequences = this.sendSequences.map((x) => (x.id === next.id ? next : x))
+      } else {
+        this.sendSequences = [...this.sendSequences, next]
+      }
+      try {
+        localStorage.setItem(SEND_SEQUENCES_KEY, JSON.stringify(this.sendSequences))
+      } catch {
+        /* ignore */
+      }
+    },
+    removeSendSequence(id: string) {
+      this.sendSequences = this.sendSequences.filter((s) => s.id !== id)
+      try {
+        localStorage.setItem(SEND_SEQUENCES_KEY, JSON.stringify(this.sendSequences))
+      } catch {
+        /* ignore */
+      }
+    },
+    /** DTR/RTS 置位：仅 live 会话；网络源由后端报“无信号线”，错误抛给调用方提示 */
+    async setSignal(id: string, pin: 'dtr' | 'rts', level: boolean) {
+      const s = this.sessions[id]
+      if (!s || s.kind !== 'live') return
+      await invoke('set_signal_cmd', { sessionId: id, pin, level })
+    },
+    /** 运行发送序列：步骤按序执行（发送/延时/信号），循环模式轮间隔后重复。
+     *  断开、切换目标会话状态失效或 stopSequence 即中止；同一时刻仅一个序列 */
+    async runSequence(id: string, seqId: string) {
+      const seq = this.sendSequences.find((x) => x.id === seqId)
+      if (!seq || this.seqRun) return
+      const start = this.sessions[id]
+      if (!start || start.kind !== 'live' || start.status !== 'connected') return
+      const flag = { stopped: false }
+      seqStopFlag = flag
+      this.seqRun = { sessionId: id, seqId, round: 0, step: -1 }
+      try {
+        do {
+          this.seqRun.round += 1
+          for (let i = 0; i < seq.steps.length; i++) {
+            if (flag.stopped) return
+            const cur = this.sessions[id]
+            if (!cur || cur.kind !== 'live' || cur.status !== 'connected') return
+            this.seqRun.step = i
+            const st = seq.steps[i]
+            try {
+              if (st.kind === 'send') {
+                const payload =
+                  st.mode === 'ascii' && st.appendNewline ? st.payload + '\n' : st.payload
+                await this.send(id, payload, st.mode)
+              } else if (st.kind === 'signal') {
+                await this.setSignal(id, st.pin, st.level)
+              }
+            } catch (e) {
+              // 发送/信号失败即中止（设备可能已断开），错误冒泡给 UI 提示
+              throw e
+            }
+            if (st.kind === 'delay') await sleepInterruptible(st.ms, flag)
+          }
+          if (seq.loop && !flag.stopped) await sleepInterruptible(seq.intervalMs, flag)
+        } while (seq.loop && !flag.stopped)
+      } finally {
+        if (seqStopFlag === flag) {
+          seqStopFlag = null
+          this.seqRun = null
+        }
+      }
+    },
+    stopSequence() {
+      if (seqStopFlag) seqStopFlag.stopped = true
     },
     pushSearchHistory(pattern: string) {
       const p = pattern.trim()
@@ -503,6 +711,7 @@ export const useSessionStore = defineStore('session', {
         keywords: s.keywords.map((k) => ({ ...k })),
         autoReply: s.autoReply,
         alerts: { enabled: s.alerts.enabled, rules: s.alerts.rules.map((r) => ({ ...r })) },
+        capture: s.capture,
         plot: s.plot,
         centerView: s.centerView,
         followTail: s.followTail,
@@ -575,7 +784,31 @@ export const useSessionStore = defineStore('session', {
         sessionId: id,
         autoReply: { enabled: s.autoReply.enabled, rules: s.autoReply.rules },
         alerts: { enabled: s.alerts.enabled, rules: s.alerts.rules },
+        capture: { ...s.capture },
       }).catch(() => {})
+    },
+    /** 更新现场捕获配置（会话级，重连迁移）：本地合并后整包推送后端读线程 */
+    updateCapture(id: string, patch: Partial<CaptureCfg>) {
+      const s = this.sessions[id]
+      if (!s || s.kind !== 'live') return
+      s.capture = { ...s.capture, ...patch }
+      this.pushLiveRules(id)
+    },
+    /** 现场档案列表（全局，非会话级）：连接/收到 capture-saved 后刷新 */
+    async loadCaptures() {
+      try {
+        this.captures = await invoke<CaptureMeta[]>('list_captures_cmd')
+      } catch {
+        /* 浏览器冒烟无后端：静默 */
+      }
+    },
+    async deleteCapture(path: string) {
+      try {
+        await invoke('delete_capture_cmd', { path })
+      } catch (e: unknown) {
+        alert(String(e instanceof Error ? e.message : e))
+      }
+      await this.loadCaptures()
     },
     async openLogPath(id: string) {
       try {

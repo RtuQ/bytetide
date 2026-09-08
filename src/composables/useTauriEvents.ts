@@ -254,6 +254,9 @@ export async function setupEvents(): Promise<UnlistenFn[]> {
     ),
   )
 
+  // 现场捕获档案落成（极稀疏：一次触发一条）：刷新侧栏档案列表
+  unlistens.push(await listen('capture-saved', () => void store.loadCaptures()))
+
   return unlistens
 }
 
