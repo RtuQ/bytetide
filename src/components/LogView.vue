@@ -10,7 +10,7 @@ import { parseAnsi, stripAnsi, type AnsiStyle } from '../composables/useAnsi'
 import { anchoredTop } from '../composables/useScrollAnchor'
 import { lineHexDump, lineHexLen } from '../composables/useHexDump'
 import { lineBytes } from '../parser/lineBytes'
-import { useRate, humanizeBytes, humanizeMs } from '../composables/useRate'
+import { humanizeMs } from '../composables/useRate'
 import { requestBackfill } from '../composables/useTauriEvents'
 import type { LogLine } from '../types'
 
@@ -185,11 +185,6 @@ function onKeydown(e: KeyboardEvent) {
 }
 window.addEventListener('keydown', onKeydown)
 onScopeDispose(() => window.removeEventListener('keydown', onKeydown))
-const totalBytes = computed(() => {
-  const s = session.value
-  return s ? (s.rxBytes ?? 0) + (s.txBytes ?? 0) : 0
-})
-const bps = useRate(() => totalBytes.value)
 
 // 落盘录制/分段仅对读线程存活的会话可用（已连接或连接中），未连接时命令通道已关
 const recLive = computed(() => {
@@ -503,9 +498,6 @@ onBeforeUnmount(() => {
     </LogScroller>
 
     <div v-if="session" class="logview-foot">
-      <span class="stats" :title="`RX ${session.rxLines ?? 0} 行 / TX ${session.txLines ?? 0} 行`">
-        RX {{ humanizeBytes(session.rxBytes) }} · TX {{ humanizeBytes(session.txBytes) }} · {{ humanizeBytes(bps) }}/s
-      </span>
       <span
         v-if="session.droppedLines"
         class="drop-note"

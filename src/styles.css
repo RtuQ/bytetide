@@ -2635,17 +2635,6 @@ input[type="color"]:focus-visible {
   background: var(--bg-surface);
   border-top: 1px solid var(--border);
 }
-.stats {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  white-space: nowrap;
-  padding: 0 4px;
-}
 .drop-note {
   margin-left: auto;
   display: inline-flex;
