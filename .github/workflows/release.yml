@@ -76,8 +76,25 @@ jobs:
       - name: Install JS deps
         run: npm ci
 
+      # --bundles app：只出 .app。DMG 不交给 tauri 打（signingIdentity "-" 下
+      # tauri 打出的 DMG 内 app 缺 _CodeSignature 封签，Gatekeeper 报「已损坏」），
+      # 改为下方显式封签 + hdiutil 自制，行为确定
       - name: Build app
-        run: npx tauri build
+        run: npx tauri build --bundles app
+
+      - name: Seal app (ad-hoc) and verify
+        run: |
+          codesign --force --deep --sign - target/release/bundle/macos/ByteTide.app
+          codesign --verify --deep --strict target/release/bundle/macos/ByteTide.app
+
+      - name: Create DMG
+        run: |
+          VERSION=$(python3 -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+          mkdir -p target/release/bundle/dmg dmg-staging
+          cp -Rp target/release/bundle/macos/ByteTide.app dmg-staging/
+          ln -s /Applications dmg-staging/Applications
+          hdiutil create -volname "ByteTide" -srcfolder dmg-staging -ov -format UDZO \
+            "target/release/bundle/dmg/ByteTide_${VERSION}_aarch64.dmg"
 
       # 工作区化后 bundle 也落在根 target/release/bundle/（不再是 src-tauri/target/）
       - name: Upload artifact
