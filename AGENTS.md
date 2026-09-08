@@ -216,7 +216,8 @@ UI 层与逻辑层严格分离：
 4. `npm run build` —— `vue-tsc --noEmit` 类型检查 + `vite build`，两者都过才算改完
 5. `npm run dev`（端口 1420，strictPort）浏览器看布局；接真实串口用 `npm run tauri dev`
 6. 浏览器无 Tauri 后端时，`invoke`/`listen` 会失败，但空状态 UI 仍应正常渲染、不崩——这是冒烟检查
-7. 虚拟滚动行高改了要同步改 `LogView.vue` 的 `:item-size` 与 `.log-row` 的 `height`（当前都是 22px）
+7. 虚拟滚动行高改了要同步改 `LogScroller.vue` 的 `item-size` 默认值、`LogView.vue` 模板的 `:item-size` 与 `ROW_HEIGHT`、`.log-row` 的 `height`（当前都是 22px）
+8. 日志虚拟滚动用自研 `LogScroller.vue`（按行 no 稳定 key，数据更新只改节点 top 不换内容，流式接收中文本选区不打断）；**勿换回池复用型虚拟滚动**（vue-virtual-scroller 每次 items 变化整池释放重建 DOM，选区必丢）
 
 ### 测试规范（新增/修改功能必须遵守）
 - **改逻辑层必须同步新增或更新测试**：`stores/`、`composables/`、`src-tauri/src/` 的纯函数 / 分支 / 边界用例补单测；只改 `.vue` 的 `<template>` 可只跑构建，但触及 store action 或 composable 计算逻辑的改动不算纯 UI

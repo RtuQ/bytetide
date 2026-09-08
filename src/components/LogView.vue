@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, onScopeDispose, ref, watch } from 'vue'
-import { RecycleScroller } from 'vue-virtual-scroller'
+import LogScroller from './LogScroller.vue'
 import { useThrottleFn } from '@vueuse/core'
 import { save } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
@@ -86,8 +86,8 @@ const showLineNo = computed(() => session.value?.showLineNo ?? true)
 const showDir = computed(() => session.value?.showDir ?? true)
 
 // 日志区最小宽度：等宽字体按最长行字符数×ch 估宽，超出视口时 scroller 横向滚动。
-// 宽度经 --log-min-w 撑在库的 item-wrapper 上（其自带 overflow:hidden 会裁掉
-// 行级溢出，行本身无法产生滚动范围），全部行共用保证滚动条稳定不跳。
+// 宽度经 --log-min-w 撑在 LogScroller 的 ls-sizer 上产生横向滚动范围（行级
+// overflow:hidden 只裁自身溢出），全部行共用保证滚动条稳定不跳。
 // 估算口径与实际渲染对齐（styles.css 列宽）：ts 与 text 同为等宽字体，
 // 一并按字符数计入（自定义长时间戳模板自动跟随）；像素列只含
 // gutter(12) + padding(20) + no(66) + dir(30)，Δ 列(66) 仅打开时计入；
@@ -180,8 +180,10 @@ async function exportLog() {
   }
 }
 
-// RecycleScroller 实例（库未带类型，按 any 处理）
-const scroller = ref<any>(null)
+// LogScroller 实例（泛型 SFC 不能用 InstanceType，直接声明 expose 的公开面）
+const scroller = ref<{ el: HTMLElement | null; scrollToItem: (index: number) => void } | null>(
+  null,
+)
 let scrollEl: HTMLElement | null = null
 
 function onScroll() {
@@ -196,7 +198,7 @@ function onScroll() {
 }
 
 function bindScroll() {
-  const el: HTMLElement | undefined = scroller.value?.$el
+  const el: HTMLElement | null | undefined = scroller.value?.el
   if (el && el !== scrollEl) {
     scrollEl?.removeEventListener('scroll', onScroll)
     el.addEventListener('scroll', onScroll, { passive: true })
@@ -215,7 +217,7 @@ watch(session, () => {
 // takeEvicted 取走即清零，防同 tick 多批次漏计。
 // 方案 B 同一 watcher 统一补偿：上滑回补把行插到头部，内容高度增长会把视口
 // 内容相对下推 N 行，按回补行数（仅计通过过滤链、真正渲染占高的）等量下移抵消。
-const ROW_HEIGHT = 22 // 与模板 :item-size="22" 联动；改行高须同步 .log-row height（AGENTS 红线）
+const ROW_HEIGHT = 22 // 与模板 LogScroller 的 item-size 联动；改行高须同步 .log-row height（AGENTS 红线）
 watch(
   // backfillTotal 入列：补行不推进 lineCounter，需独立触发源
   [() => session.value?.lineCounter, () => session.value?.backfillTotal],
@@ -227,7 +229,7 @@ watch(
     const backfilled = store.takeBackfilled(props.sessionId)
     if (s.followTail) {
       await nextTick()
-      scroller.value?.scrollToItem?.(viewItems.value.length - 1)
+      scroller.value?.scrollToItem(viewItems.value.length - 1)
     } else if (evicted > 0 || backfilled.length > 0) {
       // 补行中只有通过过滤链的才真正渲染占高，补偿按渲染行数计
       const rendered = backfilled.length > 0 ? filterLines(s, backfilled).length : 0
@@ -248,7 +250,7 @@ watch(
     await nextTick()
     const idx = viewItems.value.findIndex((l) => l.no === j.no)
     if (idx >= 0) {
-      scroller.value?.scrollToItem?.(idx)
+      scroller.value?.scrollToItem(idx)
       flashNo.value = j.no
       setTimeout(() => {
         if (flashNo.value === j.no) flashNo.value = null
@@ -417,7 +419,7 @@ onBeforeUnmount(() => {
       </span>
     </div>
 
-    <RecycleScroller
+    <LogScroller
       v-if="session"
       ref="scroller"
       class="scroller"
@@ -452,7 +454,7 @@ onBeforeUnmount(() => {
           </template>
         </span>
       </div>
-    </RecycleScroller>
+    </LogScroller>
 
     <div v-if="session" class="logview-foot">
       <span class="stats" :title="`RX ${session.rxLines ?? 0} 行 / TX ${session.txLines ?? 0} 行`">

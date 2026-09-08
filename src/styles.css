@@ -1114,14 +1114,18 @@ input[type="color"]:focus-visible {
 .scroller {
   flex: 1;
   height: 100%;
-  overflow-x: auto;
+  overflow: auto;
 }
-/* 覆盖 vue-virtual-scroller 的裁剪布局：把估宽撑到 wrapper 上产生横向滚动范围，
-   行/条目再继承同一宽度，长行完整可读（其自带 overflow:hidden 会吞掉行级溢出） */
-.scroller .vue-recycle-scroller__item-wrapper {
+/* LogScroller：估宽撑在 sizer 上产生横向滚动范围，行按窗口下标绝对定位。
+   行以行号 no 为 key 稳定复用（数据更新只改 top 不换内容），流式接收中
+   浏览器文本选区的 DOM 锚点得以存活——这是弃用池复用型虚拟滚动的根因 */
+.scroller .ls-sizer {
+  position: relative;
   min-width: var(--log-min-w, 100%);
 }
-.scroller.ready.direction-vertical .vue-recycle-scroller__item-view {
+.scroller .ls-row {
+  position: absolute;
+  left: 0;
   width: 100%;
 }
 .log-row {
