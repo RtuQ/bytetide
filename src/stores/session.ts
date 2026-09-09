@@ -368,6 +368,8 @@ export const useSessionStore = defineStore('session', {
     seqRun: null as SeqRunState | null,
     /** 现场档案列表（sessions/captures；loadCaptures/capture-saved 事件刷新） */
     captures: [] as CaptureMeta[],
+    /** 现场捕获 armed 状态（会话 id → 触发规则；capture-active 到达置位、capture-saved 解除） */
+    captureActive: {} as Record<string, string>,
     splitMode: false,
     compareMode: false,
     columns: [] as (string | null)[],
@@ -809,6 +811,11 @@ export const useSessionStore = defineStore('session', {
         alert(String(e instanceof Error ? e.message : e))
       }
       await this.loadCaptures()
+    },
+    /** 捕获 armed 状态置位/解除（useTauriEvents 两个捕获事件共用） */
+    setCaptureActive(id: string, rule: string | null) {
+      if (rule) this.captureActive[id] = rule
+      else delete this.captureActive[id]
     },
     async openLogPath(id: string) {
       try {

@@ -180,6 +180,10 @@ function delStep(i: number) {
 const runningHere = computed(
   () => store.seqRun?.sessionId === active.value?.id && store.seqRun?.seqId === curSeqId.value,
 )
+/** 步骤完成 = 运行游标已越过该步（循环回卷时 step 重小，勾自动清） */
+function stepDone(i: number) {
+  return runningHere.value && !!store.seqRun && store.seqRun.step > i
+}
 const canRun = computed(() => {
   const s = active.value
   return !!s && s.kind === 'live' && s.status === 'connected'
@@ -203,6 +207,15 @@ const ckEndian = ref<'be' | 'le'>('be')
 const ckRows = computed<ChecksumRow[]>(() =>
   checksumResults(ckInput.value, ckMode.value, ckEndian.value),
 )
+// 结果变化时值闪一下 accent：先摘类再下一帧挂回，保证连续输入时动画重放
+const ckFlash = ref(false)
+watch(ckRows, () => {
+  if (!ckRows.value.length) return
+  ckFlash.value = false
+  requestAnimationFrame(() => {
+    ckFlash.value = true
+  })
+})
 function appendCk(row: ChecksumRow) {
   const cur = text.value.trim()
   text.value = cur ? `${cur} ${row.hexBytes}` : row.hexBytes
@@ -402,9 +415,12 @@ function saveCkPreset() {
             v-for="(st, i) in draft.steps"
             :key="i"
             class="seq-step"
-            :class="{ running: runningHere && store.seqRun?.step === i }"
+            :class="{ running: runningHere && store.seqRun?.step === i, done: stepDone(i) }"
           >
-            <span class="idx">{{ i + 1 }}</span>
+            <span class="idx">
+              <svg v-if="stepDone(i)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <template v-else>{{ i + 1 }}</template>
+            </span>
             <span class="kind" :class="`k-${st.kind}`">
               <svg v-if="st.kind === 'send'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
               <svg v-else-if="st.kind === 'delay'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -491,7 +507,7 @@ function saveCkPreset() {
             </select>
           </div>
         </div>
-        <div v-if="ckRows.length" class="ck-table">
+        <div v-if="ckRows.length" class="ck-table" :class="{ 'ck-flash': ckFlash }" @animationend="ckFlash = false">
           <div v-for="row in ckRows" :key="row.algo" class="ck-row">
             <span class="algo">{{ row.algo }}</span>
             <span class="val">{{ row.hexBytes }}</span>

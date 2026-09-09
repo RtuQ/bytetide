@@ -33,6 +33,8 @@ pub trait EventSink: Send + Sync + 'static {
     fn alert_hits(&self, session_id: &str, hits: Vec<BridgeAlert>);
     /// 现场捕获档案落成（极稀疏：一次触发一条）。
     fn capture_saved(&self, session_id: &str, info: CaptureInfo);
+    /// 现场捕获进入 armed（触发瞬间开始写后续窗口；收到 capture_saved 即解除）。
+    fn capture_active(&self, session_id: &str, rule: &str);
 }
 
 /// 测试/无宿主场景的 EventSink：把事件按序收进 Vec 供断言。
@@ -58,6 +60,9 @@ impl EventSink for VecSink {
             info.path, info.lines
         ));
     }
+    fn capture_active(&self, session_id: &str, rule: &str) {
+        self.0.lock().push(format!("capture-active {session_id} {rule}"));
+    }
 }
 
 /// 静默丢弃所有事件（CLI 不需要事件通道时使用）。
@@ -68,6 +73,7 @@ impl EventSink for NullSink {
     fn error(&self, _session_id: &str, _error: &str) {}
     fn alert_hits(&self, _session_id: &str, _hits: Vec<BridgeAlert>) {}
     fn capture_saved(&self, _session_id: &str, _info: CaptureInfo) {}
+    fn capture_active(&self, _session_id: &str, _rule: &str) {}
 }
 
 #[cfg(test)]

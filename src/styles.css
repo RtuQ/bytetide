@@ -1358,6 +1358,14 @@ input[type="color"]:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  /* v-show 切换内联 display，显示瞬间动画重放（reduced-motion 全局禁用） */
+  animation: pane-in var(--t-fast) var(--ease);
+}
+@keyframes pane-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
 }
 /* 快捷帧 */
 .qp-toolbar {
@@ -1467,11 +1475,26 @@ input[type="color"]:focus-visible {
   border-radius: var(--r-sm);
   background: var(--bg-elevated);
   transition: border-color var(--t-fast) var(--ease),
-    box-shadow var(--t-fast) var(--ease);
+    box-shadow var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
 }
 .seq-step.running {
   border-color: var(--border-focus);
   box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.4);
+  background: var(--bg-hover);
+}
+/* 已完成步骤：序号位打勾点亮（缩放不撑布局） */
+.seq-step.done .idx {
+  color: var(--ok);
+}
+.seq-step.done .idx svg {
+  animation: check-pop var(--t-fast) var(--ease);
+}
+@keyframes check-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.5);
+  }
 }
 .seq-step .idx {
   color: var(--text-dim);
@@ -1480,6 +1503,12 @@ input[type="color"]:focus-visible {
   text-align: right;
   flex: none;
   font-family: var(--font-mono);
+}
+.seq-step .idx svg {
+  width: 11px;
+  height: 11px;
+  display: inline-block;
+  vertical-align: -1px;
 }
 .seq-step .kind {
   display: inline-flex;
@@ -1572,6 +1601,81 @@ input[type="color"]:focus-visible {
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   overflow: hidden;
+}
+/* 输入变化时结果值闪一下 accent（animationend 摘除类，变了才闪） */
+.ck-table.ck-flash .ck-row .val {
+  animation: val-flash 0.5s var(--ease);
+}
+@keyframes val-flash {
+  0% {
+    color: var(--accent);
+  }
+}
+
+/* ---------- 整机动效批次：弹层入场 / 面板展开高度 / 捕获呼吸 ---------- */
+/* 弹层入场：fade+缩放（transform-origin 随锚定方向；关闭瞬切） */
+.portbar-pop,
+.update-pop {
+  animation: pop-in 0.15s var(--ease);
+  transform-origin: top right;
+}
+.portbar-pop.left {
+  transform-origin: top left;
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+/* 面板展开/收起高度过渡：::details-content + interpolate-size 需要 Chromium 131+ /
+   Safari 26+；旧运行时这两条规则整体被忽略，优雅降级为瞬开瞬关（零模板改动） */
+:root {
+  interpolate-size: allow-keywords;
+}
+.panel::details-content,
+.sendpanel::details-content,
+.hist::details-content {
+  block-size: 0;
+  overflow-y: clip;
+  opacity: 0;
+  transition: block-size var(--t) var(--ease), content-visibility var(--t) allow-discrete,
+    opacity var(--t) var(--ease);
+}
+.panel[open]::details-content,
+.sendpanel[open]::details-content,
+.hist[open]::details-content {
+  block-size: auto;
+  opacity: 1;
+}
+/* 捕获 armed：状态栏指示（红点呼吸复用 pulse）+ 面板图标变色 */
+.sb-cap {
+  color: var(--err);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.sb-cap-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--err);
+  animation: pulse 1.2s var(--ease) infinite;
+}
+.cap-armed {
+  color: var(--err);
+  animation: pulse 1.2s var(--ease) infinite;
+}
+.badge-hot {
+  color: var(--err);
+  border-color: rgba(248, 113, 113, 0.4);
+}
+.badge-hot .dot-ic {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--err);
 }
 .ck-row {
   display: flex;

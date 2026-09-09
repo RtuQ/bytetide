@@ -254,8 +254,18 @@ export async function setupEvents(): Promise<UnlistenFn[]> {
     ),
   )
 
-  // 现场捕获档案落成（极稀疏：一次触发一条）：刷新侧栏档案列表
-  unlistens.push(await listen('capture-saved', () => void store.loadCaptures()))
+  // 现场捕获事件（极稀疏）：armed 置「捕获中」呼吸指示，档案落成刷新列表并解除指示
+  unlistens.push(
+    await listen<{ sessionId: string; rule: string }>('capture-active', (e) => {
+      store.setCaptureActive(e.payload.sessionId, e.payload.rule)
+    }),
+  )
+  unlistens.push(
+    await listen<{ sessionId: string }>('capture-saved', (e) => {
+      store.setCaptureActive(e.payload.sessionId, null)
+      void store.loadCaptures()
+    }),
+  )
 
   return unlistens
 }

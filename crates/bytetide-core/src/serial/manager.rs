@@ -1199,6 +1199,8 @@ fn capture_start(
         }
         let _ = w.flush();
     }
+    // armed 通知（稀疏）：前端据此点亮「捕获中」呼吸指示；capture_saved 即解除
+    sink.capture_active(session_id, rule);
     Some(CaptureRun {
         writer,
         path,

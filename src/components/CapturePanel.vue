@@ -7,6 +7,8 @@ import type { CaptureRule } from '../types'
 
 const store = useSessionStore()
 const active = computed(() => store.active)
+/** 活动会话捕获 armed：面板图标呼吸提示 */
+const armed = computed(() => (active.value ? !!store.captureActive[active.value.id] : false))
 const capDir = ref('')
 onMounted(async () => {
   void store.loadCaptures()
@@ -85,8 +87,9 @@ function fmtTime(ms: number): string {
 <template>
   <details class="panel">
     <summary class="panel-head">
-      <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h3l2-7 4 14 3-9 2 4h6"/></svg>
+      <svg class="panel-icon" :class="{ 'cap-armed': armed }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h3l2-7 4 14 3-9 2 4h6"/></svg>
       <span class="panel-title">现场捕获</span>
+      <span v-if="armed" class="badge badge-hot" title="捕获进行中"><span class="dot-ic"></span></span>
       <span v-if="store.captures.length" class="badge">{{ store.captures.length }}</span>
       <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
     </summary>

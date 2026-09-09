@@ -36,6 +36,14 @@ struct CaptureSavedPayload {
     info: CaptureInfo,
 }
 
+/// 现场捕获 armed 状态事件载荷（触发瞬间；capture-saved 即解除）
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CaptureActivePayload {
+    session_id: String,
+    rule: String,
+}
+
 pub struct GuiSink(pub AppHandle);
 
 impl EventSink for GuiSink {
@@ -75,6 +83,16 @@ impl EventSink for GuiSink {
             CaptureSavedPayload {
                 session_id: session_id.to_string(),
                 info,
+            },
+        );
+    }
+
+    fn capture_active(&self, session_id: &str, rule: &str) {
+        let _ = self.0.emit(
+            "capture-active",
+            CaptureActivePayload {
+                session_id: session_id.to_string(),
+                rule: rule.to_string(),
             },
         );
     }
