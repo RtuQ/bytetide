@@ -1,11 +1,19 @@
 <script setup lang="ts">
+import { onBeforeUnmount, onMounted } from 'vue'
 import { useSessionStore } from '../stores/session'
 import { usePortCfg, useOpenLog } from '../composables/usePortConfig'
 import NewConnectionPopover from './NewConnectionPopover.vue'
+import { POPOVER_EVENT } from '../composables/usePopoverBridge'
 
 const store = useSessionStore()
 const { cfg, saveCfg } = usePortCfg()
 const { opening, openLog } = useOpenLog()
+
+function onOpenLog(event: Event) {
+  if ((event as CustomEvent<string>).detail === 'open-log') openLog()
+}
+onMounted(() => window.addEventListener(POPOVER_EVENT, onOpenLog))
+onBeforeUnmount(() => window.removeEventListener(POPOVER_EVENT, onOpenLog))
 </script>
 
 <template>
@@ -30,7 +38,6 @@ const { opening, openLog } = useOpenLog()
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
         </button>
       </div>
-      <div v-if="!store.sessionList.length" class="tabbar-empty">尚未打开串口</div>
     </div>
     <div class="tabbar-tail">
       <button

@@ -7,6 +7,7 @@ import { isPermissionGranted, requestPermission, sendNotification } from '@tauri
 import { recordBatch } from './usePerfWatch'
 import { setupBridgeSync } from './useBridgeSync'
 import { feedParser } from './useParserEngine'
+import { connectionErrorHint, toast } from './useToast'
 import type {
   AiAnnotation,
   AlertLevel,
@@ -192,12 +193,18 @@ export async function setupEvents(): Promise<UnlistenFn[]> {
   unlistens.push(
     await listen<StatusPayload>('session-status', (e) => {
       store.setStatus(e.payload.sessionId, e.payload.status)
+      const session = store.sessions[e.payload.sessionId]
+      if (e.payload.status === 'connected') toast('连接成功', 'success', 2600, session?.config.name)
+      if (e.payload.status === 'disconnected') toast('连接已断开', 'info', 2600, session?.config.name)
       if (e.payload.status === 'disconnected') void drainSession(e.payload.sessionId)
     }),
   )
   unlistens.push(
     await listen<ErrorPayload>('session-error', (e) => {
       store.setError(e.payload.sessionId, e.payload.error)
+      // 正常断连（eof「已断开」文案）hint 返回 null：由 disconnected 状态提示负责，不报 error
+      const hint = connectionErrorHint(e.payload.error)
+      if (hint) toast(hint.title, 'error', 4500, hint.action)
     }),
   )
   unlistens.push(
@@ -237,6 +244,7 @@ export async function setupEvents(): Promise<UnlistenFn[]> {
           const title = `${ALERT_LEVEL_LABEL[h.level] ?? h.level} · ${s?.config.name ?? e.payload.sessionId}`
           const body = `[${h.pattern}] ${alertSnippet(h.text)}`
           void ensureNotify(title, body)
+          toast(title, 'warning', 4200, body)
           if (alertStore.sound) playAlertBeep()
           alertStore.push({
             sessionId: e.payload.sessionId,
@@ -263,6 +271,7 @@ export async function setupEvents(): Promise<UnlistenFn[]> {
   unlistens.push(
     await listen<{ sessionId: string }>('capture-saved', (e) => {
       store.setCaptureActive(e.payload.sessionId, null)
+      toast('现场捕获已保存', 'success', 3200)
       void store.loadCaptures()
     }),
   )

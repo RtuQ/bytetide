@@ -13,6 +13,7 @@ import { lineBytes } from '../parser/lineBytes'
 import { humanizeMs } from '../composables/useRate'
 import { requestBackfill } from '../composables/useTauriEvents'
 import type { LogLine } from '../types'
+import { toast } from '../composables/useToast'
 
 const props = defineProps<{ sessionId: string }>()
 const store = useSessionStore()
@@ -215,8 +216,9 @@ async function exportLog() {
     s.lines.map((l) => `${l.ts}\t${l.dir === 'rx' ? 'RX' : 'TX'}\t${l.text}`).join('\n') + '\n'
   try {
     await invoke('export_text_cmd', { path, content })
+    toast('日志已导出', 'success', 3000, path)
   } catch (e) {
-    alert(String(e))
+    toast('日志导出失败', 'error', 4500, String(e))
   }
 }
 

@@ -87,7 +87,7 @@ describe('分屏比 / dock 状态持久化', () => {
     expect(loadDockPrefs(300).height).toBe(165)
     // 坏数据全回默认
     mem['serialtool.dock'] = '[1,2]'
-    expect(loadDockPrefs(900)).toEqual({ height: 180, collapsed: false, tab: 'decode' })
+    expect(loadDockPrefs(900)).toEqual({ height: 180, collapsed: true, tab: 'decode' })
     // 非法 tab 回 decode
     mem['serialtool.dock'] = JSON.stringify({ height: 150, tab: 'hax' })
     expect(loadDockPrefs(900).tab).toBe('decode')

@@ -48,6 +48,7 @@ const linkText = computed(() => {
     <span class="sb-sect">
       <span class="sb-dot" :class="active.status" :title="STATUS_TEXT[active.status]"></span>
       <b class="sb-name">{{ active.config.name || active.id }}</b>
+      <span class="sb-status">{{ STATUS_TEXT[active.status] }}</span>
       <span class="sb-dim">{{ linkText }}</span>
     </span>
     <span class="sb-sect sb-mono">
