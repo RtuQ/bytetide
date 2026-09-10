@@ -450,7 +450,7 @@ dependencies = [
 
 [[package]]
 name = "bytetide-cli"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "bytetide-core",
@@ -464,7 +464,7 @@ dependencies = [
 
 [[package]]
 name = "bytetide-core"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
