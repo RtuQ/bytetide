@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useSessionStore } from '../stores/session'
 import { useAlertStore } from '../stores/alerts'
 import { useParserEngine } from '../composables/useParserEngine'
 import {
@@ -17,6 +18,7 @@ import DockMonitor from './DockMonitor.vue'
  *  开合入口：右侧箭头 / 已停留页签再点（收起）/ 收起态点任意页签（展开并切换）。
  *  无 props / emits，由布局集成层挂载。 */
 const alerts = useAlertStore()
+const store = useSessionStore()
 // 解析开关（plan-parser-v1）：解码页签仅在脚本启用时出现
 const { ui } = useParserEngine()
 
@@ -24,6 +26,18 @@ const initial = loadDockPrefs(window.innerHeight)
 const height = ref(initial.height)
 const collapsed = ref(initial.collapsed)
 const tab = ref<DockTab>(initial.tab)
+
+// 空首页优先把 Dock 收起；用户打开连接后不强行展开，避免打断工作区布局。
+watch(
+  () => store.sessionList.length,
+  (count) => {
+    if (count === 0 && !collapsed.value) {
+      collapsed.value = true
+      persist()
+    }
+  },
+  { immediate: true },
+)
 
 const tabs = computed<{ key: DockTab; label: string }[]>(() => [
   ...(ui.enabled ? [{ key: 'decode' as DockTab, label: '解码' }] : []),

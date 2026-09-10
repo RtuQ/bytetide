@@ -2,16 +2,28 @@
 
 [简体中文](./README.md) | [English](./README.en.md)
 
-A serial / network log debugging workbench for embedded development. Every line a device emits over UART, TCP, or UDP can be viewed live, searched, filtered, plotted as a waveform, and handed to an AI assistant for protocol analysis through the built-in REST bridge.
+A serial and network data workbench for embedded development. Live logs, protocol decoding, waveforms, alerts, auto-replies, incident capture, and multi-session comparison live in one desktop app — taking you from “did the device reply?” to the exact frame and field that failed.
 
-Built with Tauri 2 + Vue 3 + Rust: small binaries, fast startup, low memory footprint. All features run locally with no cloud dependency. Formerly known as Serial Tool.
+Built with Tauri 2 + Vue 3 + Rust. Capture and rule evaluation run in Rust, so recording, auto-replies, alerts, and triggered captures do not depend on the renderer staying active. Data remains local by default, with no cloud dependency. Formerly known as Serial Tool.
+
+> Serial · TCP Client / Server · UDP · ASCII / HEX · Protocol decoding · Live plots · Automation · CLI · AI REST Bridge
 
 ## Preview
 
 <p align="center">
-  <img src="docs/preview-light.png" alt="ByteTide light theme" width="49%" />
-  <img src="docs/preview-dark.png" alt="ByteTide dark theme" width="49%" />
+  <img src="docs/preview-dark.png" alt="ByteTide dark analysis workbench" width="100%" />
 </p>
+
+<p align="center"><sub>A dense analysis workbench with light and OLED-dark themes.</sub></p>
+
+### Workbench tour
+
+![ByteTide logs, plots, rule sidebar, and send panel](docs/preview-workbench.png)
+
+- **Top**: connection tabs, offline logs, and Log / Split / Plot / Compare views
+- **Center**: virtualized logs and multi-channel waveforms with a draggable divider
+- **Right**: search, rules, protocol parser, plotting, incident capture, and preset library
+- **Bottom**: Decode / Alerts / Monitor dock plus Send, Quick Frames, Sequences, and Checksums
 
 ---
 
@@ -48,7 +60,7 @@ Built with Tauri 2 + Vue 3 + Rust: small binaries, fast startup, low memory foot
 
 ### Reading logs
 
-- Virtualized rendering with an in-memory buffer of the **last 50,000 lines**; very long lines scroll horizontally
+- Custom virtual scrolling that preserves text selection during live updates; a **200,000-line** default view buffer (configurable from 10,000 to 1,000,000) with upward backfill from the Rust ring
 - View toggles: follow tail, matches only, HEX view, inter-line delta, line numbers, RX/TX direction column
 - Live RX/TX byte counts and throughput in the status bar
 
@@ -58,10 +70,12 @@ Built with Tauri 2 + Vue 3 + Rust: small binaries, fast startup, low memory foot
 - **Filter chain**: stack include/exclude stages, equivalent to `grep | grep -v`
 - **Keyword highlights**: multiple keywords, each with its own color and live counter, independent from search
 
-### Sending
+### Sending and device control
 
-- ASCII / HEX modes, `Ctrl+Enter` to send, optional trailing newline
-- **Scheduled repeat sending**; click history entries to refill the input
+- ASCII / HEX single-send, scheduled sending, history, and `Ctrl+Enter`
+- **Quick Frames**: save named commands and send them in one click
+- **Sequences**: combine send, delay, and DTR / RTS signal steps; loop complete boot or bootloader flows
+- **Live checksums**: calculate seven algorithms side by side, append a result, or save it as a Quick Frame
 
 ### Automation
 
@@ -69,6 +83,13 @@ Built with Tauri 2 + Vue 3 + Rust: small binaries, fast startup, low memory foot
 - **Alerts**: system notifications (optional beep) on keyword/regex hits, with windowed count aggregation and cooldown suppression; the last 100 events are kept and clickable to jump back
 - **Line bookmarks**: `Ctrl+F2` / `Ctrl+B`, managed from the sidebar
 - **Config presets**: save filter chains / keywords / auto-replies / frame formats as named presets; import and export the whole library as JSON for team sharing
+- **Incident capture**: keywords, alerts, or disconnects trigger a flight-recorder archive containing configurable pre/post windows; repeated triggers extend the same capture
+
+### Protocol parsing
+
+- Import `bytetide.parser v1` scripts with declarative fields or sandboxed JavaScript for RX / TX decoding
+- Frame independently per session and direction, then inspect structured results in the Decode dock; imports can replay against recent logs first
+- Timeouts and sustained parser errors terminate and circuit-break the script without blocking the capture path
 
 ### Monitoring
 

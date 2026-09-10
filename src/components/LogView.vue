@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, onScopeDispose, ref, watch } from 'vue'
-import { RecycleScroller } from 'vue-virtual-scroller'
+import LogScroller from './LogScroller.vue'
 import { useThrottleFn } from '@vueuse/core'
 import { save } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
@@ -9,9 +9,11 @@ import { HIGHLIGHTER_KEY, buildTestMatcher, hlStyle } from '../composables/useHi
 import { parseAnsi, stripAnsi, type AnsiStyle } from '../composables/useAnsi'
 import { anchoredTop } from '../composables/useScrollAnchor'
 import { lineHexDump, lineHexLen } from '../composables/useHexDump'
-import { useRate, humanizeBytes, humanizeMs } from '../composables/useRate'
+import { lineBytes } from '../parser/lineBytes'
+import { humanizeMs } from '../composables/useRate'
 import { requestBackfill } from '../composables/useTauriEvents'
 import type { LogLine } from '../types'
+import { toast } from '../composables/useToast'
 
 const props = defineProps<{ sessionId: string }>()
 const store = useSessionStore()
@@ -47,6 +49,50 @@ function segStyle(seg: RowSeg) {
   return Object.keys(st).length ? st : undefined
 }
 const matchSet = computed(() => new Set(stats.value.matchLines))
+
+// ---------- 行右键菜单：重发此帧 / 复制 ----------
+const ctx = ref<{ x: number; y: number; line: LogLine } | null>(null)
+const canSendCtx = computed(() => {
+  const s = session.value
+  return !!s && s.kind === 'live' && s.status === 'connected'
+})
+function openCtx(e: MouseEvent, line: LogLine) {
+  ctx.value = {
+    x: Math.min(e.clientX, window.innerWidth - 170),
+    y: Math.min(e.clientY, window.innerHeight - 120),
+    line,
+  }
+}
+function closeCtx() {
+  ctx.value = null
+}
+const onCtxKey = (e: KeyboardEvent) => {
+  if (e.key === 'Escape') closeCtx()
+}
+window.addEventListener('keydown', onCtxKey)
+onBeforeUnmount(() => window.removeEventListener('keydown', onCtxKey))
+function ctxLineHex(line: LogLine): string {
+  const s = session.value
+  const bytes = lineBytes(line, s?.plot.source === 'ascii-hex' ? 'ascii-hex' : 'binary')
+  return [...bytes].map((b) => b.toString(16).toUpperCase().padStart(2, '0')).join(' ')
+}
+function resendLine() {
+  const c = ctx.value
+  if (!c || !canSendCtx.value) return
+  store.send(props.sessionId, ctxLineHex(c.line), 'hex').catch((e: unknown) => alert(String(e)))
+  closeCtx()
+}
+async function copyCtx(kind: 'text' | 'hex') {
+  const c = ctx.value
+  if (!c) return
+  const t = kind === 'text' ? c.line.text : ctxLineHex(c.line)
+  try {
+    await navigator.clipboard.writeText(t)
+  } catch {
+    /* 剪贴板不可用时静默（无感失败好过报错打断） */
+  }
+  closeCtx()
+}
 // 过滤链（include/exclude 与“搜索”独立，再叠加“只看命中”）作用于任意行集：
 // viewItems 与回补行的渲染计数共用，保证 scrollTop 补偿口径与实际渲染一致
 function filterLines(s: Session, lines: LogLine[]): LogLine[] {
@@ -86,8 +132,8 @@ const showLineNo = computed(() => session.value?.showLineNo ?? true)
 const showDir = computed(() => session.value?.showDir ?? true)
 
 // 日志区最小宽度：等宽字体按最长行字符数×ch 估宽，超出视口时 scroller 横向滚动。
-// 宽度经 --log-min-w 撑在库的 item-wrapper 上（其自带 overflow:hidden 会裁掉
-// 行级溢出，行本身无法产生滚动范围），全部行共用保证滚动条稳定不跳。
+// 宽度经 --log-min-w 撑在 LogScroller 的 ls-sizer 上产生横向滚动范围（行级
+// overflow:hidden 只裁自身溢出），全部行共用保证滚动条稳定不跳。
 // 估算口径与实际渲染对齐（styles.css 列宽）：ts 与 text 同为等宽字体，
 // 一并按字符数计入（自定义长时间戳模板自动跟随）；像素列只含
 // gutter(12) + padding(20) + no(66) + dir(30)，Δ 列(66) 仅打开时计入；
@@ -140,11 +186,6 @@ function onKeydown(e: KeyboardEvent) {
 }
 window.addEventListener('keydown', onKeydown)
 onScopeDispose(() => window.removeEventListener('keydown', onKeydown))
-const totalBytes = computed(() => {
-  const s = session.value
-  return s ? (s.rxBytes ?? 0) + (s.txBytes ?? 0) : 0
-})
-const bps = useRate(() => totalBytes.value)
 
 // 落盘录制/分段仅对读线程存活的会话可用（已连接或连接中），未连接时命令通道已关
 const recLive = computed(() => {
@@ -175,13 +216,16 @@ async function exportLog() {
     s.lines.map((l) => `${l.ts}\t${l.dir === 'rx' ? 'RX' : 'TX'}\t${l.text}`).join('\n') + '\n'
   try {
     await invoke('export_text_cmd', { path, content })
+    toast('日志已导出', 'success', 3000, path)
   } catch (e) {
-    alert(String(e))
+    toast('日志导出失败', 'error', 4500, String(e))
   }
 }
 
-// RecycleScroller 实例（库未带类型，按 any 处理）
-const scroller = ref<any>(null)
+// LogScroller 实例（泛型 SFC 不能用 InstanceType，直接声明 expose 的公开面）
+const scroller = ref<{ el: HTMLElement | null; scrollToItem: (index: number) => void } | null>(
+  null,
+)
 let scrollEl: HTMLElement | null = null
 
 function onScroll() {
@@ -196,7 +240,7 @@ function onScroll() {
 }
 
 function bindScroll() {
-  const el: HTMLElement | undefined = scroller.value?.$el
+  const el: HTMLElement | null | undefined = scroller.value?.el
   if (el && el !== scrollEl) {
     scrollEl?.removeEventListener('scroll', onScroll)
     el.addEventListener('scroll', onScroll, { passive: true })
@@ -215,7 +259,7 @@ watch(session, () => {
 // takeEvicted 取走即清零，防同 tick 多批次漏计。
 // 方案 B 同一 watcher 统一补偿：上滑回补把行插到头部，内容高度增长会把视口
 // 内容相对下推 N 行，按回补行数（仅计通过过滤链、真正渲染占高的）等量下移抵消。
-const ROW_HEIGHT = 22 // 与模板 :item-size="22" 联动；改行高须同步 .log-row height（AGENTS 红线）
+const ROW_HEIGHT = 22 // 与模板 LogScroller 的 item-size 联动；改行高须同步 .log-row height（AGENTS 红线）
 watch(
   // backfillTotal 入列：补行不推进 lineCounter，需独立触发源
   [() => session.value?.lineCounter, () => session.value?.backfillTotal],
@@ -227,7 +271,7 @@ watch(
     const backfilled = store.takeBackfilled(props.sessionId)
     if (s.followTail) {
       await nextTick()
-      scroller.value?.scrollToItem?.(viewItems.value.length - 1)
+      scroller.value?.scrollToItem(viewItems.value.length - 1)
     } else if (evicted > 0 || backfilled.length > 0) {
       // 补行中只有通过过滤链的才真正渲染占高，补偿按渲染行数计
       const rendered = backfilled.length > 0 ? filterLines(s, backfilled).length : 0
@@ -248,7 +292,7 @@ watch(
     await nextTick()
     const idx = viewItems.value.findIndex((l) => l.no === j.no)
     if (idx >= 0) {
-      scroller.value?.scrollToItem?.(idx)
+      scroller.value?.scrollToItem(idx)
       flashNo.value = j.no
       setTimeout(() => {
         if (flashNo.value === j.no) flashNo.value = null
@@ -417,7 +461,7 @@ onBeforeUnmount(() => {
       </span>
     </div>
 
-    <RecycleScroller
+    <LogScroller
       v-if="session"
       ref="scroller"
       class="scroller"
@@ -431,6 +475,7 @@ onBeforeUnmount(() => {
         class="log-row"
         :class="[item.dir, { selected: item.no === selectedNo, flash: item.no === flashNo }]"
         @click="selectedNo = item.no"
+        @contextmenu.prevent="openCtx($event, item)"
       >
         <span class="bm-gutter">
           <svg v-if="bookmarkSet.has(item.no)" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
@@ -452,12 +497,9 @@ onBeforeUnmount(() => {
           </template>
         </span>
       </div>
-    </RecycleScroller>
+    </LogScroller>
 
     <div v-if="session" class="logview-foot">
-      <span class="stats" :title="`RX ${session.rxLines ?? 0} 行 / TX ${session.txLines ?? 0} 行`">
-        RX {{ humanizeBytes(session.rxBytes) }} · TX {{ humanizeBytes(session.txBytes) }} · {{ humanizeBytes(bps) }}/s
-      </span>
       <span
         v-if="session.droppedLines"
         class="drop-note"
@@ -480,5 +522,31 @@ onBeforeUnmount(() => {
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h0a4 4 0 0 1-4-4V8Z"/></svg>
       <span>打开一个串口开始</span>
     </div>
+
+    <Teleport to="body">
+      <template v-if="ctx">
+        <div class="ctx-backdrop" @click="closeCtx" @contextmenu.prevent="closeCtx"></div>
+        <div class="ctx-menu" :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }" role="menu">
+          <button
+            class="ctx-item"
+            :disabled="!canSendCtx"
+            :title="canSendCtx ? '按原始字节以 HEX 模式重发该行' : session?.kind === 'offline' ? '离线会话不可发送' : '会话未连接'"
+            @click="resendLine"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+            <span>重发此帧</span>
+          </button>
+          <div class="ctx-sep"></div>
+          <button class="ctx-item" @click="copyCtx('text')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+            <span>复制文本</span>
+          </button>
+          <button class="ctx-item" @click="copyCtx('hex')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+            <span>复制 HEX</span>
+          </button>
+        </div>
+      </template>
+    </Teleport>
   </div>
 </template>

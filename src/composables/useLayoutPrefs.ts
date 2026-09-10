@@ -94,7 +94,8 @@ export function loadDockPrefs(viewportH: number): DockPrefs {
       typeof o.height === 'number' ? o.height : DOCK_DEFAULT,
       viewportH,
     ),
-    collapsed: o.collapsed === true,
+    // 首次打开时优先把空 Dock 收起，给主工作区让出空间；显式 false 仍尊重用户偏好。
+    collapsed: o.collapsed !== false,
     tab: o.tab === 'alerts' || o.tab === 'monitor' ? o.tab : 'decode',
   }
 }

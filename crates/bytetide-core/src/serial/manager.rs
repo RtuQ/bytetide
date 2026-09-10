@@ -1,5 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 
+// Link 为具体类型后 read/write_all 需要 trait 在作用域内（as _ 不引入名字冲突）
+use std::io::{Read as _, Write as _};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
@@ -12,8 +14,11 @@ use serde::{Deserialize, Serialize};
 use super::port::{open_port, Dir, LogLine, PortConfig};
 use crate::logfmt;
 use crate::session::SessionLog;
-use crate::serial::rules::{alert_eval, auto_reply_payload, AlertCfg, AlertWinState, AutoReplyCfg};
-use crate::sink::EventSink;
+use crate::serial::rules::{
+    alert_eval, auto_reply_payload, AlertCfg, AlertWinState, AutoReplyCfg, CaptureCfg,
+    capture_eval, clamp_capture_window,
+};
+use crate::sink::{CaptureInfo, EventSink};
 
 /// 桥接环形缓冲容量（带原始字节的近期分析窗口；≈170B/行 × 10 万 ≈ 17MB/会话）。
 pub const RING_CAP: usize = 100000;
@@ -283,6 +288,26 @@ impl RingBuf {
     pub fn tx_bytes(&self) -> u64 {
         self.tx_bytes.load(Ordering::Relaxed)
     }
+
+    /// 取 epoch_ms >= since 的全部行（升序）。第二返回值=更早的行已被 ring
+    /// 淘汰（发生过淘汰且现存首行晚于 since）——档案据此标注「前置现场可能缺失」；
+    /// 会话刚开始、数据天然不足窗口不算缺失。
+    fn lines_since_epoch(&self, since_epoch_ms: u64) -> (Vec<BridgeLine>, bool) {
+        let ring = self.ring.lock();
+        let missing_earlier = self.seq.load(Ordering::Relaxed) as usize > ring.len()
+            && ring.front().is_some_and(|l| l.epoch_millis > since_epoch_ms);
+        let (mut lo, mut hi) = (0usize, ring.len());
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if ring.get(mid).is_some_and(|l| l.epoch_millis < since_epoch_ms) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        let out: Vec<BridgeLine> = ring.iter().skip(lo).cloned().collect();
+        (out, missing_earlier)
+    }
 }
 
 pub enum SendMode {
@@ -295,7 +320,14 @@ pub struct SendRequest {
     pub text: String,
 }
 
-/// 发往读线程的控制命令：发送数据 / 清屏（截断文件）。
+/// 信号线引脚（输出方向：DTR/RTS；CTS/DSR 等输入引脚读取后续再加）。
+#[derive(Clone, Copy, Debug)]
+pub enum Pin {
+    Dtr,
+    Rts,
+}
+
+/// 发往读线程的控制命令：发送数据 / 清屏（截断文件）/ 信号线控制。
 pub enum PortCmd {
     Send(SendRequest),
     Clear,
@@ -305,6 +337,8 @@ pub enum PortCmd {
     RecOn(PathBuf),
     /// 暂停落盘：flush+关闭当前文件（ring/视图不受影响，仅停止写文件）。
     RecOff,
+    /// DTR/RTS 置位：串口链路直接写引脚，网络源在链路层报“无信号线”。
+    Signal { pin: Pin, level: bool },
 }
 
 /// 会话类型：实时串口 / 离线加载的日志文件。
@@ -337,6 +371,8 @@ struct SessionHandle {
     auto_reply: Arc<RwLock<AutoReplyCfg>>,
     /// 告警规则（前端推送；读线程内评估，命中走 mirror + alert-hit 事件）
     alert_cfg: Arc<RwLock<AlertCfg>>,
+    /// 触发式现场捕获配置（前端推送；读线程内逐行评估触发）
+    capture_cfg: Arc<RwLock<CaptureCfg>>,
 }
 
 pub struct PortManager {
@@ -397,9 +433,18 @@ impl PortManager {
         let buf2 = buf.clone();
         let auto_reply_cfg = Arc::new(RwLock::new(AutoReplyCfg::default()));
         let alert_cfg = Arc::new(RwLock::new(AlertCfg::default()));
+        let capture_cfg = Arc::new(RwLock::new(CaptureCfg::default()));
+        // 现场档案目录：不落盘（CLI）时为空路径，读线程内据此跳过捕获
+        let captures_dir = if sessions_dir.as_os_str().is_empty() {
+            PathBuf::new()
+        } else {
+            sessions_dir.join("captures")
+        };
         let alerts_mirror = Arc::new(RwLock::new(Vec::new()));
         let ar2 = auto_reply_cfg.clone();
         let al2 = alert_cfg.clone();
+        let cap2 = capture_cfg.clone();
+        let cdir2 = captures_dir.clone();
         let am2 = alerts_mirror.clone();
         let lp = log_path.clone();
         // lb = 午夜分段的基准路径；ls = 与 SessionHandle 共享的当前路径单元
@@ -414,12 +459,12 @@ impl PortManager {
                 if is_net_transport(&cfg) {
                     net_loop(
                         cfg, id2, sink, stop2, write_rx, lp, lb, midnight_rotate, ls, ts_format,
-                        custom_path, buf2, ar2, al2, am2,
+                        custom_path, buf2, ar2, al2, cap2, cdir2, am2,
                     )
                 } else {
                     reader_loop(
                         cfg, id2, sink, stop2, write_rx, lp, lb, midnight_rotate, ls, ts_format,
-                        custom_path, buf2, ar2, al2, am2,
+                        custom_path, buf2, ar2, al2, cap2, cdir2, am2,
                     )
                 }
             })
@@ -442,6 +487,7 @@ impl PortManager {
                 annotations: Arc::new(RwLock::new(Vec::new())),
                 auto_reply: auto_reply_cfg.clone(),
                 alert_cfg: alert_cfg.clone(),
+                capture_cfg,
             },
         );
         Ok(id)
@@ -480,6 +526,7 @@ impl PortManager {
                 annotations: Arc::new(RwLock::new(Vec::new())),
                 auto_reply: Arc::new(RwLock::new(AutoReplyCfg::default())),
                 alert_cfg: Arc::new(RwLock::new(AlertCfg::default())),
+                capture_cfg: Arc::new(RwLock::new(CaptureCfg::default())),
             },
         );
         id
@@ -509,6 +556,22 @@ impl PortManager {
         h.write_tx
             .send(PortCmd::Send(req))
             .map_err(|_| anyhow::anyhow!("发送通道已关闭"))?;
+        Ok(())
+    }
+
+    /// 信号线控制（DTR/RTS）：照 send 模式投递到读线程串行执行；
+    /// 网络源在读线程内报“无信号线”，离线会话直接拒绝。
+    pub fn set_signal(&self, id: &str, pin: Pin, level: bool) -> anyhow::Result<()> {
+        let sessions = self.sessions.read();
+        let h = sessions
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        if matches!(h.kind, SessionKind::Offline) {
+            return Err(anyhow::anyhow!("离线会话不可控制信号线"));
+        }
+        h.write_tx
+            .send(PortCmd::Signal { pin, level })
+            .map_err(|_| anyhow::anyhow!("通道已关闭"))?;
         Ok(())
     }
 
@@ -596,6 +659,7 @@ impl PortManager {
         id: &str,
         auto_reply: AutoReplyCfg,
         alerts: AlertCfg,
+        capture: CaptureCfg,
     ) -> anyhow::Result<()> {
         let sessions = self.sessions.read();
         let h = sessions
@@ -603,6 +667,7 @@ impl PortManager {
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
         *h.auto_reply.write() = auto_reply;
         *h.alert_cfg.write() = alerts;
+        *h.capture_cfg.write() = capture;
         Ok(())
     }
 
@@ -876,6 +941,8 @@ fn reader_loop(
     ring: Arc<RingBuf>,
     auto_reply: Arc<RwLock<AutoReplyCfg>>,
     alert_cfg: Arc<RwLock<AlertCfg>>,
+    capture_cfg: Arc<RwLock<CaptureCfg>>,
+    captures_dir: PathBuf,
     alerts_mirror: Arc<RwLock<Vec<BridgeAlert>>>,
 ) {
     let (session_log, ts_fmt) =
@@ -894,8 +961,9 @@ fn reader_loop(
     };
     sink.status(&session_id, "connected");
 
+    let mut link = Link::Serial(port.as_mut());
     stream_loop(
-        port.as_mut(),
+        &mut link,
         "串口连接已断开",
         "写入串口失败",
         &*sink,
@@ -910,6 +978,8 @@ fn reader_loop(
         ring,
         auto_reply,
         alert_cfg,
+        capture_cfg,
+        captures_dir,
         alerts_mirror,
     );
 }
@@ -992,12 +1062,232 @@ fn open_session_log(
     (session_log, ts_fmt)
 }
 
+/// stream_loop 的链路视图：串口（含信号线控制）或网络。合并为单一对象是因为
+/// io 读写与 DTR/RTS 置位都唯一借用同一个 `Box<dyn SerialPort>`（无法同时
+/// 传两个 `&mut`）；`stream_loop` 因此从泛型 `T: Read+Write` 改为具体 `Link`。
+enum Link<'a> {
+    Serial(&'a mut dyn serialport::SerialPort),
+    Net(&'a mut NetLink),
+}
+
+impl std::io::Read for Link<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Link::Serial(p) => p.read(buf),
+            Link::Net(l) => l.read(buf),
+        }
+    }
+}
+
+impl std::io::Write for Link<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Link::Serial(p) => p.write(buf),
+            Link::Net(l) => l.write(buf),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Link::Serial(p) => p.flush(),
+            Link::Net(l) => l.flush(),
+        }
+    }
+}
+
+impl Link<'_> {
+    fn set_signal(&mut self, pin: Pin, level: bool) -> std::io::Result<()> {
+        // serialport 的引脚方法返回其自有 Result<T, serialport::Error> 别名，映射成 io::Error
+        let map = |e: serialport::Error| std::io::Error::other(e.to_string());
+        match self {
+            Link::Serial(p) => match pin {
+                Pin::Dtr => p.write_data_terminal_ready(level).map_err(map),
+                Pin::Rts => p.write_request_to_send(level).map_err(map),
+            },
+            Link::Net(_) => Err(std::io::Error::other("网络源无信号线")),
+        }
+    }
+}
+
+// ---------- 触发式现场捕获（行车记录仪） ----------
+
+/// 一次已触发的捕获：档案 writer + 后续窗口截止时刻。
+/// writer 用 Option 承载创建失败（降级为不落盘但数据流不受影响）。
+struct CaptureRun {
+    writer: Option<SessionLog>,
+    path: PathBuf,
+    deadline_ms: u64,
+    lines: u64,
+    /// "keyword" | "alert" | "disconnect"
+    trigger: &'static str,
+    rule: String,
+    at: u64,
+}
+
+/// 现场档案路径：{dir}/{id}-cap-YYYYMMDD-HHMMSS[-N].log（同秒冲突 -2/-3 递增，与分段规则一致）。
+fn next_capture_path(
+    dir: &std::path::Path,
+    id: &str,
+    now: &chrono::DateTime<chrono::Local>,
+    exists: impl Fn(&std::path::Path) -> bool,
+) -> PathBuf {
+    let stamp = now.format("%Y%m%d-%H%M%S").to_string();
+    let mut n = 1u32;
+    loop {
+        let name = if n == 1 {
+            format!("{id}-cap-{stamp}.log")
+        } else {
+            format!("{id}-cap-{stamp}-{n}.log")
+        };
+        let p = dir.join(name);
+        if !exists(&p) {
+            return p;
+        }
+        n += 1;
+    }
+}
+
+/// 触发一次捕获：建档案、写头注释、把 ring 里 pre_ms 窗口的行回溯写入
+///（含触发行本身——触发时它已入 ring）。创建失败仅 sink.error 不中断数据流。
+fn capture_start(
+    session_id: &str,
+    cfg: &CaptureCfg,
+    captures_dir: &std::path::Path,
+    ring: &RingBuf,
+    trigger: &'static str,
+    rule: &str,
+    at_ms: u64,
+    sink: &dyn EventSink,
+) -> Option<CaptureRun> {
+    if captures_dir.as_os_str().is_empty() {
+        return None;
+    }
+    let pre = clamp_capture_window(cfg.pre_ms);
+    let post = clamp_capture_window(cfg.post_ms);
+    let now = chrono::Local::now();
+    let path = next_capture_path(captures_dir, session_id, &now, |p| p.exists());
+    let mut writer = match SessionLog::create(&path) {
+        Ok(w) => Some(w),
+        Err(e) => {
+            sink.error(
+                session_id,
+                &format!("现场档案创建失败 {}: {}", path.display(), e),
+            );
+            return None;
+        }
+    };
+    let mut lines = 0u64;
+    if let Some(w) = writer.as_mut() {
+        // 头注释行：前端解析按 `#` 跳过，供人肉/工具辨识来源
+        w.write_raw_line(&format!(
+            "# bytetide-capture v1 trigger={trigger} rule={} at_ms={at_ms} at={}",
+            rule.replace('\n', " ").replace('\r', " ").replace('\t', " "),
+            now.format("%Y-%m-%dT%H:%M:%S%.3f%:z"),
+        ));
+        let (snap, missing) = ring.lines_since_epoch(at_ms.saturating_sub(pre));
+        if missing {
+            w.write_raw_line("# 注意：更早的行已超出 ring 窗口，部分前置现场缺失");
+        }
+        for bl in &snap {
+            w.append(&LogLine {
+                ts: bl.ts.clone(),
+                dir: bl.dir,
+                text: bl.text.clone(),
+                bytes: bl.bytes.clone(),
+                epoch_millis: bl.epoch_millis,
+            });
+            lines += 1;
+        }
+        let _ = w.flush();
+    }
+    // armed 通知（稀疏）：前端据此点亮「捕获中」呼吸指示；capture_saved 即解除
+    sink.capture_active(session_id, rule);
+    Some(CaptureRun {
+        writer,
+        path,
+        deadline_ms: at_ms.saturating_add(post),
+        lines,
+        trigger,
+        rule: rule.to_string(),
+        at: at_ms,
+    })
+}
+
+/// armed 期间的每行追加 + 到期收尾（未 armed 为 no-op）。
+fn cap_on_line(
+    cap: &mut Option<CaptureRun>,
+    line: &LogLine,
+    sink: &dyn EventSink,
+    session_id: &str,
+    now: u64,
+) {
+    let Some(run) = cap.as_mut() else { return };
+    if let Some(w) = run.writer.as_mut() {
+        w.append(line);
+    }
+    run.lines += 1;
+    if now >= run.deadline_ms {
+        cap_finalize(cap, sink, session_id);
+    }
+}
+
+/// 收尾：flush + capture_saved 稀疏事件（未 armed 为 no-op）。
+fn cap_finalize(cap: &mut Option<CaptureRun>, sink: &dyn EventSink, session_id: &str) {
+    let Some(mut run) = cap.take() else { return };
+    if let Some(mut w) = run.writer.take() {
+        let _ = w.flush();
+    }
+    sink.capture_saved(
+        session_id,
+        CaptureInfo {
+            path: run.path.to_string_lossy().into_owned(),
+            trigger: run.trigger.to_string(),
+            rule: run.rule,
+            lines: run.lines,
+            at: run.at,
+        },
+    );
+}
+
+/// 逐行触发评估：关键词规则命中或告警联动即触发；armed 中再次命中顺延后续窗口
+///（连续事故合并为一个档案）。
+fn cap_maybe_arm(
+    cap: &mut Option<CaptureRun>,
+    cfg: &CaptureCfg,
+    captures_dir: &std::path::Path,
+    ring: &RingBuf,
+    alert_hit: Option<&str>,
+    line: &LogLine,
+    sink: &dyn EventSink,
+    session_id: &str,
+) {
+    if !cfg.enabled {
+        return;
+    }
+    let hits = capture_eval(cfg, &line.text);
+    let hit = hits
+        .first()
+        .map(|r| (r.pattern.as_str(), "keyword"))
+        .or_else(|| alert_hit.map(|p| (p, "alert")));
+    let Some((rule, trigger)) = hit else { return };
+    let now = now_ms();
+    match cap.as_mut() {
+        Some(run) => run.deadline_ms = now.saturating_add(clamp_capture_window(cfg.post_ms)),
+        None => {
+            if let Some(run) =
+                capture_start(session_id, cfg, captures_dir, ring, trigger, rule, now, sink)
+            {
+                *cap = Some(run);
+            }
+        }
+    }
+}
+
 /// 串口与 TCP/UDP 共用的读循环：行切分、TX 回显、空闲半行刷出。
 /// 数据不经事件推送（IPC 洪水会把消费者调度饿死）：行进 ring（消费方
 /// 按 `no` 游标拉取）与落盘文件；只有状态/错误/低频事件走 sink。
 #[allow(clippy::too_many_arguments)]
-fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
-    io: &mut T,
+fn stream_loop(
+    io: &mut Link,
     eof_msg: &str,
     write_err_msg: &str,
     sink: &dyn EventSink,
@@ -1012,6 +1302,8 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
     ring: Arc<RingBuf>,
     auto_reply: Arc<RwLock<AutoReplyCfg>>,
     alert_cfg: Arc<RwLock<AlertCfg>>,
+    capture_cfg: Arc<RwLock<CaptureCfg>>,
+    captures_dir: PathBuf,
     alerts_mirror: Arc<RwLock<Vec<BridgeAlert>>>,
 ) {
     let mut buf = vec![0u8; 65536];
@@ -1020,6 +1312,8 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
     // 告警窗口/冷却状态（每会话独占，随读线程生灭）与待上报命中
     let mut alert_states: HashMap<String, AlertWinState> = HashMap::new();
     let mut fired_alerts: Vec<BridgeAlert> = Vec::new();
+    // 触发式现场捕获：armed = 已触发、尚在写后续窗口
+    let mut cap: Option<CaptureRun> = None;
     // 午夜自动分段：当前分段所属的本地日期 + 1 秒节流的检查时钟
     let mut seg_date = chrono::Local::now().date_naive();
     let mut last_date_check = Instant::now();
@@ -1034,17 +1328,16 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
                     };
                     match io.write_all(&bytes) {
                         Ok(()) => {
-                            sink_line(
-                                &LogLine {
-                                    ts: logfmt::format_ts(ts_fmt),
-                                    dir: Dir::Tx,
-                                    text: req.text.clone(),
-                                    bytes: None,
-                                    epoch_millis: now_ms(),
-                                },
-                                &mut session_log,
-                                &ring,
-                            );
+                            let tx = LogLine {
+                                ts: logfmt::format_ts(ts_fmt),
+                                dir: Dir::Tx,
+                                text: req.text.clone(),
+                                bytes: None,
+                                epoch_millis: now_ms(),
+                            };
+                            sink_line(&tx, &mut session_log, &ring);
+                            // armed 捕获在后续窗口内：TX 回显一并入档
+                            cap_on_line(&mut cap, &tx, sink, session_id, now_ms());
                         }
                         Err(_) => sink.error(session_id, write_err_msg),
                     }
@@ -1075,6 +1368,11 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
                 PortCmd::RecOff => {
                     if let Some(mut w) = session_log.take() {
                         let _ = w.flush();
+                    }
+                }
+                PortCmd::Signal { pin, level } => {
+                    if let Err(e) = io.set_signal(pin, level) {
+                        sink.error(session_id, &format!("设置信号线失败: {e}"));
                     }
                 }
             }
@@ -1129,7 +1427,9 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
                         apply_rx_rules(
                             &line, ring_no, io, &mut session_log, &ring, ts_fmt,
                             &auto_reply.read().clone(), &alert_cfg.read().clone(),
-                            &mut alert_states, &mut fired_alerts, sink, session_id, write_err_msg,
+                            &mut alert_states, &mut fired_alerts, &mut cap,
+                            &capture_cfg.read().clone(), &captures_dir,
+                            sink, session_id, write_err_msg,
                         );
                     } else {
                         line_buf.push(b);
@@ -1152,7 +1452,8 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
                     apply_rx_rules(
                         &line, ring_no, io, &mut session_log, &ring, ts_fmt,
                         &auto_reply.read().clone(), &alert_cfg.read().clone(), &mut alert_states,
-                        &mut fired_alerts, sink, session_id, write_err_msg,
+                        &mut fired_alerts, &mut cap, &capture_cfg.read().clone(), &captures_dir,
+                        sink, session_id, write_err_msg,
                     );
                     last_idle_flush = Instant::now();
                 }
@@ -1175,18 +1476,37 @@ fn stream_loop<T: std::io::Read + std::io::Write + ?Sized>(
             }
             sink.alert_hits(session_id, std::mem::take(&mut fired_alerts));
         }
+
+        // 捕获后续窗口到期（窗口内无新行也要收尾，否则档案悬着不发事件）
+        if let Some(run) = cap.as_ref() {
+            if now_ms() >= run.deadline_ms {
+                cap_finalize(&mut cap, sink, session_id);
+            }
+        }
     }
 
+    // 断连现场：会话结束前把最后 pre_ms 窗口抓成档案（设备重启/掉线现场最珍贵）
+    {
+        let cfg = capture_cfg.read().clone();
+        if cap.is_none() && cfg.enabled && cfg.on_disconnect {
+            let now = now_ms();
+            cap = capture_start(
+                session_id, &cfg, &captures_dir, &ring, "disconnect", "断连", now, sink,
+            );
+        }
+    }
+    cap_finalize(&mut cap, sink, session_id);
     finish_loop(session_log, sink, session_id);
 }
 
-/// 逐 RX 行规则评估：自动回复（读线程内直接回写设备，不依赖宿主存活）
-/// 与告警（命中攒批上报）。仅 RX 参与；TX 回显不受规则影响。
+/// 逐 RX 行规则评估：自动回复（读线程内直接回写设备，不依赖宿主存活）、
+/// 告警（命中攒批上报）与现场捕获触发（关键词/告警联动；armed 时本行入档）。
+/// 仅 RX 参与评估；TX 回显不受规则影响（armed 时照常入档）。
 #[allow(clippy::too_many_arguments)]
-fn apply_rx_rules<T: std::io::Write + ?Sized>(
+fn apply_rx_rules(
     line: &LogLine,
     ring_no: u64,
-    io: &mut T,
+    io: &mut Link,
     session_log: &mut Option<SessionLog>,
     ring: &RingBuf,
     ts_fmt: &str,
@@ -1194,6 +1514,9 @@ fn apply_rx_rules<T: std::io::Write + ?Sized>(
     alert_cfg: &AlertCfg,
     alert_states: &mut HashMap<String, AlertWinState>,
     fired_alerts: &mut Vec<BridgeAlert>,
+    cap: &mut Option<CaptureRun>,
+    capture_cfg: &CaptureCfg,
+    captures_dir: &std::path::Path,
     sink: &dyn EventSink,
     session_id: &str,
     write_err_msg: &str,
@@ -1201,6 +1524,7 @@ fn apply_rx_rules<T: std::io::Write + ?Sized>(
     if line.dir != Dir::Rx {
         return;
     }
+    let alerts_before = fired_alerts.len();
     // 自动回复：首条命中规则即回
     if let Some((payload, mode)) = auto_reply_payload(auto_reply, &line.text) {
         let bytes = if mode == "hex" {
@@ -1211,17 +1535,16 @@ fn apply_rx_rules<T: std::io::Write + ?Sized>(
         if !bytes.is_empty() {
             match io.write_all(&bytes) {
                 Ok(()) => {
-                    sink_line(
-                        &LogLine {
-                            ts: logfmt::format_ts(ts_fmt),
-                            dir: Dir::Tx,
-                            text: payload,
-                            bytes: None,
-                            epoch_millis: now_ms(),
-                        },
-                        session_log,
-                        ring,
-                    );
+                    let tx = LogLine {
+                        ts: logfmt::format_ts(ts_fmt),
+                        dir: Dir::Tx,
+                        text: payload,
+                        bytes: None,
+                        epoch_millis: now_ms(),
+                    };
+                    sink_line(&tx, session_log, ring);
+                    // armed 捕获在后续窗口内：自动回复的 TX 也入档
+                    cap_on_line(cap, &tx, sink, session_id, now_ms());
                 }
                 Err(_) => sink.error(session_id, write_err_msg),
             }
@@ -1241,6 +1564,14 @@ fn apply_rx_rules<T: std::io::Write + ?Sized>(
             at: now,
         });
     }
+    // 现场捕获：关键词命中或本行告警联动触发；armed 时本行继续入档（快照已含触发行）
+    let alert_hit = if fired_alerts.len() > alerts_before {
+        fired_alerts.last().map(|a| a.pattern.as_str())
+    } else {
+        None
+    };
+    cap_maybe_arm(cap, capture_cfg, captures_dir, ring, alert_hit, line, sink, session_id);
+    cap_on_line(cap, line, sink, session_id, now_ms());
 }
 
 // ---------- 网络数据源（TCP client/server / UDP 监听）----------
@@ -1358,6 +1689,8 @@ fn net_loop(
     ring: Arc<RingBuf>,
     auto_reply: Arc<RwLock<AutoReplyCfg>>,
     alert_cfg: Arc<RwLock<AlertCfg>>,
+    capture_cfg: Arc<RwLock<CaptureCfg>>,
+    captures_dir: PathBuf,
     alerts_mirror: Arc<RwLock<Vec<BridgeAlert>>>,
 ) {
     let desc = describe_transport(&config);
@@ -1374,8 +1707,9 @@ fn net_loop(
     };
     sink.status(&session_id, "connected");
 
+    let mut net = Link::Net(&mut link);
     stream_loop(
-        &mut link,
+        &mut net,
         "网络连接已断开",
         "网络写入失败",
         &*sink,
@@ -1390,6 +1724,8 @@ fn net_loop(
         ring,
         auto_reply,
         alert_cfg,
+        capture_cfg,
+        captures_dir,
         alerts_mirror,
     );
 }
@@ -1414,11 +1750,70 @@ mod tests {
         let buf = RingBuf::new();
         for i in 0..3 {
             buf.push(&mk_log("00:00:00.001", Dir::Rx, &format!("l{i}"), None, 1000 + i));
-        }
-        let nos: Vec<u64> = buf.snapshot().iter().map(|l| l.no).collect();
+        }        let nos: Vec<u64> = buf.snapshot().iter().map(|l| l.no).collect();
         assert_eq!(nos, vec![1, 2, 3]);
         assert_eq!(buf.last_no(), 3);
         assert_eq!(buf.len(), 3);
+    }
+
+    #[test]
+    fn lines_since_epoch_slices_and_reports_missing() {
+        let buf = RingBuf::new();
+        // 空 ring：空快照且不标缺失
+        assert!(buf.lines_since_epoch(1).0.is_empty());
+        for i in 0..5 {
+            buf.push(&mk_log("00:00:00.001", Dir::Rx, &format!("l{i}"), None, 1000 + i * 10));
+        }
+        // since 落在首行之前：全量且无缺失
+        let (snap, missing) = buf.lines_since_epoch(500);
+        assert_eq!(snap.len(), 5);
+        assert!(!missing);
+        // since 命中第 3 行（epoch=1020）：取 1020..=1040 三行
+        let (snap, missing) = buf.lines_since_epoch(1020);
+        assert_eq!(snap.len(), 3);
+        assert_eq!(snap[0].text, "l2");
+        assert!(!missing);
+        // since 早于全部行且 ring 未淘汰：全量、不标缺失
+        let small = RingBuf::new();
+        for i in 0..5 {
+            small.push(&mk_log("00:00:00.001", Dir::Rx, &format!("s{i}"), None, 1000 + i * 10));
+        }
+        let (snap, missing) = small.lines_since_epoch(1000);
+        assert_eq!(snap.len(), 5);
+        assert!(!missing);
+    }
+
+    #[test]
+    fn lines_since_epoch_flags_evicted_head() {
+        // 真实淘汰：灌满 ring 溢出 5 行后，现存首行(=6)已晚于 since=1000
+        // → 更早行被覆盖，标缺失
+        let buf = RingBuf::new();
+        let n = (RING_CAP + 5) as u64;
+        for i in 0..n {
+            buf.push(&mk_log("t", Dir::Rx, &format!("e{i}"), None, 1000 + i));
+        }
+        let (snap, missing) = buf.lines_since_epoch(1000);
+        assert_eq!(snap.len(), RING_CAP);
+        assert_eq!(snap[0].text, "e5");
+        assert!(missing);
+        // since 在现存首行之前：虽然发生过淘汰，但请求窗口内数据完整
+        let (_, missing) = buf.lines_since_epoch(1000 + RING_CAP as u64);
+        assert!(!missing);
+    }
+
+    #[test]
+    fn next_capture_path_avoids_conflicts() {
+        let dir = std::path::Path::new("/tmp");
+        let now = chrono::Local::now();
+        let taken: Vec<std::path::PathBuf> = vec![];
+        let p1 = next_capture_path(dir, "s1", &now, |p| taken.contains(&p.to_path_buf()));
+        assert_eq!(p1.file_name().unwrap().to_string_lossy(), format!("s1-cap-{}.log", now.format("%Y%m%d-%H%M%S")));
+        let stamp = p1.clone();
+        let p2 = next_capture_path(dir, "s1", &now, |p| p == &stamp);
+        assert_eq!(p2.file_name().unwrap().to_string_lossy(), format!("s1-cap-{}-2.log", now.format("%Y%m%d-%H%M%S")));
+        let stamp2 = p2.clone();
+        let p3 = next_capture_path(dir, "s1", &now, |p| p == &stamp || p == &stamp2);
+        assert!(p3.file_name().unwrap().to_string_lossy().ends_with("-3.log"));
     }
 
     #[test]
@@ -1542,6 +1937,7 @@ mod tests {
                 kind: SessionKind::Live,
                 auto_reply: Arc::new(RwLock::new(AutoReplyCfg::default())),
                 alert_cfg: Arc::new(RwLock::new(AlertCfg::default())),
+                capture_cfg: Arc::new(RwLock::new(CaptureCfg::default())),
                 stop,
                 write_tx: tx,
                 log_path: Arc::new(RwLock::new(PathBuf::from("x.log"))),

@@ -43,7 +43,10 @@ function jumpToHit(sessionId: string, no: number) {
         清空
       </button>
     </div>
-    <div v-if="!alerts.hits.length" class="dock-empty">暂无告警</div>
+    <div v-if="!alerts.hits.length" class="dock-empty">
+      <span>暂无告警</span>
+      <small>连接设备后，命中的告警会显示在这里</small>
+    </div>
     <div v-else class="dock-alerts-list">
       <div
         v-for="h in alerts.hits"

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useSessionStore } from '../stores/session'
 import { theme, toggleTheme } from '../composables/useTheme'
 import { useBridgeStore } from '../stores/bridge'
@@ -7,6 +7,7 @@ import LogSettingsPanel from './LogSettingsPanel.vue'
 import BridgeSettings from './BridgeSettings.vue'
 import PresetsPanel from './PresetsPanel.vue'
 import type { PortConfig } from '../types'
+import { POPOVER_EVENT, requestPopover } from '../composables/usePopoverBridge'
 
 /** 设置弹层：公用功能按 日志/集成/视图 归类。二级内容在同一浮层内切换视图（无嵌套弹层，不遮挡）。 */
 defineProps<{ cfg: PortConfig }>()
@@ -29,6 +30,7 @@ const title = computed(() => titles[view.value])
 function toggle() {
   open.value = !open.value
   if (!open.value) view.value = 'menu'
+  if (open.value) requestPopover('settings')
 }
 function close() {
   open.value = false
@@ -47,6 +49,24 @@ function toggleSplit() {
 function applyPreset(c: PortConfig) {
   emit('apply-preset', c)
 }
+
+function onPopover(event: Event) {
+  const name = (event as CustomEvent<string>).detail
+  if (name === 'settings') open.value = true
+  else close()
+}
+function onDocumentPointerDown(event: PointerEvent) {
+  const target = event.target as HTMLElement
+  if (!target.closest('.sm-pop') && !target.closest('.titlebar-actions')) close()
+}
+onMounted(() => {
+  window.addEventListener(POPOVER_EVENT, onPopover)
+  document.addEventListener('pointerdown', onDocumentPointerDown)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener(POPOVER_EVENT, onPopover)
+  document.removeEventListener('pointerdown', onDocumentPointerDown)
+})
 </script>
 
 <template>

@@ -30,9 +30,12 @@ import AutoReplyPanel from './components/AutoReplyPanel.vue'
 import AlertPanel from './components/AlertPanel.vue'
 import ConfigPresetsPanel from './components/ConfigPresetsPanel.vue'
 import PlotConfigPanel from './components/PlotConfigPanel.vue'
+import CapturePanel from './components/CapturePanel.vue'
 import AiNotesPanel from './components/AiNotesPanel.vue'
 import SendPanel from './components/SendPanel.vue'
 import SplitView from './components/SplitView.vue'
+import ToastHost from './components/ToastHost.vue'
+import { requestPopover } from './composables/usePopoverBridge'
 
 const store = useSessionStore()
 const bridge = useBridgeStore()
@@ -214,6 +217,19 @@ const sidebarStyle = computed(() =>
 
 // ---- 面板开合记忆：默认全收起，用户展开/收起即持久化（布局重构 V1） ----
 const panel = usePanelState()
+
+function openWelcomeLog() {
+  requestPopover('open-log')
+}
+// Ctrl/Cmd+N 新建连接（欢迎页 hints 同款入口；全局可用）
+function onGlobalKey(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'n' || e.key === 'N')) {
+    e.preventDefault()
+    requestPopover('new-connection')
+  }
+}
+onMounted(() => window.addEventListener('keydown', onGlobalKey))
+onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKey))
 function onPanelToggle(e: Event, id: string) {
   // toggle 事件在 open 态变更后触发，读 DOM 当前值即用户意图
   panel.setOpen(id, (e.target as HTMLDetailsElement).open)
@@ -252,7 +268,7 @@ function onPanelToggle(e: Event, id: string) {
               >对比</button>
             </div>
           </div>
-          <div id="center-body" class="center-body">
+          <div v-if="store.active" id="center-body" class="center-body">
             <div class="log-wrap" :style="logWrapStyle">
               <LogView :session-id="store.activeId ?? ''" />
             </div>
@@ -270,12 +286,35 @@ function onPanelToggle(e: Event, id: string) {
             </div>
             <CompareView v-if="compareOn" />
           </div>
-          <DockView />
-          <SendPanel />
+          <div v-else class="welcome">
+            <div class="welcome-card">
+              <div class="welcome-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="3 15 7 15 7 9 11 9 11 15 15 15 15 9 19 9" />
+                  <circle cx="19" cy="9" r="1.9" fill="var(--tx)" stroke="none" />
+                </svg>
+              </div>
+              <div class="welcome-copy">
+                <h1>开始调试你的串口</h1>
+                <p>连接设备或打开日志文件，实时查看、搜索和分析字节流。</p>
+              </div>
+              <div class="welcome-actions">
+                <button class="btn btn-primary" type="button" @click="requestPopover('new-connection')">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
+                  新建连接
+                </button>
+                <button class="btn btn-ghost" type="button" @click="openWelcomeLog">打开日志文件</button>
+              </div>
+              <div class="welcome-hints"><span>支持串口、TCP、UDP</span><span>·</span><span>日志可离线分析</span><span>·</span><span><kbd>Ctrl N</kbd> 新建连接</span></div>
+            </div>
+          </div>
+          <DockView v-if="store.active" />
+          <SendPanel v-if="store.active" />
         </div>
       </template>
       <!-- 侧栏与收放手柄在单列/分屏两种模式下都渲染 -->
       <div
+        v-if="store.active"
         class="sidebar-handle"
         :class="{ collapsed: sidebarCollapsed }"
         title="拖动调整侧栏宽度"
@@ -298,7 +337,7 @@ function onPanelToggle(e: Event, id: string) {
           </svg>
         </button>
       </div>
-      <aside class="app-sidebar" :class="{ collapsed: sidebarCollapsed }" :style="sidebarStyle">
+      <aside v-if="store.active" class="app-sidebar" :class="{ collapsed: sidebarCollapsed }" :style="sidebarStyle">
         <div class="group-head">查找</div>
         <SearchPanel :open="panel.isOpen('search')" @toggle="onPanelToggle($event, 'search')" />
         <BookmarkPanel :open="panel.isOpen('bookmarks')" @toggle="onPanelToggle($event, 'bookmarks')" />
@@ -311,6 +350,7 @@ function onPanelToggle(e: Event, id: string) {
 
         <div class="group-head">数据</div>
         <PlotConfigPanel :open="panel.isOpen('plot')" @toggle="onPanelToggle($event, 'plot')" />
+        <CapturePanel :open="panel.isOpen('capture')" @toggle="onPanelToggle($event, 'capture')" />
 
         <div class="group-head">库</div>
         <ConfigPresetsPanel :open="panel.isOpen('presets')" @toggle="onPanelToggle($event, 'presets')" />
@@ -318,5 +358,6 @@ function onPanelToggle(e: Event, id: string) {
       </aside>
     </div>
     <StatusBar />
+    <ToastHost />
   </div>
 </template>

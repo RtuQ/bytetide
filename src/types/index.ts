@@ -144,6 +144,69 @@ export interface PortPreset {
   config: PortConfig
 }
 
+/** 快捷帧：命名保存的常用发送内容，一键直发（全局库，跨会话复用） */
+export interface SendPreset {
+  id: string
+  name: string
+  payload: string
+  mode: 'ascii' | 'hex'
+}
+
+/** 序列步骤：发送一段内容 / 延时 / 信号线翻转（DTR·RTS，bootloader 复位用） */
+export type SeqStep =
+  | { kind: 'send'; payload: string; mode: 'ascii' | 'hex'; appendNewline: boolean }
+  | { kind: 'delay'; ms: number }
+  | { kind: 'signal'; pin: 'dtr' | 'rts'; level: boolean }
+
+/** 发送序列：步骤按序执行，可循环（轮间隔 intervalMs） */
+export interface SendSequence {
+  id: string
+  name: string
+  steps: SeqStep[]
+  loop: boolean
+  intervalMs: number
+}
+
+/** 触发式现场捕获规则：RX 行命中 pattern 即触发转储（评估在后端读线程） */
+export interface CaptureRule {
+  id: string
+  pattern: string
+  useRegex: boolean
+  caseSensitive: boolean
+  wholeWord: boolean
+  enabled: boolean
+}
+
+export interface CaptureCfg {
+  enabled: boolean
+  /** 断连/读错误时也回溯抓一段（设备重启/掉线现场） */
+  onDisconnect: boolean
+  /** 触发前回溯窗口 ms（后端钳制 1s–30min） */
+  preMs: number
+  /** 触发后继续录制窗口 ms（armed 中再命中顺延） */
+  postMs: number
+  rules: CaptureRule[]
+}
+
+/** 工厂而非常量：rules 数组各会话必须独立持有，不可共享引用 */
+export function makeCaptureCfg(): CaptureCfg {
+  return {
+    enabled: false,
+    onDisconnect: true,
+    preMs: 120000,
+    postMs: 60000,
+    rules: [],
+  }
+}
+
+/** 现场档案条目（list_captures_cmd 返回，按修改时间倒序） */
+export interface CaptureMeta {
+  fileName: string
+  path: string
+  size: number
+  modifiedMs: number
+}
+
 /** 绘图数据源：原始字节 / ASCII hex 文本 */
 export type PlotSource = 'binary' | 'ascii-hex'
 /** 帧校验方式：无 / 累加和(1B) / XOR(1B) */

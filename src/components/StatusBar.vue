@@ -25,6 +25,11 @@ const STATUS_TEXT: Record<SessionStatus, string> = {
   offline: '离线',
 }
 
+/** 现场捕获 armed：活动会话正在写后续窗口（呼吸指示；capture-saved 解除） */
+const capActive = computed(() =>
+  active.value ? store.captureActive[active.value.id] : undefined,
+)
+
 /** 端口/传输参数摘要：串口显 115200 8N1；网络源显 host:port */
 const linkText = computed(() => {
   const c = active.value?.config
@@ -43,6 +48,7 @@ const linkText = computed(() => {
     <span class="sb-sect">
       <span class="sb-dot" :class="active.status" :title="STATUS_TEXT[active.status]"></span>
       <b class="sb-name">{{ active.config.name || active.id }}</b>
+      <span class="sb-status">{{ STATUS_TEXT[active.status] }}</span>
       <span class="sb-dim">{{ linkText }}</span>
     </span>
     <span class="sb-sect sb-mono">
@@ -54,6 +60,13 @@ const linkText = computed(() => {
     </span>
     <span v-if="active.ringDropped > 0" class="sb-sect">
       <span class="sb-bad" title="后端 ring 容量窗口内未来得及拉取就被覆盖的行（前端停顿过长时发生）">Ring 丢 {{ active.ringDropped }}</span>
+    </span>
+    <span
+      v-if="capActive"
+      class="sb-sect sb-cap"
+      :title="`现场捕获进行中：命中「${capActive}」，正在写后续窗口，完成后自动存档`"
+    >
+      <span class="sb-cap-dot"></span>捕获中
     </span>
     <span class="sb-sect sb-dim" :class="perfCls" title="显示滞后=当前墙钟−最新行后端时间戳；批均=单批次处理耗时">
       滞后 {{ perf.lagMs.value }}ms · 批均 {{ perf.batchCostMs.value }}ms

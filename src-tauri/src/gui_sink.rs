@@ -1,7 +1,7 @@
 //! core EventSink 的 GUI 实现：转发为 Tauri 事件（事件名/载荷形状与抽取前一致）。
 
 use bytetide_core::serial::manager::BridgeAlert;
-use bytetide_core::sink::EventSink;
+use bytetide_core::sink::{CaptureInfo, EventSink};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
@@ -25,6 +25,23 @@ struct ErrorPayload {
 struct AlertHitPayload {
     session_id: String,
     hits: Vec<BridgeAlert>,
+}
+
+/// 现场捕获档案落成事件载荷（极稀疏：一次触发一条）
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CaptureSavedPayload {
+    session_id: String,
+    #[serde(flatten)]
+    info: CaptureInfo,
+}
+
+/// 现场捕获 armed 状态事件载荷（触发瞬间；capture-saved 即解除）
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CaptureActivePayload {
+    session_id: String,
+    rule: String,
 }
 
 pub struct GuiSink(pub AppHandle);
@@ -56,6 +73,26 @@ impl EventSink for GuiSink {
             AlertHitPayload {
                 session_id: session_id.to_string(),
                 hits,
+            },
+        );
+    }
+
+    fn capture_saved(&self, session_id: &str, info: CaptureInfo) {
+        let _ = self.0.emit(
+            "capture-saved",
+            CaptureSavedPayload {
+                session_id: session_id.to_string(),
+                info,
+            },
+        );
+    }
+
+    fn capture_active(&self, session_id: &str, rule: &str) {
+        let _ = self.0.emit(
+            "capture-active",
+            CaptureActivePayload {
+                session_id: session_id.to_string(),
+                rule: rule.to_string(),
             },
         );
     }

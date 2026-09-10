@@ -24,8 +24,7 @@
     "@tauri-apps/plugin-opener": "^2",
     "@vueuse/core": "^14.4.0",
     "pinia": "^4.0.3",
-    "vue": "^3.5.13",
-    "vue-virtual-scroller": "^3.0.5"
+    "vue": "^3.5.13"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

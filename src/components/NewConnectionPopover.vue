@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useSessionStore } from '../stores/session'
+import { POPOVER_EVENT, requestPopover } from '../composables/usePopoverBridge'
+import { connectionErrorHint } from '../composables/useToast'
 import type { PortConfig } from '../types'
 
 /** 新建连接弹层：数据源 + 参数字段 + 从预设。cfg 由 PortBar 持有（记忆/预设回填），此处就地改字段。 */
@@ -11,14 +13,39 @@ const store = useSessionStore()
 const open = ref(false)
 const busy = ref(false)
 const err = ref('')
+// hint 对正常断连类文案返回 null（连接失败不会是断连，兜底一份默认文案保卡片四行齐全）
+const errorHint = computed(() =>
+  err.value ? (connectionErrorHint(err.value) ?? { title: '连接失败', action: '检查参数后重试' }) : null,
+)
 
 function toggle() {
   open.value = !open.value
   if (open.value) err.value = ''
+  if (open.value) requestPopover('new-connection')
 }
 function close() {
   open.value = false
 }
+
+function onPopover(event: Event) {
+  const name = (event as CustomEvent<string>).detail
+  if (name === 'new-connection') {
+    open.value = true
+    err.value = ''
+  } else close()
+}
+function onDocumentPointerDown(event: PointerEvent) {
+  const target = event.target as HTMLElement
+  if (!target.closest('.nc-pop') && !target.closest('.nc-trigger')) close()
+}
+onMounted(() => {
+  window.addEventListener(POPOVER_EVENT, onPopover)
+  document.addEventListener('pointerdown', onDocumentPointerDown)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener(POPOVER_EVENT, onPopover)
+  document.removeEventListener('pointerdown', onDocumentPointerDown)
+})
 
 type Transport = NonNullable<PortConfig['transport']>
 const transport = computed<Transport>({
@@ -100,6 +127,7 @@ async function connect() {
     emit('connected')
     close()
   } catch (e: unknown) {
+    // 弹层内的富错误卡（分类+建议+刷新/重试）就是完整反馈，不再叠一条更薄的 toast
     err.value = String(e instanceof Error ? e.message : e)
   } finally {
     busy.value = false
@@ -160,6 +188,11 @@ function applyPreset(id: string) {
         </div>
       </div>
 
+      <details class="nc-advanced">
+        <summary>
+          <svg class="nc-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+          高级参数 <span>波特率 · 数据位 · 校验 · 流控</span>
+        </summary>
       <div class="row3">
       <div class="field">
         <span class="field-label">波特率</span>
@@ -231,6 +264,7 @@ function applyPreset(id: string) {
           </select>
         </div>
       </div>
+      </details>
     </template>
 
     <template v-else>
@@ -261,10 +295,18 @@ function applyPreset(id: string) {
       </div>
     </template>
 
-    <span v-if="err" class="err-msg">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
-      {{ err }}
-    </span>
+    <div v-if="err" class="nc-error">
+      <div class="nc-error-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+        <b>{{ errorHint?.title }}</b>
+      </div>
+      <div class="nc-error-detail">{{ err }}</div>
+      <div class="nc-error-action">{{ errorHint?.action }}</div>
+      <div class="nc-error-buttons">
+        <button v-if="transport === 'serial'" class="btn btn-ghost btn-sm" type="button" @click="store.refreshPorts()">刷新端口</button>
+        <button class="btn btn-primary btn-sm" type="button" @click="connect">重试</button>
+      </div>
+    </div>
 
     <div class="pop-foot">
       <button class="btn" type="button" @click="close">取消</button>

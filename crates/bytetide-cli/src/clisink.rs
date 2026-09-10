@@ -39,6 +39,9 @@ impl EventSink for CliSink {
             let _ = tx.send(SinkEvent::Alerts(hits));
         }
     }
+    // CLI 无档案列表 UI：现场捕获事件静默丢弃（录制 TSV 不受影响）
+    fn capture_saved(&self, _session_id: &str, _info: bytetide_core::sink::CaptureInfo) {}
+    fn capture_active(&self, _session_id: &str, _rule: &str) {}
 }
 
 #[cfg(test)]

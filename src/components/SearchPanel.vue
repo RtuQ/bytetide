@@ -110,6 +110,7 @@ const filteredHist = computed(() => {
     <summary class="panel-head">
       <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
       <span class="panel-title">搜索</span>
+      <span v-if="active && stats.matchLines.length" class="badge">{{ stats.matchLines.length }}</span>
       <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
     </summary>
     <div class="panel-body" v-if="active">

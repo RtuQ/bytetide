@@ -3,8 +3,26 @@
 //! CLI 实现写 stderr 或静默。数据行不走这里——行只进 ring 与落盘文件，
 //! 消费者按 `no` 游标拉取（拉模型，防 IPC 洪水）。
 
+use serde::Serialize;
+
 use crate::serial::manager::BridgeAlert;
 use parking_lot::Mutex;
+
+/// 现场捕获档案落成信息（稀疏事件；前端据此刷新档案列表）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureInfo {
+    /// 档案文件完整路径
+    pub path: String,
+    /// 触发方式："keyword" | "alert" | "disconnect"
+    pub trigger: String,
+    /// 触发规则文本（keyword=规则 pattern；alert=告警 pattern；disconnect=「断连」）
+    pub rule: String,
+    /// 档案内的数据行数（不含头注释）
+    pub lines: u64,
+    /// 触发时刻 epoch ms
+    pub at: u64,
+}
 
 pub trait EventSink: Send + Sync + 'static {
     /// 会话生命周期状态：connecting / connected / disconnected / error。
@@ -13,6 +31,10 @@ pub trait EventSink: Send + Sync + 'static {
     fn error(&self, session_id: &str, error: &str);
     /// 告警命中（稀疏上报；通知/提示音等表现层行为由宿主决定）。
     fn alert_hits(&self, session_id: &str, hits: Vec<BridgeAlert>);
+    /// 现场捕获档案落成（极稀疏：一次触发一条）。
+    fn capture_saved(&self, session_id: &str, info: CaptureInfo);
+    /// 现场捕获进入 armed（触发瞬间开始写后续窗口；收到 capture_saved 即解除）。
+    fn capture_active(&self, session_id: &str, rule: &str);
 }
 
 /// 测试/无宿主场景的 EventSink：把事件按序收进 Vec 供断言。
@@ -32,6 +54,15 @@ impl EventSink for VecSink {
             hits.len()
         ));
     }
+    fn capture_saved(&self, session_id: &str, info: CaptureInfo) {
+        self.0.lock().push(format!(
+            "capture {session_id} {} n={}",
+            info.path, info.lines
+        ));
+    }
+    fn capture_active(&self, session_id: &str, rule: &str) {
+        self.0.lock().push(format!("capture-active {session_id} {rule}"));
+    }
 }
 
 /// 静默丢弃所有事件（CLI 不需要事件通道时使用）。
@@ -41,6 +72,8 @@ impl EventSink for NullSink {
     fn status(&self, _session_id: &str, _status: &str) {}
     fn error(&self, _session_id: &str, _error: &str) {}
     fn alert_hits(&self, _session_id: &str, _hits: Vec<BridgeAlert>) {}
+    fn capture_saved(&self, _session_id: &str, _info: CaptureInfo) {}
+    fn capture_active(&self, _session_id: &str, _rule: &str) {}
 }
 
 #[cfg(test)]

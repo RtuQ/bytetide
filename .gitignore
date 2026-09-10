@@ -73,3 +73,6 @@ sample-data/perf-diag-*.json
 
 # 单实例锁（运行时产物，lib.rs SingleInstance 在 cwd 生成）
 /serial_tool-single-instance-lock
+
+# 本地调研工具产物（个人，不进仓库）
+docs/superpowers/
