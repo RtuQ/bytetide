@@ -34,6 +34,9 @@ import {
   type Keyword,
 } from '../types'
 import { parseLogFile } from '../composables/useLogParser'
+import { toast } from '../composables/useToast'
+import { openPath } from '@tauri-apps/plugin-opener'
+import { byteLength } from '../utils/logLine'
 import type { DecodedFrame } from '../types/parser'
 
 /** 中心区视图模式：log=仅日志；split=日志+图表同屏；plot=仅图表 */
@@ -817,12 +820,23 @@ export const useSessionStore = defineStore('session', {
       if (rule) this.captureActive[id] = rule
       else delete this.captureActive[id]
     },
+    /** 「打开日志」：取当前分段路径并用系统默认程序打开；空路径/失败走 toast 报错 */
     async openLogPath(id: string) {
+      let p = ''
       try {
-        const p = await invoke<string>('session_log_path_cmd', { sessionId: id })
-        alert(p)
+        p = await invoke<string>('session_log_path_cmd', { sessionId: id })
       } catch (e) {
-        alert(String(e))
+        toast('无法打开日志文件', 'error', 4000, String(e))
+        return
+      }
+      if (!p) {
+        toast('无法打开日志文件', 'error', 4000, '当前会话尚未生成日志文件')
+        return
+      }
+      try {
+        await openPath(p)
+      } catch (e) {
+        toast('无法打开日志文件', 'error', 4000, String(e))
       }
     },
     /** 落盘录制开关：关=暂停写日志文件（数据仍进日志视图）；开=另起新分段文件继续录制。
@@ -976,9 +990,10 @@ export const useSessionStore = defineStore('session', {
     tallyBytes(id: string, raw: RawLogLine[]) {
       const s = this.sessions[id]
       if (!s || raw.length === 0) return
-      const enc = new TextEncoder()
       for (const r of raw) {
-        const bytes = enc.encode(r.text).length
+        // 优先原始字节（后端仅在该行含非法 UTF-8 时附带 bytes）；无 bytes 才按
+        // 文本 UTF-8 编码——二进制行若把 lossy 文本（U+FFFD）再编码必算错
+        const bytes = byteLength(r)
         if (r.dir === 'rx') {
           s.rxBytes = (s.rxBytes ?? 0) + bytes
           s.rxLines = (s.rxLines ?? 0) + 1

@@ -449,7 +449,7 @@ onBeforeUnmount(() => {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M15 18v-6"/><path d="M12 15h6"/></svg>
           <span>分段</span>
         </button>
-        <button v-if="session.kind !== 'offline'" class="btn btn-ghost btn-sm" title="打开日志文件路径" @click="store.openLogPath(props.sessionId)">
+        <button v-if="session.kind !== 'offline'" class="btn btn-ghost btn-sm" title="打开当前日志文件" @click="store.openLogPath(props.sessionId)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
           <span>日志</span>
         </button>

@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useSessionStore, registerParserOnClear } from '../session'
+import { byteLength } from '../../utils/logLine'
+import { toasts, _resetToasts } from '../../composables/useToast'
 import { DEFAULT_LOG_CONFIG, DEFAULT_PLOT_CONFIG } from '../../types'
 import type { DecodedFrame } from '../../types/parser'
 import type { PortConfig, RawLogLine } from '../../types'
@@ -8,6 +10,9 @@ import type { PortConfig, RawLogLine } from '../../types'
 // invoke 全文件打桩：录制开关/重连等动作在无 Tauri 后端的测试环境可走通
 const invokeMock = vi.hoisted(() => vi.fn(async () => null as unknown))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }))
+// openPath 打桩：openLogPath 的打开行为在无 Tauri 后端可断言
+const openPathMock = vi.hoisted(() => vi.fn(async () => undefined))
+vi.mock('@tauri-apps/plugin-opener', () => ({ openPath: openPathMock }))
 
 function mkDecoded(no: number): DecodedFrame {
   return {
@@ -634,5 +639,98 @@ describe('prependBackfill 翻页补旧行（方案 B）', () => {
     expect(s.backfillPending).toEqual([])
     expect(s.backfillExhausted).toBe(false)
     expect(s.reconnectNo).toBe(0)
+  })
+})
+
+describe('byteLength 二进制字节计数（stage-1 Task 5）', () => {
+  it('prefers original bytes over lossy UTF-8 text', () => {
+    expect(byteLength({ bytes: [0xff], text: '\ufffd' })).toBe(1)
+  })
+
+  it('uses UTF-8 length when raw bytes are absent', () => {
+    expect(byteLength({ bytes: null, text: '中' })).toBe(3)
+  })
+
+  it('bytes 缺省（undefined）同样回退文本 UTF-8 长度', () => {
+    expect(byteLength({ bytes: undefined, text: 'ab' })).toBe(2)
+  })
+})
+
+describe('tallyBytes 二进制行计数（stage-1 Task 5）', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('带原始 bytes 的行按 bytes.length 计数，不把 lossy 文本再编码', () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('tb-1', CFG)
+    store.tallyBytes(id, [
+      // lossy 文本 3×3=9 字节是错的；该行真实字节为 2
+      { ...mkRaw(1), dir: 'rx', text: '\ufffd\ufffd\ufffd', bytes: [0xff, 0xfe] },
+      { ...mkRaw(2), dir: 'tx', text: '\ufffd', bytes: [0x00] },
+    ])
+    const s = store.sessions[id]!
+    expect(s.rxBytes).toBe(2)
+    expect(s.txBytes).toBe(1)
+    expect(s.rxLines).toBe(1)
+    expect(s.txLines).toBe(1)
+  })
+
+  it('无原始 bytes 的行回退文本 UTF-8 长度', () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('tb-2', CFG)
+    store.tallyBytes(id, [{ ...mkRaw(1), text: '中' }])
+    expect(store.sessions[id]!.rxBytes).toBe(3)
+  })
+})
+
+describe('openLogPath 打开当前日志文件（stage-1 Task 5）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    invokeMock.mockReset()
+    invokeMock.mockResolvedValue('')
+    openPathMock.mockReset()
+    openPathMock.mockResolvedValue(undefined)
+    _resetToasts()
+  })
+
+  it('取当前分段路径并用系统程序打开，无错误提示', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('olp-1', CFG)
+    invokeMock.mockResolvedValue('/tmp/session.log')
+    await store.openLogPath(id)
+    expect(invokeMock).toHaveBeenCalledWith('session_log_path_cmd', { sessionId: id })
+    expect(openPathMock).toHaveBeenCalledWith('/tmp/session.log')
+    expect(toasts.value).toHaveLength(0)
+  })
+
+  it('空路径不开文件，报错提示', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('olp-2', CFG)
+    await store.openLogPath(id)
+    expect(openPathMock).not.toHaveBeenCalled()
+    expect(toasts.value.some((t) => t.kind === 'error' && t.message === '无法打开日志文件')).toBe(true)
+  })
+
+  it('openPath 失败走 toast（标题/错误级/详情），不用 alert', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('olp-3', CFG)
+    invokeMock.mockResolvedValue('/tmp/gone.log')
+    openPathMock.mockRejectedValueOnce(new Error('boom'))
+    await store.openLogPath(id)
+    const t = toasts.value[0]!
+    expect(t.message).toBe('无法打开日志文件')
+    expect(t.kind).toBe('error')
+    expect(t.detail).toContain('boom')
+  })
+
+  it('取路径命令失败同样 toast 报错且不开文件', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('olp-4', CFG)
+    invokeMock.mockRejectedValueOnce(new Error('no session'))
+    await store.openLogPath(id)
+    expect(openPathMock).not.toHaveBeenCalled()
+    const t = toasts.value[0]!
+    expect(t.message).toBe('无法打开日志文件')
+    expect(t.kind).toBe('error')
+    expect(t.detail).toContain('no session')
   })
 })
