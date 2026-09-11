@@ -8,7 +8,7 @@ use bytetide_core::serial::port::{list_ports, LogLine, PortConfig, PortInfo};
 use bytetide_core::serial::rules::{AlertCfg, AutoReplyCfg};
 use tauri::{AppHandle, Manager, State};
 
-use crate::bridge::{BridgeConfig, BridgeConfigPatch, BridgeController};
+use crate::bridge::{BridgeConfigPatch, BridgeController, BridgeView};
 use crate::gui_sink::GuiSink;
 use crate::state::AppState;
 
@@ -298,20 +298,20 @@ pub fn create_offline_session_cmd(
 // ===== REST 分析桥命令 =====
 
 #[tauri::command]
-pub fn bridge_get_config_cmd(bridge: State<'_, BridgeController>) -> BridgeConfig {
-    bridge.get_config()
+pub fn bridge_get_config_cmd(bridge: State<'_, BridgeController>) -> BridgeView {
+    bridge.get_view()
 }
 
 #[tauri::command]
 pub fn bridge_set_config_cmd(
     patch: BridgeConfigPatch,
     bridge: State<'_, BridgeController>,
-) -> BridgeConfig {
+) -> Result<BridgeView, String> {
     bridge.set_config(&patch)
 }
 
 #[tauri::command]
-pub fn bridge_regen_token_cmd(bridge: State<'_, BridgeController>) -> BridgeConfig {
+pub fn bridge_regen_token_cmd(bridge: State<'_, BridgeController>) -> Result<BridgeView, String> {
     bridge.regen_token()
 }
 

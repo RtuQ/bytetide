@@ -37,6 +37,8 @@ single-instance = "0.3"
 # REST 分析桥（进程内 axum server + 正则过滤 + 帧解码）
 axum = "0.7"
 regex = { workspace = true }
+# 桥 Bearer 令牌的随机源（OS CSPRNG）
+getrandom = { workspace = true }
 tauri-plugin-notification = "2"
 
 # Windows：退出 EcoQoS 能效限流（后台/锁屏时系统会把进程丢进节能队列，

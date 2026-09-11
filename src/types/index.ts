@@ -279,6 +279,28 @@ export const DEFAULT_BRIDGE_CONFIG: BridgeConfig = {
   allowSend: false,
 }
 
+/** 桥服务运行态：disabled/starting/running/error（后端 RuntimeState 小写透传） */
+export type BridgeRuntimeState = 'disabled' | 'starting' | 'running' | 'error'
+
+/** 桥运行态快照：bound=实际监听地址（ip:port）；lastError 仅描述故障，绝不含令牌 */
+export interface BridgeRuntime {
+  state: BridgeRuntimeState
+  bound: string | null
+  lastError: string | null
+}
+
+export const DEFAULT_BRIDGE_RUNTIME: BridgeRuntime = {
+  state: 'disabled',
+  bound: null,
+  lastError: null,
+}
+
+/** bridge_* 命令完整响应：配置 + 运行态（后端 BridgeView camelCase 对齐） */
+export interface BridgeView {
+  config: BridgeConfig
+  runtime: BridgeRuntime
+}
+
 /** 桥单行：no 为后端独立序号（与前端 lineCounter 无关，环形淘汰后继续递增） */
 export interface BridgeMatchHit {
   offset: number
