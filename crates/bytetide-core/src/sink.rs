@@ -49,10 +49,9 @@ impl EventSink for VecSink {
         self.0.lock().push(format!("error {session_id} {error}"));
     }
     fn alert_hits(&self, session_id: &str, hits: Vec<BridgeAlert>) {
-        self.0.lock().push(format!(
-            "alert-hit {session_id} n={}",
-            hits.len()
-        ));
+        self.0
+            .lock()
+            .push(format!("alert-hit {session_id} n={}", hits.len()));
     }
     fn capture_saved(&self, session_id: &str, info: CaptureInfo) {
         self.0.lock().push(format!(
@@ -61,7 +60,9 @@ impl EventSink for VecSink {
         ));
     }
     fn capture_active(&self, session_id: &str, rule: &str) {
-        self.0.lock().push(format!("capture-active {session_id} {rule}"));
+        self.0
+            .lock()
+            .push(format!("capture-active {session_id} {rule}"));
     }
 }
 
@@ -86,16 +87,19 @@ mod tests {
         sink.status("s1", "connecting");
         sink.status("s1", "connected");
         sink.error("s1", "读取错误");
-        sink.alert_hits("s1", vec![BridgeAlert {
-            id: "a1".into(),
-            rule_id: "r1".into(),
-            pattern: "ERR".into(),
-            level: "err".into(),
-            no: 3,
-            ts: "t".into(),
-            text: "ERR".into(),
-            at: 1,
-        }]);
+        sink.alert_hits(
+            "s1",
+            vec![BridgeAlert {
+                id: "a1".into(),
+                rule_id: "r1".into(),
+                pattern: "ERR".into(),
+                level: "err".into(),
+                no: 3,
+                ts: "t".into(),
+                text: "ERR".into(),
+                at: 1,
+            }],
+        );
         assert_eq!(
             sink.0.lock().clone(),
             vec![

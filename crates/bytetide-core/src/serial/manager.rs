@@ -13,11 +13,11 @@ use serde::{Deserialize, Serialize};
 
 use super::port::{open_port, Dir, LogLine, PortConfig};
 use crate::logfmt;
-use crate::session::SessionLog;
 use crate::serial::rules::{
-    alert_eval, auto_reply_payload, AlertCfg, AlertWinState, AutoReplyCfg, CaptureCfg,
-    capture_eval, clamp_capture_window,
+    alert_eval, auto_reply_payload, capture_eval, clamp_capture_window, AlertCfg, AlertWinState,
+    AutoReplyCfg, CaptureCfg,
 };
+use crate::session::SessionLog;
 use crate::sink::{CaptureInfo, EventSink};
 
 /// 经 core 再导出 `anyhow`：manager 的公开签名（send/session_log_path…）使用其类型，
@@ -100,6 +100,8 @@ pub struct SessionSnap {
     pub id: String,
     pub config: PortConfig,
     pub status: String,
+    /// 最近一次错误消息（读线程经共享状态上报；无错误为 null）。
+    pub last_error: Option<String>,
     pub line_count: usize,
     pub ring_cap: usize,
 }
@@ -299,11 +301,16 @@ impl RingBuf {
     fn lines_since_epoch(&self, since_epoch_ms: u64) -> (Vec<BridgeLine>, bool) {
         let ring = self.ring.lock();
         let missing_earlier = self.seq.load(Ordering::Relaxed) as usize > ring.len()
-            && ring.front().is_some_and(|l| l.epoch_millis > since_epoch_ms);
+            && ring
+                .front()
+                .is_some_and(|l| l.epoch_millis > since_epoch_ms);
         let (mut lo, mut hi) = (0usize, ring.len());
         while lo < hi {
             let mid = (lo + hi) / 2;
-            if ring.get(mid).is_some_and(|l| l.epoch_millis < since_epoch_ms) {
+            if ring
+                .get(mid)
+                .is_some_and(|l| l.epoch_millis < since_epoch_ms)
+            {
                 lo = mid + 1;
             } else {
                 hi = mid;
@@ -342,7 +349,10 @@ pub enum PortCmd {
     /// 暂停落盘：flush+关闭当前文件（ring/视图不受影响，仅停止写文件）。
     RecOff,
     /// DTR/RTS 置位：串口链路直接写引脚，网络源在链路层报“无信号线”。
-    Signal { pin: Pin, level: bool },
+    Signal {
+        pin: Pin,
+        level: bool,
+    },
 }
 
 /// 会话类型：实时串口 / 离线加载的日志文件。
@@ -351,11 +361,77 @@ enum SessionKind {
     Offline,
 }
 
+/// 会话运行状态：REST 快照（bridge_list）与 sink 事件的共同事实源（serde 小写，
+/// 与既有 REST status 字符串一致）。读线程写、REST 读，挂在 SessionHandle.state。
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionStatus {
+    /// 已创建、读线程建链中（开串口/建链完成前）
+    #[default]
+    Connecting,
+    /// 链路就绪，读循环运行中
+    Connected,
+    /// 正常收尾（用户停止/对端关闭/停止标志退出）
+    Disconnected,
+    /// 终止性错误（开串口失败/建链失败/读硬错误）
+    Error,
+    /// 离线加载的日志会话（无链路）
+    Offline,
+}
+
+impl SessionStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SessionStatus::Connecting => "connecting",
+            SessionStatus::Connected => "connected",
+            SessionStatus::Disconnected => "disconnected",
+            SessionStatus::Error => "error",
+            SessionStatus::Offline => "offline",
+        }
+    }
+}
+
+/// 每会话共享运行状态（读线程写，REST 读）。
+#[derive(Clone, Debug, Default)]
+pub struct SessionState {
+    pub status: SessionStatus,
+    pub last_error: Option<String>,
+}
+
+impl SessionState {
+    /// 置状态并紧接发 sink 事件（先写状态后 emit，保证事件观察者看到的状态已就位）。
+    fn set_status(&mut self, sink: &dyn EventSink, session_id: &str, status: SessionStatus) {
+        let event = status.as_str();
+        self.status = status;
+        sink.status(session_id, event);
+    }
+
+    /// 记录 last_error 并发 error 事件。`to_status` 显式声明是否随错误迁移状态：
+    /// `Some(Error)`=错误且连接终止（开串口失败/建链失败/读硬错误）；
+    /// `None`=错误但连接保持（写失败/分段失败等，仅记错、不发 status 事件）。
+    fn set_error(
+        &mut self,
+        sink: &dyn EventSink,
+        session_id: &str,
+        msg: &str,
+        to_status: Option<SessionStatus>,
+    ) {
+        self.last_error = Some(msg.to_string());
+        sink.error(session_id, msg);
+        if let Some(s) = to_status {
+            self.set_status(sink, session_id, s);
+        }
+    }
+}
+
 struct SessionHandle {
     #[allow(dead_code)]
     config: PortConfig,
     kind: SessionKind,
     stop: Arc<AtomicBool>,
+    /// 共享运行状态（读线程写、REST 读）：bridge_list 快照的事实源（见 SessionState）。
+    /// 锁序与 log_path 同类：仅 sessions → state，读线程只碰 state 本身，无死锁面。
+    state: Arc<RwLock<SessionState>>,
     write_tx: mpsc::Sender<PortCmd>,
     /// 当前日志文件路径（「分段」/读线程午夜轮转后随最新分段更新；「打开日志」指向当前文件）。
     /// 共享单元（短临界区只护路径本身）：writer 的切换全部在读线程内串行（「分段」命令
@@ -404,6 +480,8 @@ impl PortManager {
     ) -> anyhow::Result<String> {
         let id = format!("s{}", self.next_id.fetch_add(1, Ordering::Relaxed));
         let stop = Arc::new(AtomicBool::new(false));
+        // 运行状态起点：Connecting（读线程 open_session_log 时同步上报 connecting 事件）
+        let state = Arc::new(RwLock::new(SessionState::default()));
         let buf = Arc::new(RingBuf::new());
         let plot = Arc::new(RwLock::new(PlotConfig::default()));
         let (write_tx, write_rx) = mpsc::channel::<PortCmd>();
@@ -434,6 +512,7 @@ impl PortManager {
         let cfg = config.clone();
         let id2 = id.clone();
         let stop2 = stop.clone();
+        let state2 = state.clone();
         let buf2 = buf.clone();
         let auto_reply_cfg = Arc::new(RwLock::new(AutoReplyCfg::default()));
         let alert_cfg = Arc::new(RwLock::new(AlertCfg::default()));
@@ -462,13 +541,45 @@ impl PortManager {
                 // 串口与 TCP/UDP 源共用同一装配路径，按传输类型选择循环
                 if is_net_transport(&cfg) {
                     net_loop(
-                        cfg, id2, sink, stop2, write_rx, lp, lb, midnight_rotate, ls, ts_format,
-                        custom_path, buf2, ar2, al2, cap2, cdir2, am2,
+                        cfg,
+                        id2,
+                        sink,
+                        stop2,
+                        state2,
+                        write_rx,
+                        lp,
+                        lb,
+                        midnight_rotate,
+                        ls,
+                        ts_format,
+                        custom_path,
+                        buf2,
+                        ar2,
+                        al2,
+                        cap2,
+                        cdir2,
+                        am2,
                     )
                 } else {
                     reader_loop(
-                        cfg, id2, sink, stop2, write_rx, lp, lb, midnight_rotate, ls, ts_format,
-                        custom_path, buf2, ar2, al2, cap2, cdir2, am2,
+                        cfg,
+                        id2,
+                        sink,
+                        stop2,
+                        state2,
+                        write_rx,
+                        lp,
+                        lb,
+                        midnight_rotate,
+                        ls,
+                        ts_format,
+                        custom_path,
+                        buf2,
+                        ar2,
+                        al2,
+                        cap2,
+                        cdir2,
+                        am2,
                     )
                 }
             })
@@ -480,6 +591,7 @@ impl PortManager {
                 config,
                 kind: SessionKind::Live,
                 stop,
+                state,
                 write_tx,
                 log_path: log_shared,
                 log_base: log_path,
@@ -499,12 +611,7 @@ impl PortManager {
 
     /// 创建离线会话：无端口、无读线程，仅把已解析的日志行灌入 ring 供 REST 桥分析。
     /// `send` 对离线会话直接报错；`clear_log` 直接清 ring。id 用 `o{N}` 前缀，与 live 的 `s{N}` 区分。
-    pub fn load_offline(
-        &self,
-        config: PortConfig,
-        path: PathBuf,
-        lines: Vec<LogLine>,
-    ) -> String {
+    pub fn load_offline(&self, config: PortConfig, path: PathBuf, lines: Vec<LogLine>) -> String {
         let id = format!("o{}", self.next_id.fetch_add(1, Ordering::Relaxed));
         let buf = Arc::new(RingBuf::new());
         for line in &lines {
@@ -519,6 +626,11 @@ impl PortManager {
                 config,
                 kind: SessionKind::Offline,
                 stop: Arc::new(AtomicBool::new(false)),
+                // 离线会话无链路：恒 Offline，无错误
+                state: Arc::new(RwLock::new(SessionState {
+                    status: SessionStatus::Offline,
+                    last_error: None,
+                })),
                 write_tx,
                 log_path: Arc::new(RwLock::new(path.clone())),
                 log_base: path,
@@ -595,7 +707,7 @@ impl PortManager {
     }
 
     /// 各 live 会话的Ring末行滞后快照（诊断心跳用）：(会话 id, 末行落后墙钟 ms, ring 长度, RX 行数)。
-/// 离线会话无读线程不参与；空 ring 返回 lag=0。
+    /// 离线会话无读线程不参与；空 ring 返回 lag=0。
     pub fn perf_snapshot(&self) -> Vec<(String, u64, usize, u64)> {
         let now = now_ms();
         self.sessions
@@ -603,16 +715,18 @@ impl PortManager {
             .iter()
             // 已停止的会话（用户点停止/断开但标签仍在）末行时间戳永远停在过去，
             // 计入只会产生随墙钟无限增长的假滞后噪音
-            .filter(|(_, h)| {
-                matches!(h.kind, SessionKind::Live) && !h.stop.load(Ordering::Relaxed)
+            .filter(|(_, h)| matches!(h.kind, SessionKind::Live) && !h.stop.load(Ordering::Relaxed))
+            .map(|(id, h)| {
+                let (_, _, _, _, _, last_epoch, len) = h.buf.bounds();
+                let lag = if last_epoch == 0 {
+                    0
+                } else {
+                    now.saturating_sub(last_epoch)
+                };
+                (id.clone(), lag, len, h.buf.rx_lines())
             })
-        .map(|(id, h)| {
-            let (_, _, _, _, _, last_epoch, len) = h.buf.bounds();
-            let lag = if last_epoch == 0 { 0 } else { now.saturating_sub(last_epoch) };
-            (id.clone(), lag, len, h.buf.rx_lines())
-        })
-        .collect()
-}
+            .collect()
+    }
 
     /// 游标补拉：返回 ring 中 `no > since_no` 的行（前端视图拉模型的数据通道）。
     /// `no` 单调递增且 clear 不回退——游标语义下不重不漏；二分定位 O(log n)。
@@ -653,7 +767,12 @@ impl PortManager {
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
         let (first_no, last_no, _, _, _, _, size) = h.buf.bounds();
-        Ok(RingBounds { first_no, last_no, size, ring_cap: RING_CAP })
+        Ok(RingBounds {
+            first_no,
+            last_no,
+            size,
+            ring_cap: RING_CAP,
+        })
     }
 
     /// 前端推送实时规则（自动回复/告警）：拉模型下评估在后端读线程，
@@ -734,21 +853,14 @@ impl PortManager {
         let s = self.sessions.read();
         s.iter()
             .map(|(id, h)| {
-                let stop = h.stop.load(Ordering::Relaxed);
-                let status = match h.kind {
-                    SessionKind::Offline => "offline",
-                    SessionKind::Live => {
-                        if stop {
-                            "disconnected"
-                        } else {
-                            "connected"
-                        }
-                    }
-                };
+                // 共享运行状态是唯一事实源：connecting/error 中间态与 last_error 来自
+                // 读线程，不再从 stop 标志推断（推不出中间态，错误期还会假报 connected）
+                let st = h.state.read().clone();
                 SessionSnap {
                     id: id.clone(),
                     config: h.config.clone(),
-                    status: status.into(),
+                    status: st.status.as_str().into(),
+                    last_error: st.last_error,
                     line_count: h.buf.len(),
                     ring_cap: RING_CAP,
                 }
@@ -796,10 +908,7 @@ impl PortManager {
     }
 
     pub fn bridge_plot(&self, id: &str) -> Option<PlotConfig> {
-        self.sessions
-            .read()
-            .get(id)
-            .map(|h| h.plot.read().clone())
+        self.sessions.read().get(id).map(|h| h.plot.read().clone())
     }
 
     pub fn bridge_set_plot(&self, id: &str, cfg: PlotConfig) -> bool {
@@ -840,7 +949,10 @@ impl PortManager {
     }
 
     pub fn bridge_alerts(&self, id: &str) -> Option<Vec<BridgeAlert>> {
-        self.sessions.read().get(id).map(|h| h.alerts.read().clone())
+        self.sessions
+            .read()
+            .get(id)
+            .map(|h| h.alerts.read().clone())
     }
 
     /// AI 批注镜像（REST 写入 / 前端同步双向；整包替换）。
@@ -883,7 +995,10 @@ fn host_of(config: &PortConfig) -> String {
     match config.transport.as_deref() {
         Some("tcp-client") => format!(
             "{}:{}",
-            config.tcp_host.clone().unwrap_or_else(|| "127.0.0.1".into()),
+            config
+                .tcp_host
+                .clone()
+                .unwrap_or_else(|| "127.0.0.1".into()),
             config.tcp_port.unwrap_or(23)
         ),
         Some("tcp-server") => format!(
@@ -940,6 +1055,7 @@ fn reader_loop(
     session_id: String,
     sink: Arc<dyn EventSink>,
     stop: Arc<AtomicBool>,
+    state: Arc<RwLock<SessionState>>,
     write_rx: mpsc::Receiver<PortCmd>,
     log_path: PathBuf,
     log_base: PathBuf,
@@ -954,21 +1070,31 @@ fn reader_loop(
     captures_dir: PathBuf,
     alerts_mirror: Arc<RwLock<Vec<BridgeAlert>>>,
 ) {
-    let (session_log, ts_fmt) =
-        open_session_log(&*sink, &session_id, &log_path, custom_path, ts_format);
+    let (session_log, ts_fmt) = open_session_log(
+        &state,
+        &*sink,
+        &session_id,
+        &log_path,
+        custom_path,
+        ts_format,
+    );
 
     let mut port = match open_port(&config) {
         Ok(p) => p,
         Err(e) => {
-            sink.error(
+            // 错误且终止：状态置 Error 并保留（finish 不会被走到，也不得回落 disconnected）
+            state.write().set_error(
+                &*sink,
                 &session_id,
                 &format!("打开串口 {} 失败: {}", config.name, e),
+                Some(SessionStatus::Error),
             );
-            sink.status(&session_id, "error");
             return;
         }
     };
-    sink.status(&session_id, "connected");
+    state
+        .write()
+        .set_status(&*sink, &session_id, SessionStatus::Connected);
 
     let mut link = Link::Serial(port.as_mut());
     stream_loop(
@@ -977,6 +1103,7 @@ fn reader_loop(
         "写入串口失败",
         &*sink,
         &session_id,
+        &state,
         stop,
         write_rx,
         &ts_fmt,
@@ -997,7 +1124,11 @@ fn decode_hex(s: &str) -> Vec<u8> {
     let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
     (0..cleaned.len())
         .step_by(2)
-        .filter_map(|i| cleaned.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
+        .filter_map(|i| {
+            cleaned
+                .get(i..i + 2)
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+        })
         .collect()
 }
 
@@ -1029,16 +1160,30 @@ fn sink_line(line: &LogLine, session_log: &mut Option<SessionLog>, ring: &RingBu
     ring.push(line)
 }
 
-fn finish_loop(session_log: Option<SessionLog>, sink: &dyn EventSink, session_id: &str) {
+fn finish_loop(
+    session_log: Option<SessionLog>,
+    state: &RwLock<SessionState>,
+    sink: &dyn EventSink,
+    session_id: &str,
+) {
     if let Some(mut w) = session_log {
         let _ = w.flush();
     }
-    sink.status(session_id, "disconnected");
+    // 正常收尾：仅当会话仍在活动态才置 Disconnected。Error 保留（读失败不该被
+    // 覆盖成 disconnected）；Offline / 已 Disconnected 不动、也不重复发事件。
+    let mut st = state.write();
+    if matches!(
+        st.status,
+        SessionStatus::Connecting | SessionStatus::Connected
+    ) {
+        st.set_status(sink, session_id, SessionStatus::Disconnected);
+    }
 }
 
 /// 打开会话日志文件并上报 connecting；打开失败仅在自定义路径时告警。
 /// 返回 (session_log, ts_fmt)，供串口/网络两类循环共用。
 fn open_session_log(
+    state: &RwLock<SessionState>,
     sink: &dyn EventSink,
     session_id: &str,
     log_path: &std::path::Path,
@@ -1048,7 +1193,9 @@ fn open_session_log(
     // 空路径 = 不落盘（CLI 缺省）：不建文件、不改错误状态，仅上报 connecting
     if log_path.as_os_str().is_empty() {
         let ts_fmt = ts_format.unwrap_or_else(|| "%h:%m:%s.%t".to_string());
-        sink.status(session_id, "connecting");
+        state
+            .write()
+            .set_status(sink, session_id, SessionStatus::Connecting);
         return (None, ts_fmt);
     }
     if let Some(parent) = log_path.parent() {
@@ -1058,16 +1205,21 @@ fn open_session_log(
         Ok(w) => Some(w),
         Err(e) => {
             if custom_path {
-                sink.error(
+                // 日志文件打不开不影响连接：仅记 last_error，状态不变
+                state.write().set_error(
+                    sink,
                     session_id,
                     &format!("日志路径无效/不可写: {}: {}", log_path.display(), e),
+                    None,
                 );
             }
             None
         }
     };
     let ts_fmt = ts_format.unwrap_or_else(|| "%h:%m:%s.%t".to_string());
-    sink.status(session_id, "connecting");
+    state
+        .write()
+        .set_status(sink, session_id, SessionStatus::Connecting);
     (session_log, ts_fmt)
 }
 
@@ -1156,7 +1308,8 @@ fn next_capture_path(
 }
 
 /// 触发一次捕获：建档案、写头注释、把 ring 里 pre_ms 窗口的行回溯写入
-///（含触发行本身——触发时它已入 ring）。创建失败仅 sink.error 不中断数据流。
+///（含触发行本身——触发时它已入 ring）。创建失败仅记 last_error（连接保持）不中断数据流。
+#[allow(clippy::too_many_arguments)]
 fn capture_start(
     session_id: &str,
     cfg: &CaptureCfg,
@@ -1166,6 +1319,7 @@ fn capture_start(
     rule: &str,
     at_ms: u64,
     sink: &dyn EventSink,
+    state: &RwLock<SessionState>,
 ) -> Option<CaptureRun> {
     if captures_dir.as_os_str().is_empty() {
         return None;
@@ -1177,9 +1331,11 @@ fn capture_start(
     let mut writer = match SessionLog::create(&path) {
         Ok(w) => Some(w),
         Err(e) => {
-            sink.error(
+            state.write().set_error(
+                sink,
                 session_id,
                 &format!("现场档案创建失败 {}: {}", path.display(), e),
+                None,
             );
             return None;
         }
@@ -1189,7 +1345,9 @@ fn capture_start(
         // 头注释行：前端解析按 `#` 跳过，供人肉/工具辨识来源
         w.write_raw_line(&format!(
             "# bytetide-capture v1 trigger={trigger} rule={} at_ms={at_ms} at={}",
-            rule.replace('\n', " ").replace('\r', " ").replace('\t', " "),
+            rule.replace('\n', " ")
+                .replace('\r', " ")
+                .replace('\t', " "),
             now.format("%Y-%m-%dT%H:%M:%S%.3f%:z"),
         ));
         let (snap, missing) = ring.lines_since_epoch(at_ms.saturating_sub(pre));
@@ -1259,6 +1417,7 @@ fn cap_finalize(cap: &mut Option<CaptureRun>, sink: &dyn EventSink, session_id: 
 
 /// 逐行触发评估：关键词规则命中或告警联动即触发；armed 中再次命中顺延后续窗口
 ///（连续事故合并为一个档案）。
+#[allow(clippy::too_many_arguments)]
 fn cap_maybe_arm(
     cap: &mut Option<CaptureRun>,
     cfg: &CaptureCfg,
@@ -1268,6 +1427,7 @@ fn cap_maybe_arm(
     line: &LogLine,
     sink: &dyn EventSink,
     session_id: &str,
+    state: &RwLock<SessionState>,
 ) {
     if !cfg.enabled {
         return;
@@ -1282,9 +1442,17 @@ fn cap_maybe_arm(
     match cap.as_mut() {
         Some(run) => run.deadline_ms = now.saturating_add(clamp_capture_window(cfg.post_ms)),
         None => {
-            if let Some(run) =
-                capture_start(session_id, cfg, captures_dir, ring, trigger, rule, now, sink)
-            {
+            if let Some(run) = capture_start(
+                session_id,
+                cfg,
+                captures_dir,
+                ring,
+                trigger,
+                rule,
+                now,
+                sink,
+                state,
+            ) {
                 *cap = Some(run);
             }
         }
@@ -1301,6 +1469,7 @@ fn stream_loop(
     write_err_msg: &str,
     sink: &dyn EventSink,
     session_id: &str,
+    state: &RwLock<SessionState>,
     stop: Arc<AtomicBool>,
     write_rx: mpsc::Receiver<PortCmd>,
     ts_fmt: &str,
@@ -1348,7 +1517,10 @@ fn stream_loop(
                             // armed 捕获在后续窗口内：TX 回显一并入档
                             cap_on_line(&mut cap, &tx, sink, session_id, now_ms());
                         }
-                        Err(_) => sink.error(session_id, write_err_msg),
+                        // 写失败但连接保持：仅记 last_error，状态不变
+                        Err(_) => state
+                            .write()
+                            .set_error(sink, session_id, write_err_msg, None),
                     }
                 }
                 PortCmd::Clear => {
@@ -1366,9 +1538,12 @@ fn stream_loop(
                     session_log = match SessionLog::create(&path) {
                         Ok(w) => Some(w),
                         Err(e) => {
-                            sink.error(
+                            // 另起新档失败连接不受影响：仅记 last_error
+                            state.write().set_error(
+                                sink,
                                 session_id,
                                 &format!("另起新日志失败 {}: {}", path.display(), e),
+                                None,
                             );
                             None
                         }
@@ -1381,7 +1556,13 @@ fn stream_loop(
                 }
                 PortCmd::Signal { pin, level } => {
                     if let Err(e) = io.set_signal(pin, level) {
-                        sink.error(session_id, &format!("设置信号线失败: {e}"));
+                        // 置位失败连接不受影响：仅记 last_error
+                        state.write().set_error(
+                            sink,
+                            session_id,
+                            &format!("设置信号线失败: {e}"),
+                            None,
+                        );
                     }
                 }
             }
@@ -1407,9 +1588,12 @@ fn stream_loop(
                             Some(w)
                         }
                         Err(e) => {
-                            sink.error(
+                            // 午夜分段失败连接不受影响：仅记 last_error
+                            state.write().set_error(
+                                sink,
                                 session_id,
                                 &format!("午夜另起新日志失败 {}: {}", np.display(), e),
+                                None,
                             );
                             None
                         }
@@ -1420,7 +1604,9 @@ fn stream_loop(
 
         match io.read(&mut buf) {
             Ok(0) => {
-                sink.error(session_id, eof_msg);
+                // EOF：对端正常关闭。记 last_error 供 REST 观测，状态走正常断开
+                //（finish_loop 置 Disconnected，不进 Error）
+                state.write().set_error(sink, session_id, eof_msg, None);
                 break;
             }
             Ok(n) => {
@@ -1434,11 +1620,23 @@ fn stream_loop(
                         let line = make_rx_line(&raw, ts_fmt);
                         let ring_no = sink_line(&line, &mut session_log, &ring);
                         apply_rx_rules(
-                            &line, ring_no, io, &mut session_log, &ring, ts_fmt,
-                            &auto_reply.read().clone(), &alert_cfg.read().clone(),
-                            &mut alert_states, &mut fired_alerts, &mut cap,
-                            &capture_cfg.read().clone(), &captures_dir,
-                            sink, session_id, write_err_msg,
+                            &line,
+                            ring_no,
+                            io,
+                            &mut session_log,
+                            &ring,
+                            ts_fmt,
+                            &auto_reply.read().clone(),
+                            &alert_cfg.read().clone(),
+                            &mut alert_states,
+                            &mut fired_alerts,
+                            &mut cap,
+                            &capture_cfg.read().clone(),
+                            &captures_dir,
+                            sink,
+                            session_id,
+                            state,
+                            write_err_msg,
                         );
                     } else {
                         line_buf.push(b);
@@ -1459,16 +1657,35 @@ fn stream_loop(
                     let line = make_rx_line(&raw, ts_fmt);
                     let ring_no = sink_line(&line, &mut session_log, &ring);
                     apply_rx_rules(
-                        &line, ring_no, io, &mut session_log, &ring, ts_fmt,
-                        &auto_reply.read().clone(), &alert_cfg.read().clone(), &mut alert_states,
-                        &mut fired_alerts, &mut cap, &capture_cfg.read().clone(), &captures_dir,
-                        sink, session_id, write_err_msg,
+                        &line,
+                        ring_no,
+                        io,
+                        &mut session_log,
+                        &ring,
+                        ts_fmt,
+                        &auto_reply.read().clone(),
+                        &alert_cfg.read().clone(),
+                        &mut alert_states,
+                        &mut fired_alerts,
+                        &mut cap,
+                        &capture_cfg.read().clone(),
+                        &captures_dir,
+                        sink,
+                        session_id,
+                        state,
+                        write_err_msg,
                     );
                     last_idle_flush = Instant::now();
                 }
             }
             Err(e) => {
-                sink.error(session_id, &format!("读取错误: {e}"));
+                // 读硬错误且终止：状态置 Error，finish_loop 保留不覆盖
+                state.write().set_error(
+                    sink,
+                    session_id,
+                    &format!("读取错误: {e}"),
+                    Some(SessionStatus::Error),
+                );
                 break;
             }
         }
@@ -1500,12 +1717,20 @@ fn stream_loop(
         if cap.is_none() && cfg.enabled && cfg.on_disconnect {
             let now = now_ms();
             cap = capture_start(
-                session_id, &cfg, &captures_dir, &ring, "disconnect", "断连", now, sink,
+                session_id,
+                &cfg,
+                &captures_dir,
+                &ring,
+                "disconnect",
+                "断连",
+                now,
+                sink,
+                state,
             );
         }
     }
     cap_finalize(&mut cap, sink, session_id);
-    finish_loop(session_log, sink, session_id);
+    finish_loop(session_log, state, sink, session_id);
 }
 
 /// 逐 RX 行规则评估：自动回复（读线程内直接回写设备，不依赖宿主存活）、
@@ -1528,6 +1753,7 @@ fn apply_rx_rules(
     captures_dir: &std::path::Path,
     sink: &dyn EventSink,
     session_id: &str,
+    state: &RwLock<SessionState>,
     write_err_msg: &str,
 ) {
     if line.dir != Dir::Rx {
@@ -1555,7 +1781,10 @@ fn apply_rx_rules(
                     // armed 捕获在后续窗口内：自动回复的 TX 也入档
                     cap_on_line(cap, &tx, sink, session_id, now_ms());
                 }
-                Err(_) => sink.error(session_id, write_err_msg),
+                // 回写失败但连接保持：仅记 last_error
+                Err(_) => state
+                    .write()
+                    .set_error(sink, session_id, write_err_msg, None),
             }
         }
     }
@@ -1579,7 +1808,17 @@ fn apply_rx_rules(
     } else {
         None
     };
-    cap_maybe_arm(cap, capture_cfg, captures_dir, ring, alert_hit, line, sink, session_id);
+    cap_maybe_arm(
+        cap,
+        capture_cfg,
+        captures_dir,
+        ring,
+        alert_hit,
+        line,
+        sink,
+        session_id,
+        state,
+    );
     cap_on_line(cap, line, sink, session_id, now_ms());
 }
 
@@ -1627,7 +1866,10 @@ fn bind_host_of(config: &PortConfig) -> String {
 fn establish_link(config: &PortConfig) -> std::io::Result<NetLink> {
     match config.transport.as_deref() {
         Some("tcp-client") => {
-            let host = config.tcp_host.clone().unwrap_or_else(|| "127.0.0.1".into());
+            let host = config
+                .tcp_host
+                .clone()
+                .unwrap_or_else(|| "127.0.0.1".into());
             let port = config.tcp_port.unwrap_or(23);
             let stream = std::net::TcpStream::connect((host.as_str(), port))?;
             stream.set_read_timeout(Some(NET_READ_TIMEOUT))?;
@@ -1635,7 +1877,10 @@ fn establish_link(config: &PortConfig) -> std::io::Result<NetLink> {
             Ok(NetLink::Tcp(stream))
         }
         Some("tcp-server") => {
-            let listener = std::net::TcpListener::bind((bind_host_of(config).as_str(), config.tcp_port.unwrap_or(9000)))?;
+            let listener = std::net::TcpListener::bind((
+                bind_host_of(config).as_str(),
+                config.tcp_port.unwrap_or(9000),
+            ))?;
             // 只服务首个接入连接；该连接断开即会话结束（多并发列为后续增强）
             let (stream, _peer) = listener.accept()?;
             stream.set_read_timeout(Some(NET_READ_TIMEOUT))?;
@@ -1665,13 +1910,17 @@ fn describe_transport(config: &PortConfig) -> String {
             config.tcp_port.map(|p| p.to_string()).unwrap_or_default()
         ),
         Some("tcp-server") => format!(
-            "TCP 服务 {}:{}", bind_host_of(config), 
+            "TCP 服务 {}:{}",
+            bind_host_of(config),
             config.tcp_port.map(|p| p.to_string()).unwrap_or_default()
         ),
         Some("udp") => format!(
             "UDP 监听 {}:{}",
             bind_host_of(config),
-            config.udp_local_port.map(|p| p.to_string()).unwrap_or_default()
+            config
+                .udp_local_port
+                .map(|p| p.to_string())
+                .unwrap_or_default()
         ),
         _ => "串口".to_string(),
     }
@@ -1688,6 +1937,7 @@ fn net_loop(
     session_id: String,
     sink: Arc<dyn EventSink>,
     stop: Arc<AtomicBool>,
+    state: Arc<RwLock<SessionState>>,
     write_rx: mpsc::Receiver<PortCmd>,
     log_path: PathBuf,
     log_base: PathBuf,
@@ -1703,18 +1953,31 @@ fn net_loop(
     alerts_mirror: Arc<RwLock<Vec<BridgeAlert>>>,
 ) {
     let desc = describe_transport(&config);
-    let (session_log, ts_fmt) =
-        open_session_log(&*sink, &session_id, &log_path, custom_path, ts_format);
+    let (session_log, ts_fmt) = open_session_log(
+        &state,
+        &*sink,
+        &session_id,
+        &log_path,
+        custom_path,
+        ts_format,
+    );
 
     let mut link = match establish_link(&config) {
         Ok(l) => l,
         Err(e) => {
-            sink.error(&session_id, &format!("建立 {desc} 失败: {e}"));
-            sink.status(&session_id, "error");
+            // 建链失败且终止：状态置 Error（无 finish，不会被覆盖成 disconnected）
+            state.write().set_error(
+                &*sink,
+                &session_id,
+                &format!("建立 {desc} 失败: {e}"),
+                Some(SessionStatus::Error),
+            );
             return;
         }
     };
-    sink.status(&session_id, "connected");
+    state
+        .write()
+        .set_status(&*sink, &session_id, SessionStatus::Connected);
 
     let mut net = Link::Net(&mut link);
     stream_loop(
@@ -1723,6 +1986,7 @@ fn net_loop(
         "网络写入失败",
         &*sink,
         &session_id,
+        &state,
         stop,
         write_rx,
         &ts_fmt,
@@ -1758,8 +2022,15 @@ mod tests {
     fn push_assigns_monotonic_no_and_snapshot_order() {
         let buf = RingBuf::new();
         for i in 0..3 {
-            buf.push(&mk_log("00:00:00.001", Dir::Rx, &format!("l{i}"), None, 1000 + i));
-        }        let nos: Vec<u64> = buf.snapshot().iter().map(|l| l.no).collect();
+            buf.push(&mk_log(
+                "00:00:00.001",
+                Dir::Rx,
+                &format!("l{i}"),
+                None,
+                1000 + i,
+            ));
+        }
+        let nos: Vec<u64> = buf.snapshot().iter().map(|l| l.no).collect();
         assert_eq!(nos, vec![1, 2, 3]);
         assert_eq!(buf.last_no(), 3);
         assert_eq!(buf.len(), 3);
@@ -1771,7 +2042,13 @@ mod tests {
         // 空 ring：空快照且不标缺失
         assert!(buf.lines_since_epoch(1).0.is_empty());
         for i in 0..5 {
-            buf.push(&mk_log("00:00:00.001", Dir::Rx, &format!("l{i}"), None, 1000 + i * 10));
+            buf.push(&mk_log(
+                "00:00:00.001",
+                Dir::Rx,
+                &format!("l{i}"),
+                None,
+                1000 + i * 10,
+            ));
         }
         // since 落在首行之前：全量且无缺失
         let (snap, missing) = buf.lines_since_epoch(500);
@@ -1785,7 +2062,13 @@ mod tests {
         // since 早于全部行且 ring 未淘汰：全量、不标缺失
         let small = RingBuf::new();
         for i in 0..5 {
-            small.push(&mk_log("00:00:00.001", Dir::Rx, &format!("s{i}"), None, 1000 + i * 10));
+            small.push(&mk_log(
+                "00:00:00.001",
+                Dir::Rx,
+                &format!("s{i}"),
+                None,
+                1000 + i * 10,
+            ));
         }
         let (snap, missing) = small.lines_since_epoch(1000);
         assert_eq!(snap.len(), 5);
@@ -1816,13 +2099,23 @@ mod tests {
         let now = chrono::Local::now();
         let taken: Vec<std::path::PathBuf> = vec![];
         let p1 = next_capture_path(dir, "s1", &now, |p| taken.contains(&p.to_path_buf()));
-        assert_eq!(p1.file_name().unwrap().to_string_lossy(), format!("s1-cap-{}.log", now.format("%Y%m%d-%H%M%S")));
+        assert_eq!(
+            p1.file_name().unwrap().to_string_lossy(),
+            format!("s1-cap-{}.log", now.format("%Y%m%d-%H%M%S"))
+        );
         let stamp = p1.clone();
         let p2 = next_capture_path(dir, "s1", &now, |p| p == &stamp);
-        assert_eq!(p2.file_name().unwrap().to_string_lossy(), format!("s1-cap-{}-2.log", now.format("%Y%m%d-%H%M%S")));
+        assert_eq!(
+            p2.file_name().unwrap().to_string_lossy(),
+            format!("s1-cap-{}-2.log", now.format("%Y%m%d-%H%M%S"))
+        );
         let stamp2 = p2.clone();
         let p3 = next_capture_path(dir, "s1", &now, |p| p == &stamp || p == &stamp2);
-        assert!(p3.file_name().unwrap().to_string_lossy().ends_with("-3.log"));
+        assert!(p3
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .ends_with("-3.log"));
     }
 
     #[test]
@@ -1845,9 +2138,15 @@ mod tests {
             buf.push(&mk_log("t", Dir::Rx, "x", None, i));
         }
         let p1 = buf.lines_after_no(0, 4);
-        assert_eq!(p1.iter().map(|l| l.no).collect::<Vec<_>>(), vec![1, 2, 3, 4]);
+        assert_eq!(
+            p1.iter().map(|l| l.no).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
         let p2 = buf.lines_after_no(4, 4);
-        assert_eq!(p2.iter().map(|l| l.no).collect::<Vec<_>>(), vec![5, 6, 7, 8]);
+        assert_eq!(
+            p2.iter().map(|l| l.no).collect::<Vec<_>>(),
+            vec![5, 6, 7, 8]
+        );
         let p3 = buf.lines_after_no(8, 4);
         assert_eq!(p3.iter().map(|l| l.no).collect::<Vec<_>>(), vec![9, 10]);
         // 拉空：游标已到最新
@@ -1879,9 +2178,15 @@ mod tests {
             buf.push(&mk_log("t", Dir::Rx, "x", None, i));
         }
         let p1 = buf.lines_before_no(10, 4);
-        assert_eq!(p1.iter().map(|l| l.no).collect::<Vec<_>>(), vec![6, 7, 8, 9]);
+        assert_eq!(
+            p1.iter().map(|l| l.no).collect::<Vec<_>>(),
+            vec![6, 7, 8, 9]
+        );
         let p2 = buf.lines_before_no(6, 4);
-        assert_eq!(p2.iter().map(|l| l.no).collect::<Vec<_>>(), vec![2, 3, 4, 5]);
+        assert_eq!(
+            p2.iter().map(|l| l.no).collect::<Vec<_>>(),
+            vec![2, 3, 4, 5]
+        );
         let p3 = buf.lines_before_no(2, 4);
         assert_eq!(p3.iter().map(|l| l.no).collect::<Vec<_>>(), vec![1]);
         // 已翻到最早：安全返空；before_no 超前（比最新还大）取最新 max 行
@@ -1948,6 +2253,7 @@ mod tests {
                 alert_cfg: Arc::new(RwLock::new(AlertCfg::default())),
                 capture_cfg: Arc::new(RwLock::new(CaptureCfg::default())),
                 stop,
+                state: Arc::new(RwLock::new(SessionState::default())),
                 write_tx: tx,
                 log_path: Arc::new(RwLock::new(PathBuf::from("x.log"))),
                 log_base: PathBuf::from("x.log"),
@@ -1982,10 +2288,12 @@ mod tests {
     fn open_session_log_empty_path_skips_recording() {
         // CLI 缺省不落盘：空路径 -> 不建文件（session_log=None），仍上报 connecting、无错误事件
         let sink = crate::sink::VecSink::default();
+        let state = Arc::new(RwLock::new(SessionState::default()));
         let (session_log, ts_fmt) =
-            open_session_log(&sink, "s1", std::path::Path::new(""), false, None);
+            open_session_log(&state, &sink, "s1", std::path::Path::new(""), false, None);
         assert!(session_log.is_none());
         assert_eq!(ts_fmt, "%h:%m:%s.%t");
+        assert_eq!(state.read().status, SessionStatus::Connecting);
         assert_eq!(
             sink.0.lock().clone(),
             vec!["status s1 connecting".to_string()]
@@ -2060,13 +2368,14 @@ mod tests {
     #[test]
     fn segment_path_inserts_stamp_before_extension() {
         use chrono::TimeZone;
-        let dt = chrono::Local.with_ymd_and_hms(2026, 9, 4, 15, 30, 12).unwrap();
+        let dt = chrono::Local
+            .with_ymd_and_hms(2026, 9, 4, 15, 30, 12)
+            .unwrap();
         // 默认命名 {id}.log：时间戳插在扩展名前
-        let p = next_segment_path(std::path::Path::new("/data/sessions/s1.log"), &dt, |_| false);
-        assert_eq!(
-            p,
-            PathBuf::from("/data/sessions/s1-20260904-153012.log")
-        );
+        let p = next_segment_path(std::path::Path::new("/data/sessions/s1.log"), &dt, |_| {
+            false
+        });
+        assert_eq!(p, PathBuf::from("/data/sessions/s1-20260904-153012.log"));
         // 无扩展名路径同样成立
         let p = next_segment_path(std::path::Path::new("/logs/COM3"), &dt, |_| false);
         assert_eq!(p, PathBuf::from("/logs/COM3-20260904-153012"));
@@ -2075,7 +2384,9 @@ mod tests {
     #[test]
     fn segment_path_avoids_collision_with_counter_suffix() {
         use chrono::TimeZone;
-        let dt = chrono::Local.with_ymd_and_hms(2026, 9, 4, 15, 30, 12).unwrap();
+        let dt = chrono::Local
+            .with_ymd_and_hms(2026, 9, 4, 15, 30, 12)
+            .unwrap();
         // 首个候选已存在（同秒内再次分段）：-2 递增去重
         let seen = std::cell::Cell::new(0);
         let p = next_segment_path(std::path::Path::new("/data/s1.log"), &dt, |_| {
@@ -2125,5 +2436,258 @@ mod tests {
             ..PortConfig::default()
         };
         assert_eq!(host_of(&serial), "COM3");
+    }
+
+    // ============ SessionState：REST 快照与 sink 事件的共同事实源 ============
+    // 状态机单元测试（不触 IO）+ 假传输（本机 loopback TCP）集成转换测试。
+    use crate::sink::VecSink;
+
+    #[test]
+    fn session_state_transitions_connecting_connected_disconnected() {
+        let sink = VecSink::default();
+        // live 会话默认起点：Connecting（connect() 初始化）
+        let mut st = SessionState::default();
+        assert_eq!(st.status, SessionStatus::Connecting);
+        assert_eq!(st.last_error, None);
+        st.set_status(&sink, "s1", SessionStatus::Connected);
+        assert_eq!(st.status, SessionStatus::Connected);
+        st.set_status(&sink, "s1", SessionStatus::Disconnected);
+        assert_eq!(st.status, SessionStatus::Disconnected);
+        // 每次置位同步上报，字符串与 REST 序列化一致
+        assert_eq!(
+            sink.0.lock().clone(),
+            vec![
+                "status s1 connected".to_string(),
+                "status s1 disconnected".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn session_state_set_error_without_transition_keeps_status() {
+        // 错误但连接保持（写失败/分段失败等）：只记 last_error，不发 status 事件
+        let sink = VecSink::default();
+        let mut st = SessionState::default();
+        st.set_status(&sink, "s1", SessionStatus::Connected);
+        st.set_error(&sink, "s1", "写入串口失败", None);
+        assert_eq!(st.status, SessionStatus::Connected);
+        assert_eq!(st.last_error.as_deref(), Some("写入串口失败"));
+        assert_eq!(
+            sink.0.lock().clone(),
+            vec![
+                "status s1 connected".to_string(),
+                "error s1 写入串口失败".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn session_state_error_then_finish_preserves_error() {
+        // 错误且终止：status=Error；正常收尾不得把 Error 覆盖成 disconnected
+        let sink = VecSink::default();
+        let mut st = SessionState::default();
+        st.set_status(&sink, "s1", SessionStatus::Connected);
+        st.set_error(&sink, "s1", "读取错误: boom", Some(SessionStatus::Error));
+        assert_eq!(st.status, SessionStatus::Error);
+        assert_eq!(st.last_error.as_deref(), Some("读取错误: boom"));
+        let shared = RwLock::new(st);
+        finish_loop(None, &shared, &sink, "s1");
+        assert_eq!(shared.read().status, SessionStatus::Error);
+        // 事件序：error -> status error；finish 未追加 disconnected
+        assert_eq!(
+            sink.0.lock().clone(),
+            vec![
+                "status s1 connected".to_string(),
+                "error s1 读取错误: boom".to_string(),
+                "status s1 error".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn session_state_finish_marks_disconnected_and_offline_stays_offline() {
+        let sink = VecSink::default();
+        // 活动态正常收尾：Connected -> Disconnected
+        let connected = RwLock::new(SessionState {
+            status: SessionStatus::Connected,
+            last_error: None,
+        });
+        finish_loop(None, &connected, &sink, "s1");
+        assert_eq!(connected.read().status, SessionStatus::Disconnected);
+        // Offline 恒 Offline：finish 不动非活动态、不重复发事件
+        let offline = RwLock::new(SessionState {
+            status: SessionStatus::Offline,
+            last_error: None,
+        });
+        finish_loop(None, &offline, &sink, "s2");
+        assert_eq!(offline.read().status, SessionStatus::Offline);
+        assert_eq!(
+            sink.0.lock().clone(),
+            vec!["status s1 disconnected".to_string()]
+        );
+    }
+
+    // ---- 集成：假传输（本机 loopback TCP，不开硬件、不固定 sleep 轮询）----
+
+    /// tcp-client 配置指向本机端口。
+    fn tcp_client_cfg(port: u16) -> PortConfig {
+        PortConfig {
+            name: format!("tcp-{port}"),
+            transport: Some("tcp-client".into()),
+            tcp_host: Some("127.0.0.1".into()),
+            tcp_port: Some(port),
+            ..PortConfig::default()
+        }
+    }
+
+    /// 轮询直到 bridge_list 状态到达期望值且 VecSink 已收到对应事件
+    ///（实现保证先写状态后发事件，两者都到齐才算稳定）；带总超时上限。
+    fn wait_for_status(m: &PortManager, sink: &VecSink, id: &str, want: &str) -> SessionSnap {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let want_ev = format!("status {id} {want}");
+        loop {
+            let snap = m
+                .bridge_list()
+                .into_iter()
+                .find(|s| s.id == id)
+                .unwrap_or_else(|| panic!("会话 {id} 不在 bridge_list"));
+            let has_event = sink.0.lock().iter().any(|e| *e == want_ev);
+            if snap.status == want && has_event {
+                return snap;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "等待状态 {want} 超时：status={:?} 事件={:?}",
+                snap.status,
+                sink.0.lock().clone()
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// 一致性断言（plan 明确要求）：bridge_list 的 status/lastError 与 sink 最近一次事件一致。
+    fn assert_snap_matches_sink(snap: &SessionSnap, sink: &VecSink, id: &str) {
+        let events = sink.0.lock().clone();
+        let status_prefix = format!("status {id} ");
+        let error_prefix = format!("error {id} ");
+        let last_status = events.iter().rev().find(|e| e.starts_with(&status_prefix));
+        assert_eq!(
+            last_status.map(|e| &e[status_prefix.len()..]),
+            Some(snap.status.as_str()),
+            "REST status 应与 sink 最近一次 status 事件一致"
+        );
+        let last_error = events.iter().rev().find(|e| e.starts_with(&error_prefix));
+        assert_eq!(
+            last_error.map(|e| e[error_prefix.len()..].to_string()),
+            snap.last_error,
+            "REST lastError 应与 sink 最近一次 error 事件一致"
+        );
+    }
+
+    #[test]
+    fn session_state_tcp_client_connecting_then_connected() {
+        let m = PortManager::new();
+        let sink = Arc::new(VecSink::default());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        let sink_handle: Arc<dyn EventSink> = sink.clone();
+        let id = m
+            .connect(
+                tcp_client_cfg(port),
+                logfmt::LogConfig::default(),
+                sink_handle,
+                PathBuf::new(),
+            )
+            .expect("connect");
+        let snap = wait_for_status(&m, &sink, &id, "connected");
+        assert_eq!(snap.last_error, None);
+        // sink 事件序：connecting 先于 connected
+        let events = sink.0.lock().clone();
+        let ci = events
+            .iter()
+            .position(|e| *e == format!("status {id} connecting"))
+            .expect("connecting 事件");
+        let cn = events
+            .iter()
+            .position(|e| *e == format!("status {id} connected"))
+            .expect("connected 事件");
+        assert!(ci < cn);
+        assert_snap_matches_sink(&snap, &sink, &id);
+        let _ = m.disconnect(&id);
+    }
+
+    #[test]
+    fn session_state_tcp_client_connect_failure_sets_error() {
+        let m = PortManager::new();
+        let sink = Arc::new(VecSink::default());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        drop(listener); // 无人监听：建链必失败
+        let sink_handle: Arc<dyn EventSink> = sink.clone();
+        let id = m
+            .connect(
+                tcp_client_cfg(port),
+                logfmt::LogConfig::default(),
+                sink_handle,
+                PathBuf::new(),
+            )
+            .expect("connect");
+        let snap = wait_for_status(&m, &sink, &id, "error");
+        let err = snap.last_error.as_deref().expect("应记录 last_error");
+        assert!(err.contains("建立"), "错误消息应说明建链失败: {err}");
+        assert_snap_matches_sink(&snap, &sink, &id);
+        let _ = m.disconnect(&id);
+    }
+
+    #[test]
+    fn session_state_tcp_client_eof_goes_disconnected() {
+        let m = PortManager::new();
+        let sink = Arc::new(VecSink::default());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        let sink_handle: Arc<dyn EventSink> = sink.clone();
+        let id = m
+            .connect(
+                tcp_client_cfg(port),
+                logfmt::LogConfig::default(),
+                sink_handle,
+                PathBuf::new(),
+            )
+            .expect("connect");
+        wait_for_status(&m, &sink, &id, "connected");
+        // 服务端接受连接后主动关闭：客户端 read 得 Ok(0)（EOF）→ 正常断开路径
+        let (accepted, _) = listener.accept().expect("客户端已连入");
+        drop(accepted);
+        let snap = wait_for_status(&m, &sink, &id, "disconnected");
+        // EOF 记 last_error（供 REST 观测）但状态走正常断开而非 error
+        assert_eq!(snap.last_error.as_deref(), Some("网络连接已断开"));
+        let events = sink.0.lock().clone();
+        assert!(
+            events
+                .iter()
+                .any(|e| *e == format!("error {id} 网络连接已断开")),
+            "EOF 应有 error 事件: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| *e == format!("status {id} disconnected")),
+            "EOF 应有 disconnected 事件: {events:?}"
+        );
+        assert_snap_matches_sink(&snap, &sink, &id);
+        let _ = m.disconnect(&id);
+    }
+
+    #[test]
+    fn session_state_offline_remains_offline() {
+        let m = PortManager::new();
+        let id = m.load_offline(PortConfig::default(), PathBuf::from("x.log"), vec![]);
+        let snap = m
+            .bridge_list()
+            .into_iter()
+            .find(|s| s.id == id)
+            .expect("离线会话在列表");
+        assert_eq!(snap.status, "offline");
+        assert_eq!(snap.last_error, None);
     }
 }
