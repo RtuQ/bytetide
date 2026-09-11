@@ -191,6 +191,7 @@ cargo run -p bytetide-cli -- --help   # try the CLI locally
 Requirements: Node.js 20+, Rust stable, plus the [Tauri 2 system dependencies](https://tauri.app/start/prerequisites/).
 The Rust side is a Cargo workspace (`crates/bytetide-core` / `crates/bytetide-cli` / `src-tauri`): run cargo commands from the repo root; the lockfile and build artifacts live in the root `target/`.
 GitHub Actions runs the full check suite on push / PR.
+Release preflight: before publishing, run `npm run check:version` (versions must match across package.json / workspace / src-tauri / tauri.conf.json plus the tag) and `npm run check:tauri-config` (Windows background-throttling flag assertions); CI and the release workflows gate packaging on these checks.
 
 > `npm run dev` alone (without the Tauri backend) still renders the UI as a smoke check — serial I/O is unavailable.
 

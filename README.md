@@ -191,6 +191,7 @@ cargo run -p bytetide-cli -- --help   # 本地体验 CLI
 环境要求：Node.js 20+、Rust stable，以及 [Tauri 2 系统依赖](https://tauri.app/start/prerequisites/)。
 Rust 侧为 Cargo workspace（`crates/bytetide-core` / `crates/bytetide-cli` / `src-tauri`）：cargo 命令在仓库根执行，锁文件与构建产物统一位于根 `target/`。
 GitHub Actions 在 push / PR 时自动执行完整校验。
+发布预检：发版前跑 `npm run check:version`（package.json / workspace / src-tauri / tauri.conf.json 四清单 + tag 版本一致）与 `npm run check:tauri-config`（Windows 后台节流 flag 断言）；CI 与 release workflow 已内置 verify 门禁，不通过不出包。
 
 > 仅运行 `npm run dev`（无 Tauri 后端）可进行界面冒烟检查：空状态正常渲染，收发等功能不可用。
 

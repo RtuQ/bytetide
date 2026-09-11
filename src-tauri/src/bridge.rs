@@ -234,7 +234,8 @@ impl IntoResponse for ApiError {
 
 /// 桥对会话数据的访问面：把 manager 访问从 handler 抽出，router 可脱离 Tauri
 /// 构造（Task 7 路由测试与本文件 fake-service 回归测试都用 fake 实现）。
-pub(crate) trait BridgeService: Send + Sync {
+/// pub：集成测试（tests/bridge_routes.rs）注入 fake service 构造 router。
+pub trait BridgeService: Send + Sync {
     fn bridge_list(&self) -> Vec<SessionSnap>;
     fn bridge_snapshot(&self, id: &str) -> Option<Vec<BridgeLine>>;
     /// 长轮询：`no > since` 的行 + 当前 lastNo。
@@ -552,14 +553,12 @@ impl BridgeController {
     /// 把已绑定的 std listener 交给 spawn 的任务 serve
     /// （`TcpListener::from_std` 须在 tokio runtime 上下文，任务内调用成立）。
     fn spawn_serve(&self, std_listener: std::net::TcpListener) {
-        let ctx = BridgeCtx {
-            service: self.service.clone(),
-            cfg: self.cfg.clone(),
-        };
+        let service = self.service.clone();
+        let cfg = self.cfg.clone();
         let h = async_runtime::spawn(async move {
             match TcpListener::from_std(std_listener) {
                 Ok(listener) => {
-                    if let Err(e) = axum::serve(listener, router(ctx)).await {
+                    if let Err(e) = axum::serve(listener, router(service, cfg)).await {
                         eprintln!("[bridge] serve error: {e}");
                     }
                 }
@@ -651,7 +650,10 @@ fn ct_eq(a: &str, b: &str) -> bool {
 
 // =============================== 路由 ===============================
 
-fn router(ctx: BridgeCtx) -> Router {
+/// 构造桥 router：会话访问面 + 配置（令牌/allowSend 按请求实时读）两参注入，
+/// 内部自建 BridgeCtx。pub 供集成测试（tests/bridge_routes.rs）脱离 Tauri 直测路由层。
+pub fn router(service: Arc<dyn BridgeService>, cfg: Arc<RwLock<BridgeConfig>>) -> Router {
+    let ctx = BridgeCtx { service, cfg };
     Router::new()
         .route("/health", get(health))
         .route("/ports", get(ports))

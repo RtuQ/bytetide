@@ -39,6 +39,10 @@ jobs:
       - name: Rust tests
         run: cargo test --workspace
 
+      # REST 桥路由层集成测试（fake service + oneshot 直喂 Router，不含真实串口/网络）
+      - name: Bridge route tests
+        run: cargo test -p serial_tool --test bridge_routes
+
       - name: Rust check
         run: cargo check --workspace
 

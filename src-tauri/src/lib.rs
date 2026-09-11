@@ -1,4 +1,4 @@
-mod bridge;
+pub mod bridge;
 mod commands;
 mod gui_sink;
 mod hotplug;
