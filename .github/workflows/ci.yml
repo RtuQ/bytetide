@@ -31,6 +31,10 @@ jobs:
       - name: Release version check
         run: npm run check:version
 
+      # Tauri 配置预检：Windows 后台节流 flag 必须齐全且为独立参数
+      - name: Tauri config check
+        run: npm run check:tauri-config
+
       # Rust：单元测试 + 编译检查（覆盖 bytetide-core / bytetide-cli / src-tauri 全工作区）
       - name: Rust tests
         run: cargo test --workspace

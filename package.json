@@ -12,6 +12,8 @@
     "test": "vitest run",
     "check:version": "node scripts/check-release-version.mjs",
     "test:version": "node --test scripts/check-release-version.test.mjs",
+    "check:tauri-config": "node scripts/check-tauri-config.mjs",
+    "test:tauri-config": "node --test scripts/check-tauri-config.test.mjs",
     "commit": "cz"
   },
   "config": {
