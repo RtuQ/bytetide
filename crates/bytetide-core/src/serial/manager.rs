@@ -20,6 +20,10 @@ use crate::serial::rules::{
 };
 use crate::sink::{CaptureInfo, EventSink};
 
+/// 经 core 再导出 `anyhow`：manager 的公开签名（send/session_log_path…）使用其类型，
+/// 桌面端 crate（src-tauri）未直接依赖 anyhow，桥服务 trait 沿用同签名时经此路径引用。
+pub use anyhow;
+
 /// 桥接环形缓冲容量（带原始字节的近期分析窗口；≈170B/行 × 10 万 ≈ 17MB/会话）。
 pub const RING_CAP: usize = 100000;
 
@@ -762,6 +766,11 @@ impl PortManager {
             .read()
             .get(id)
             .map(|h| (h.buf.lines_since(since), h.buf.last_no()))
+    }
+
+    /// 交换基线：只取当前 lastNo（不做全量行分配）。
+    pub fn bridge_last_no(&self, id: &str) -> Option<u64> {
+        self.sessions.read().get(id).map(|h| h.buf.last_no())
     }
 
     pub fn bridge_stats(&self, id: &str) -> Option<BridgeStats> {
@@ -2029,6 +2038,23 @@ mod tests {
         assert_eq!(m.bridge_annotations(&id).unwrap(), notes);
         assert!(!m.bridge_set_annotations("nope", vec![]));
         assert!(m.bridge_annotations("nope").is_none());
+    }
+
+    #[test]
+    fn bridge_last_no_reads_ring_cursor_without_full_snapshot() {
+        let m = PortManager::new();
+        // 未知会话 None
+        assert_eq!(m.bridge_last_no("nope"), None);
+        let id = m.load_offline(
+            PortConfig::default(),
+            PathBuf::from("x.log"),
+            vec![
+                mk_log("01:00:00.000", Dir::Rx, "a", None, 1000),
+                mk_log("02:00:00.000", Dir::Tx, "b", None, 2000),
+            ],
+        );
+        // /exchange 基线：仅游标值（与 buf.last_no 一致），不分配快照
+        assert_eq!(m.bridge_last_no(&id), Some(2));
     }
 
     #[test]

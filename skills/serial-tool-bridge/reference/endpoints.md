@@ -192,9 +192,16 @@ curl -sS -X POST -H "Authorization: Bearer $SERIALTOOL_TOKEN" \
 ```
 
 ### `POST /sessions/:id/exchange`
-Send, then capture the first RX line matching `match` within `waitMs`.
-Body: `{ send:{mode,text}, waitMs?:2000, match?:{ re?, hex?, dir?:'rx'|'tx' } }`.
+Send, then capture the first line matching `match` within `waitMs`.
+Body: `{ send:{mode,text}, waitMs?:2000, match?:{ re?, hex?, mask?, dir?:'rx'|'tx' } }`.
 `{ sent:true, response:BridgeLine|null, waitedMs }`. `match` defaults to any RX line. `dir` defaults `rx`.
+
+**Matcher rules (strict):**
+- The baseline (`lastNo`) is captured **before** the send, so a response arriving immediately after the send is never missed.
+- An omitted field or an empty/whitespace string means "not provided". Set **at most one** of `re`/`hex`/`mask` — more than one → `400 conflicting_matchers`.
+- Invalid values return **400** with a stable error code (JSON `{"error":{"code","message"}}`), never a silent match-all: `invalid_regex` (pattern does not compile), `invalid_hex` (must be a non-empty, even-length run of ASCII hex pairs; whitespace between pairs allowed), `invalid_mask` (each pair must be `??` or two hex digits; no odd leftovers), `invalid_direction` (`dir` must be `rx`|`tx`).
+- `hex`/`mask` match against the line's **raw bytes** (falls back to `text` UTF-8 when raw bytes are absent).
+- Unknown session → `404 session_not_found`; failed send → `400 send_failed`.
 ```bash
 curl -sS -X POST -H "Authorization: Bearer $SERIALTOOL_TOKEN" \
   -H "Content-Type: application/json" \

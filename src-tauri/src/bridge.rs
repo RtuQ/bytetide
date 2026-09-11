@@ -3,6 +3,8 @@
 //! - 无 MCP：纯 HTTP + Bearer token。
 //! - 远程/虚拟机：绑定 `127.0.0.1`（默认）或 `0.0.0.0`（远程可达），URL+token 由用户复制到 AI 机。
 //! - 数据源：`serial::manager::PortManager` 的每会话环形缓冲（带原始字节，近期 20000 行）。
+//! - 访问面：`BridgeService` trait 收敛全部 manager 访问，router 可脱离 Tauri 构造
+//!   （生产 `TauriService` 转发 managed state；测试注入 fake service）。
 //! - 安全：桥默认关；启用需 token；`/send`、`/exchange` 由 `allowSend` 独立门控。
 
 use std::borrow::Cow;
@@ -27,8 +29,10 @@ use tauri::{async_runtime, AppHandle, Emitter, Manager};
 use tokio::net::TcpListener;
 
 use bytetide_core::serial::manager::{
-    BridgeAnnotation, BridgeLine, BridgeStats, MatchHit, PlotConfig, SendMode, SendRequest,
+    BridgeAlert, BridgeAnnotation, BridgeBookmark, BridgeLine, BridgeStats, MatchHit, PlotConfig,
+    SendMode, SendRequest, SessionSnap,
 };
+use bytetide_core::serial::manager::anyhow;
 use bytetide_core::serial::port::{list_ports, Dir};
 use crate::state::AppState;
 
@@ -61,11 +65,171 @@ impl Default for BridgeConfig {
     }
 }
 
-/// axum 共享状态：AppHandle（取 AppState/PortManager）+ 配置（令牌实时读）。
+/// axum 共享状态：会话访问面（BridgeService）+ 配置（令牌实时读）。
+/// 不再持有 AppHandle——router 可脱离 Tauri 构造（测试注入 fake service）。
 #[derive(Clone)]
 struct BridgeCtx {
-    app: AppHandle,
+    service: Arc<dyn BridgeService>,
     cfg: Arc<RwLock<BridgeConfig>>,
+}
+
+// =============================== 错误响应 ===============================
+
+/// REST 错误：稳定错误码 + JSON 体 `{"error":{"code","message"}}`，供 skill/AI 侧
+/// 程序化判别。/exchange 的非法 matcher 一律 400，绝不静默降级为 match-all。
+#[derive(Debug)]
+struct ApiError {
+    status: StatusCode,
+    code: &'static str,
+    message: String,
+}
+
+impl ApiError {
+    fn bad_request(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// message 缺省取 code（404 场景错误码本身即人话）。
+    fn not_found(code: &'static str) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            code,
+            message: code.to_string(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct ApiErrorEnvelope<'a> {
+    error: ApiErrorDetail<'a>,
+}
+
+#[derive(Serialize)]
+struct ApiErrorDetail<'a> {
+    code: &'a str,
+    message: &'a str,
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (
+            self.status,
+            Json(ApiErrorEnvelope {
+                error: ApiErrorDetail {
+                    code: self.code,
+                    message: &self.message,
+                },
+            }),
+        )
+            .into_response()
+    }
+}
+
+// =============================== 服务面 ===============================
+
+/// 桥对会话数据的访问面：把 manager 访问从 handler 抽出，router 可脱离 Tauri
+/// 构造（Task 7 路由测试与本文件 fake-service 回归测试都用 fake 实现）。
+pub(crate) trait BridgeService: Send + Sync {
+    fn bridge_list(&self) -> Vec<SessionSnap>;
+    fn bridge_snapshot(&self, id: &str) -> Option<Vec<BridgeLine>>;
+    /// 长轮询：`no > since` 的行 + 当前 lastNo。
+    fn bridge_follow(&self, id: &str, since: u64) -> Option<(Vec<BridgeLine>, u64)>;
+    /// 交换基线：只取当前 lastNo（不做全量行分配）。
+    fn bridge_last_no(&self, id: &str) -> Option<u64>;
+    fn bridge_stats(&self, id: &str) -> Option<BridgeStats>;
+    fn bridge_plot(&self, id: &str) -> Option<PlotConfig>;
+    fn bridge_set_plot(&self, id: &str, cfg: PlotConfig) -> bool;
+    fn bridge_bookmarks(&self, id: &str) -> Option<Vec<BridgeBookmark>>;
+    /// 完整访问面对齐 manager（REST 目前对书签只读，set 由前端经 commands 推送）。
+    #[allow(dead_code)]
+    fn bridge_set_bookmarks(&self, id: &str, v: Vec<BridgeBookmark>) -> bool;
+    fn bridge_alerts(&self, id: &str) -> Option<Vec<BridgeAlert>>;
+    /// 同上：完整访问面对齐 manager。
+    #[allow(dead_code)]
+    fn bridge_set_alerts(&self, id: &str, v: Vec<BridgeAlert>) -> bool;
+    fn bridge_annotations(&self, id: &str) -> Option<Vec<BridgeAnnotation>>;
+    fn bridge_set_annotations(&self, id: &str, v: Vec<BridgeAnnotation>) -> bool;
+    fn session_log_path(&self, id: &str) -> anyhow::Result<String>;
+    fn send(&self, id: &str, req: SendRequest) -> anyhow::Result<()>;
+    /// 批注变化后推送前端界面（生产 = `bridge-annotations-updated` 事件；测试 no-op）。
+    fn notify_annotations_changed(&self, session_id: &str, annotations: &[BridgeAnnotation]);
+    /// 绘图文法写回后通知前端实时采纳（生产 = `bridge-plot-updated` 事件；测试 no-op）。
+    fn notify_plot_updated(&self, session_id: &str, config: &PlotConfig);
+}
+
+/// 生产实现：全部转发到 Tauri managed state 里的 `PortManager`。
+struct TauriService {
+    app: AppHandle,
+}
+
+impl BridgeService for TauriService {
+    fn bridge_list(&self) -> Vec<SessionSnap> {
+        self.app.state::<AppState>().manager.bridge_list()
+    }
+    fn bridge_snapshot(&self, id: &str) -> Option<Vec<BridgeLine>> {
+        self.app.state::<AppState>().manager.bridge_snapshot(id)
+    }
+    fn bridge_follow(&self, id: &str, since: u64) -> Option<(Vec<BridgeLine>, u64)> {
+        self.app.state::<AppState>().manager.bridge_follow(id, since)
+    }
+    fn bridge_last_no(&self, id: &str) -> Option<u64> {
+        self.app.state::<AppState>().manager.bridge_last_no(id)
+    }
+    fn bridge_stats(&self, id: &str) -> Option<BridgeStats> {
+        self.app.state::<AppState>().manager.bridge_stats(id)
+    }
+    fn bridge_plot(&self, id: &str) -> Option<PlotConfig> {
+        self.app.state::<AppState>().manager.bridge_plot(id)
+    }
+    fn bridge_set_plot(&self, id: &str, cfg: PlotConfig) -> bool {
+        self.app.state::<AppState>().manager.bridge_set_plot(id, cfg)
+    }
+    fn bridge_bookmarks(&self, id: &str) -> Option<Vec<BridgeBookmark>> {
+        self.app.state::<AppState>().manager.bridge_bookmarks(id)
+    }
+    fn bridge_set_bookmarks(&self, id: &str, v: Vec<BridgeBookmark>) -> bool {
+        self.app.state::<AppState>().manager.bridge_set_bookmarks(id, v)
+    }
+    fn bridge_alerts(&self, id: &str) -> Option<Vec<BridgeAlert>> {
+        self.app.state::<AppState>().manager.bridge_alerts(id)
+    }
+    fn bridge_set_alerts(&self, id: &str, v: Vec<BridgeAlert>) -> bool {
+        self.app.state::<AppState>().manager.bridge_set_alerts(id, v)
+    }
+    fn bridge_annotations(&self, id: &str) -> Option<Vec<BridgeAnnotation>> {
+        self.app.state::<AppState>().manager.bridge_annotations(id)
+    }
+    fn bridge_set_annotations(&self, id: &str, v: Vec<BridgeAnnotation>) -> bool {
+        self.app.state::<AppState>().manager.bridge_set_annotations(id, v)
+    }
+    fn session_log_path(&self, id: &str) -> anyhow::Result<String> {
+        self.app.state::<AppState>().manager.session_log_path(id)
+    }
+    fn send(&self, id: &str, req: SendRequest) -> anyhow::Result<()> {
+        self.app.state::<AppState>().manager.send(id, req)
+    }
+    fn notify_annotations_changed(&self, session_id: &str, annotations: &[BridgeAnnotation]) {
+        let _ = self.app.emit(
+            "bridge-annotations-updated",
+            AnnotationsPayload {
+                session_id: session_id.to_string(),
+                annotations: annotations.to_vec(),
+            },
+        );
+    }
+    fn notify_plot_updated(&self, session_id: &str, config: &PlotConfig) {
+        let _ = self.app.emit(
+            "bridge-plot-updated",
+            PlotUpdatedPayload {
+                session_id: session_id.to_string(),
+                config: config.clone(),
+            },
+        );
+    }
 }
 
 // =============================== 控制器 ===============================
@@ -159,7 +323,7 @@ impl BridgeController {
             return;
         }
         let ctx = BridgeCtx {
-            app: self.app.clone(),
+            service: Arc::new(TauriService { app: self.app.clone() }),
             cfg: self.cfg.clone(),
         };
         let bind = cfg.bind.clone();
@@ -333,7 +497,7 @@ async fn ports() -> impl IntoResponse {
 }
 
 async fn sessions(State(ctx): State<BridgeCtx>) -> impl IntoResponse {
-    Json(ctx.app.state::<AppState>().manager.bridge_list())
+    Json(ctx.service.bridge_list())
 }
 
 #[derive(Serialize)]
@@ -348,22 +512,11 @@ struct SessionDetail {
 }
 
 async fn session_detail(State(ctx): State<BridgeCtx>, Path(id): Path<String>) -> Response {
-    let snap = ctx
-        .app
-        .state::<AppState>()
-        .manager
-        .bridge_list()
-        .into_iter()
-        .find(|s| s.id == id);
+    let snap = ctx.service.bridge_list().into_iter().find(|s| s.id == id);
     match snap {
         Some(s) => {
-            let stats = ctx.app.state::<AppState>().manager.bridge_stats(&id);
-            let log_path = ctx
-                .app
-                .state::<AppState>()
-                .manager
-                .session_log_path(&id)
-                .ok();
+            let stats = ctx.service.bridge_stats(&id);
+            let log_path = ctx.service.session_log_path(&id).ok();
             Json(SessionDetail {
                 id: s.id,
                 config: serde_json::to_value(&s.config).unwrap_or_default(),
@@ -378,14 +531,14 @@ async fn session_detail(State(ctx): State<BridgeCtx>, Path(id): Path<String>) ->
 }
 
 async fn stats(State(ctx): State<BridgeCtx>, Path(id): Path<String>) -> Response {
-    match ctx.app.state::<AppState>().manager.bridge_stats(&id) {
+    match ctx.service.bridge_stats(&id) {
         Some(s) => Json(s).into_response(),
         None => (StatusCode::NOT_FOUND, "session not found").into_response(),
     }
 }
 
 async fn plot_config(State(ctx): State<BridgeCtx>, Path(id): Path<String>) -> Response {
-    match ctx.app.state::<AppState>().manager.bridge_plot(&id) {
+    match ctx.service.bridge_plot(&id) {
         Some(c) => Json(c).into_response(),
         None => (StatusCode::NOT_FOUND, "session not found").into_response(),
     }
@@ -409,27 +562,16 @@ async fn plot_config_set(
     if let Err(e) = sanitize_plot_config(&mut cfg) {
         return (StatusCode::BAD_REQUEST, e).into_response();
     }
-    if !ctx
-        .app
-        .state::<AppState>()
-        .manager
-        .bridge_set_plot(&id, cfg.clone())
-    {
+    if !ctx.service.bridge_set_plot(&id, cfg.clone()) {
         return (StatusCode::NOT_FOUND, "session not found").into_response();
     }
-    let _ = ctx.app.emit(
-        "bridge-plot-updated",
-        PlotUpdatedPayload {
-            session_id: id,
-            config: cfg.clone(),
-        },
-    );
+    ctx.service.notify_plot_updated(&id, &cfg);
     Json(cfg).into_response()
 }
 
 /// 用户在应用里标记的书签（前端推送的只读镜像；`no` 为 UI 行号）。
 async fn bookmarks(State(ctx): State<BridgeCtx>, Path(id): Path<String>) -> Response {
-    match ctx.app.state::<AppState>().manager.bridge_bookmarks(&id) {
+    match ctx.service.bridge_bookmarks(&id) {
         Some(b) => Json(b).into_response(),
         None => (StatusCode::NOT_FOUND, "session not found").into_response(),
     }
@@ -437,7 +579,7 @@ async fn bookmarks(State(ctx): State<BridgeCtx>, Path(id): Path<String>) -> Resp
 
 /// 告警历史（前端推送的只读镜像，环形 100 条、新的在前；`no` 为 UI 行号）。
 async fn alerts(State(ctx): State<BridgeCtx>, Path(id): Path<String>) -> Response {
-    match ctx.app.state::<AppState>().manager.bridge_alerts(&id) {
+    match ctx.service.bridge_alerts(&id) {
         Some(a) => Json(a).into_response(),
         None => (StatusCode::NOT_FOUND, "session not found").into_response(),
     }
@@ -499,17 +641,6 @@ struct AnnotationsPayload {
     annotations: Vec<BridgeAnnotation>,
 }
 
-/// 批注变化后推送到前端界面（日志行标记 + 侧栏面板实时刷新）。
-fn emit_annotations(ctx: &BridgeCtx, id: &str, annotations: Vec<BridgeAnnotation>) {
-    let _ = ctx.app.emit(
-        "bridge-annotations-updated",
-        AnnotationsPayload {
-            session_id: id.to_string(),
-            annotations,
-        },
-    );
-}
-
 /// 合并 AI 批注：按 (no, note) 去重（重复提交幂等），超出容量丢最旧。
 /// 返回 (合并后列表, 实际新增条数)。
 fn merge_annotations(
@@ -534,7 +665,7 @@ fn merge_annotations(
 
 /// 列出当前批注。
 async fn annotations_get(State(ctx): State<BridgeCtx>, Path(id): Path<String>) -> Response {
-    match ctx.app.state::<AppState>().manager.bridge_annotations(&id) {
+    match ctx.service.bridge_annotations(&id) {
         Some(a) => Json(a).into_response(),
         None => (StatusCode::NOT_FOUND, "session not found").into_response(),
     }
@@ -550,9 +681,8 @@ async fn annotations_post(
     if body.notes.is_empty() {
         return (StatusCode::BAD_REQUEST, "notes must not be empty").into_response();
     }
-    let manager = &ctx.app.state::<AppState>().manager;
     // 行仍在缓冲中时回填 ts/text，AI 只需给 no + note
-    let snap = manager.bridge_snapshot(&id);
+    let snap = ctx.service.bridge_snapshot(&id);
     let Some(snap) = snap else {
         return (StatusCode::NOT_FOUND, "session not found").into_response();
     };
@@ -579,11 +709,11 @@ async fn annotations_post(
             at: now,
         });
     }
-    let existing = manager.bridge_annotations(&id).unwrap_or_default();
+    let existing = ctx.service.bridge_annotations(&id).unwrap_or_default();
     let (all, added) = merge_annotations(existing, candidates, ANNOTATION_CAP);
     if added > 0 {
-        manager.bridge_set_annotations(&id, all.clone());
-        emit_annotations(&ctx, &id, all.clone());
+        ctx.service.bridge_set_annotations(&id, all.clone());
+        ctx.service.notify_annotations_changed(&id, &all);
     }
     Json(AnnotationsPage {
         added,
@@ -598,16 +728,15 @@ async fn annotations_delete(
     Path(id): Path<String>,
     Query(p): Query<AnnotationsDeleteParams>,
 ) -> Response {
-    let manager = &ctx.app.state::<AppState>().manager;
-    let Some(existing) = manager.bridge_annotations(&id) else {
+    let Some(existing) = ctx.service.bridge_annotations(&id) else {
         return (StatusCode::NOT_FOUND, "session not found").into_response();
     };
     let remaining: Vec<BridgeAnnotation> = match &p.id {
         Some(rid) => existing.into_iter().filter(|a| &a.id != rid).collect(),
         None => vec![],
     };
-    manager.bridge_set_annotations(&id, remaining.clone());
-    emit_annotations(&ctx, &id, remaining.clone());
+    ctx.service.bridge_set_annotations(&id, remaining.clone());
+    ctx.service.notify_annotations_changed(&id, &remaining);
     Json(remaining).into_response()
 }
 
@@ -633,7 +762,7 @@ async fn export_log(
     Path(id): Path<String>,
     Query(p): Query<ExportParams>,
 ) -> Response {
-    let path = match ctx.app.state::<AppState>().manager.session_log_path(&id) {
+    let path = match ctx.service.session_log_path(&id) {
         Ok(p) => p,
         Err(_) => return (StatusCode::NOT_FOUND, "session not found").into_response(),
     };
@@ -975,7 +1104,7 @@ fn mask_find(hay: &[u8], mask: &[Option<u8>]) -> Option<usize> {
 
 /// 过滤快照，返回带（可选）命中信息的 owned 行（保留原序）。
 fn filtered(ctx: &BridgeCtx, id: &str, f: &FilterSpec) -> Option<Vec<BridgeLine>> {
-    let snap = ctx.app.state::<AppState>().manager.bridge_snapshot(id)?;
+    let snap = ctx.service.bridge_snapshot(id)?;
     Some(
         snap.iter()
             .filter_map(|l| {
@@ -1027,7 +1156,7 @@ async fn lines(
         Ok(x) => x,
         Err(e) => return e.into_response(),
     };
-    let snap = match ctx.app.state::<AppState>().manager.bridge_snapshot(&id) {
+    let snap = match ctx.service.bridge_snapshot(&id) {
         Some(s) => s,
         None => return (StatusCode::NOT_FOUND, "session not found").into_response(),
     };
@@ -1224,7 +1353,7 @@ async fn follow(
     // 单调推进（不回退）：ring 清空后 lastNo 归 0 的瞬间不丢游标。
     let mut scanned = since;
     loop {
-        if let Some((lines, high)) = ctx.app.state::<AppState>().manager.bridge_follow(&id, scanned) {
+        if let Some((lines, high)) = ctx.service.bridge_follow(&id, scanned) {
             if noop {
                 if !lines.is_empty() {
                     return Json(FollowPage {
@@ -1254,7 +1383,7 @@ async fn follow(
             return (StatusCode::NOT_FOUND, "session not found").into_response();
         }
         if tokio::time::Instant::now() >= deadline {
-            let last_no = ctx.app.state::<AppState>().manager.bridge_follow(&id, scanned).map(|(_, n)| n).unwrap_or(0);
+            let last_no = ctx.service.bridge_follow(&id, scanned).map(|(_, n)| n).unwrap_or(0);
             return Json(FollowPage {
                 lines: vec![],
                 last_no,
@@ -1456,7 +1585,7 @@ async fn decode(
     Query(p): Query<DecodeParams>,
 ) -> Response {
     // 基础文法取已存 PlotConfig，参数覆盖
-    let mut base = ctx.app.state::<AppState>().manager.bridge_plot(&id).unwrap_or_default();
+    let mut base = ctx.service.bridge_plot(&id).unwrap_or_default();
     if let Some(ref h) = p.head {
         base.frame_head = h.clone();
     }
@@ -1898,7 +2027,7 @@ async fn value_hist(
     Path(id): Path<String>,
     Query(p): Query<ValueHistParams>,
 ) -> Response {
-    let mut base = ctx.app.state::<AppState>().manager.bridge_plot(&id).unwrap_or_default();
+    let mut base = ctx.service.bridge_plot(&id).unwrap_or_default();
     if let Some(ref h) = p.head {
         base.frame_head = h.clone();
     }
@@ -2143,12 +2272,7 @@ async fn send(
         Some("hex") => SendMode::Hex,
         _ => SendMode::Ascii,
     };
-    match ctx
-        .app
-        .state::<AppState>()
-        .manager
-        .send(&id, SendRequest { mode, text: body.text })
-    {
+    match ctx.service.send(&id, SendRequest { mode, text: body.text }) {
         Ok(()) => Json(serde_json::json!({})).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     }
@@ -2159,6 +2283,7 @@ async fn send(
 struct ExchangeMatch {
     re: Option<String>,
     hex: Option<String>,
+    mask: Option<String>,
     dir: Option<String>,
 }
 
@@ -2178,92 +2303,239 @@ struct ExchangePage {
     waited_ms: u64,
 }
 
-async fn exchange(
-    State(ctx): State<BridgeCtx>,
-    Path(id): Path<String>,
-    Json(body): Json<ExchangeBody>,
-) -> Response {
-    if !ctx.cfg.read().allow_send {
-        return (
-            StatusCode::FORBIDDEN,
-            "allowSend is disabled; enable it in the bridge panel".to_string(),
-        )
-            .into_response();
+/// 编译后的交换匹配器：`hex`/`mask` 为空 = 未启用该匹配器；`re` 为 None = 不限文本。
+#[derive(Debug)]
+struct CompiledExchangeMatch {
+    dir: Dir,
+    re: Option<Regex>,
+    hex: Vec<u8>,
+    mask: Vec<Option<u8>>,
+}
+
+/// 字段为空串/纯空白 = 未携带（与缺省等价）。
+fn opt_non_empty(s: Option<&str>) -> Option<&str> {
+    s.map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// 交换匹配器编译：None → 默认任意 RX 行；空串字段视为未携带；
+/// re/hex/mask 互斥（同时携带多于一个 → 400）；非法值返回稳定错误码
+/// （invalid_regex/invalid_hex/invalid_mask/invalid_direction），绝不降级为 match-all。
+fn compile_exchange_match(input: Option<&ExchangeMatch>) -> Result<CompiledExchangeMatch, ApiError> {
+    let Some(m) = input else {
+        return Ok(CompiledExchangeMatch {
+            dir: Dir::Rx,
+            re: None,
+            hex: Vec::new(),
+            mask: Vec::new(),
+        });
+    };
+    let dir = match opt_non_empty(m.dir.as_deref()) {
+        None | Some("rx") => Dir::Rx,
+        Some("tx") => Dir::Tx,
+        Some(other) => {
+            return Err(ApiError::bad_request(
+                "invalid_direction",
+                format!("dir must be rx|tx, got {other:?}"),
+            ))
+        }
+    };
+    let (re_src, hex_src, mask_src) = (
+        opt_non_empty(m.re.as_deref()),
+        opt_non_empty(m.hex.as_deref()),
+        opt_non_empty(m.mask.as_deref()),
+    );
+    if [re_src.is_some(), hex_src.is_some(), mask_src.is_some()]
+        .into_iter()
+        .filter(|set| *set)
+        .count()
+        > 1
+    {
+        return Err(ApiError::bad_request(
+            "conflicting_matchers",
+            "set at most one of re/hex/mask",
+        ));
     }
-    // 发送
+    let re = re_src
+        .map(Regex::new)
+        .transpose()
+        .map_err(|e| ApiError::bad_request("invalid_regex", format!("invalid regex: {e}")))?;
+    let hex = match hex_src {
+        Some(s) => parse_hex_strict(s)?,
+        None => Vec::new(),
+    };
+    let mask = match mask_src {
+        Some(s) => parse_mask_strict(s)?,
+        None => Vec::new(),
+    };
+    Ok(CompiledExchangeMatch { dir, re, hex, mask })
+}
+
+/// 严格 hex：去空白后必须非空、偶数长度、纯 ASCII hex 对（宽松版 `parse_hex`
+/// 会静默丢非法对，导致「看似过滤、实为 match-all」，此处一律 400）。
+fn parse_hex_strict(s: &str) -> Result<Vec<u8>, ApiError> {
+    let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    if cleaned.is_empty() {
+        return Err(ApiError::bad_request("invalid_hex", "hex must not be empty"));
+    }
+    if !cleaned.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(ApiError::bad_request(
+            "invalid_hex",
+            format!("hex must be ASCII hex pairs, got {s:?}"),
+        ));
+    }
+    if cleaned.len() % 2 != 0 {
+        return Err(ApiError::bad_request(
+            "invalid_hex",
+            format!("hex must be even-length pairs, got {s:?}"),
+        ));
+    }
+    let mut out = Vec::with_capacity(cleaned.len() / 2);
+    for i in (0..cleaned.len()).step_by(2) {
+        out.push(u8::from_str_radix(&cleaned[i..i + 2], 16).expect("validated hex pair"));
+    }
+    Ok(out)
+}
+
+/// 严格 mask：去空白后每对要么 `??` 要么两位 hex；奇数残留/非法字符报错。
+fn parse_mask_strict(s: &str) -> Result<Vec<Option<u8>>, ApiError> {
+    let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    if cleaned.is_empty() {
+        return Err(ApiError::bad_request("invalid_mask", "mask must not be empty"));
+    }
+    // 先确保纯 ASCII（hex 或 ?），后续按字节切片才安全
+    if !cleaned.chars().all(|c| c == '?' || c.is_ascii_hexdigit()) {
+        return Err(ApiError::bad_request(
+            "invalid_mask",
+            format!("mask pairs must be hex digits or ??, got {s:?}"),
+        ));
+    }
+    if cleaned.len() % 2 != 0 {
+        return Err(ApiError::bad_request(
+            "invalid_mask",
+            format!("mask must be even-length pairs, got {s:?}"),
+        ));
+    }
+    let mut out = Vec::with_capacity(cleaned.len() / 2);
+    let mut i = 0;
+    while i < cleaned.len() {
+        let pair = &cleaned[i..i + 2];
+        if pair == "??" {
+            out.push(None);
+        } else if pair.chars().all(|c| c.is_ascii_hexdigit()) {
+            out.push(Some(u8::from_str_radix(pair, 16).expect("validated hex pair")));
+        } else {
+            return Err(ApiError::bad_request(
+                "invalid_mask",
+                format!("mask pairs must be hex digits or ??, got {s:?}"),
+            ));
+        }
+        i += 2;
+    }
+    Ok(out)
+}
+
+/// 按编译好的匹配器找第一条命中行：dir 不等跳过；re 有则 is_match(text)；
+/// hex/mask 非空则按行字节（优先原始 bytes，缺失回退 text UTF-8）查找。
+fn find_exchange_response(lines: &[BridgeLine], m: &CompiledExchangeMatch) -> Option<BridgeLine> {
+    lines
+        .iter()
+        .filter(|l| {
+            if l.dir != m.dir {
+                return false;
+            }
+            if let Some(re) = &m.re {
+                if !re.is_match(&l.text) {
+                    return false;
+                }
+            }
+            if !m.hex.is_empty() && bytes_find(&line_bytes(l), &m.hex).is_none() {
+                return false;
+            }
+            if !m.mask.is_empty() && mask_find(&line_bytes(l), &m.mask).is_none() {
+                return false;
+            }
+            true
+        })
+        .next()
+        .cloned()
+}
+
+/// 交换轮询间隔：真实路径 30ms（测试传 1ms 提速）。
+const EXCHANGE_POLL: std::time::Duration = std::time::Duration::from_millis(30);
+
+/// 交换编排：编译 matcher → 取基线（last_no，先于发送）→ 发送 → 轮询 follow 找命中。
+/// 独立成函数 + `calls` 记录调用顺序，供 fake-service 回归测试断言
+/// last_no → send → follow，且快响应（no=baseline+1）在首次轮询即命中。
+async fn run_exchange<S: BridgeService + ?Sized>(
+    svc: &S,
+    id: &str,
+    body: &ExchangeBody,
+    poll: std::time::Duration,
+    calls: Option<&std::sync::Mutex<Vec<&'static str>>>,
+) -> Result<Response, ApiError> {
+    let trace = |name: &'static str| {
+        if let Some(c) = calls {
+            c.lock().expect("test calls mutex").push(name);
+        }
+    };
+    let matcher = compile_exchange_match(body.r#match.as_ref())?;
+    trace("last_no");
+    let baseline = svc
+        .bridge_last_no(id)
+        .ok_or_else(|| ApiError::not_found("session_not_found"))?;
     let mode = match body.send.mode.as_deref() {
         Some("hex") => SendMode::Hex,
         _ => SendMode::Ascii,
     };
-    if let Err(e) = ctx
-        .app
-        .state::<AppState>()
-        .manager
-        .send(&id, SendRequest { mode, text: body.send.text })
-    {
-        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
-    }
-    // 捕获匹配
-    let re = body.r#match.as_ref().and_then(|m| {
-        m.re.as_deref().and_then(|p| {
-            if p.is_empty() {
-                None
-            } else {
-                Regex::new(p).ok()
-            }
-        })
-    });
-    let hex = body
-        .r#match
-        .as_ref()
-        .map(|m| parse_hex(m.hex.as_deref().unwrap_or("")))
-        .unwrap_or_default();
-    let dir = body
-        .r#match
-        .as_ref()
-        .and_then(|m| match m.dir.as_deref() {
-            Some("tx") => Some(Dir::Tx),
-            _ => Some(Dir::Rx),
-        })
-        .unwrap_or(Dir::Rx);
-
+    trace("send");
+    svc.send(id, SendRequest { mode, text: body.send.text.clone() })
+        .map_err(|e| ApiError::bad_request("send_failed", e.to_string()))?;
+    let start = std::time::Instant::now();
     let wait = std::time::Duration::from_millis(body.wait_ms.unwrap_or(2000).min(30_000));
     let deadline = tokio::time::Instant::now() + wait;
-    let mut baseline = ctx.app.state::<AppState>().manager.bridge_follow(&id, 0).map(|(_, n)| n).unwrap_or(0);
-    let start = std::time::Instant::now();
+    // 轮询游标从基线起步：send 前已存在的行（no ≤ baseline）永不参与匹配
+    let mut cursor = baseline;
     loop {
-        if let Some((lines, last_no)) = ctx.app.state::<AppState>().manager.bridge_follow(&id, baseline) {
-            for l in &lines {
-                if l.dir != dir {
-                    continue;
-                }
-                let hit_re = re.as_ref().map(|r| r.is_match(&l.text)).unwrap_or(true);
-                let hit_hex = if hex.is_empty() {
-                    true
-                } else {
-                    bytes_find(&line_bytes(l), &hex).is_some()
-                };
-                if hit_re && hit_hex {
-                    return Json(ExchangePage {
-                        sent: true,
-                        response: Some(l.clone()),
-                        waited_ms: start.elapsed().as_millis() as u64,
-                    })
-                    .into_response();
-                }
-            }
-            baseline = last_no;
+        trace("follow");
+        let Some((lines, high)) = svc.bridge_follow(id, cursor) else {
+            return Err(ApiError::not_found("session_not_found"));
+        };
+        if let Some(l) = find_exchange_response(&lines, &matcher) {
+            return Ok(Json(ExchangePage {
+                sent: true,
+                response: Some(l),
+                waited_ms: start.elapsed().as_millis() as u64,
+            })
+            .into_response());
+        }
+        if high > cursor {
+            cursor = high;
         }
         if tokio::time::Instant::now() >= deadline {
-            return Json(ExchangePage {
+            return Ok(Json(ExchangePage {
                 sent: true,
                 response: None,
                 waited_ms: start.elapsed().as_millis() as u64,
             })
-            .into_response();
+            .into_response());
         }
-        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        tokio::time::sleep(poll).await;
     }
+}
+
+async fn exchange(
+    State(ctx): State<BridgeCtx>,
+    Path(id): Path<String>,
+    Json(body): Json<ExchangeBody>,
+) -> Result<Response, ApiError> {
+    if !ctx.cfg.read().allow_send {
+        return Ok((
+            StatusCode::FORBIDDEN,
+            "allowSend is disabled; enable it in the bridge panel".to_string(),
+        )
+            .into_response());
+    }
+    run_exchange(&*ctx.service, &id, &body, EXCHANGE_POLL, None).await
 }
 
 #[cfg(test)]
@@ -2783,5 +3055,279 @@ mod tests {
         let err = build_filter(&mk_ff(Some("(unclosed"), None, None)).err().unwrap();
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
         assert!(err.1.contains("invalid regex"));
+    }
+
+    // ---------------- /exchange 严格 matcher（非法输入 400，绝不降级 match-all） ----------------
+
+    fn em(re: Option<&str>, hex: Option<&str>, mask: Option<&str>, dir: Option<&str>) -> ExchangeMatch {
+        ExchangeMatch {
+            re: re.map(Into::into),
+            hex: hex.map(Into::into),
+            mask: mask.map(Into::into),
+            dir: dir.map(Into::into),
+        }
+    }
+
+    fn assert_bad(name: &str, m: ExchangeMatch) {
+        let err = compile_exchange_match(Some(&m)).expect_err(name);
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn exchange_rejects_invalid_regex_hex_mask_and_dir() {
+        assert_bad("invalid_regex", ExchangeMatch { re: Some("(".into()), hex: None, mask: None, dir: None });
+        assert_bad("invalid_hex", ExchangeMatch { re: None, hex: Some("GG".into()), mask: None, dir: None });
+        assert_bad("invalid_mask", ExchangeMatch { re: None, hex: None, mask: Some("A?".into()), dir: None });
+        assert_bad("invalid_direction", ExchangeMatch { re: None, hex: None, mask: None, dir: Some("sideways".into()) });
+    }
+
+    #[test]
+    fn exchange_matcher_never_turns_invalid_input_into_match_all() {
+        let input = ExchangeMatch { re: Some("(".into()), hex: None, mask: None, dir: None };
+        assert!(compile_exchange_match(Some(&input)).is_err());
+    }
+
+    #[test]
+    fn exchange_rejects_conflicting_matchers_with_stable_code() {
+        // re/hex/mask 互斥：同时携带多于一个 → 400 conflicting_matchers
+        assert_bad("conflicting", em(Some("OK"), Some("AA55"), None, None));
+        assert_bad("conflicting", em(None, Some("AA55"), Some("AA??"), None));
+        assert_bad("conflicting", em(Some("OK"), None, Some("AA??"), None));
+        let err = compile_exchange_match(Some(&em(Some("OK"), Some("AA55"), None, None)))
+            .expect_err("conflicting");
+        assert_eq!(err.code, "conflicting_matchers");
+    }
+
+    #[test]
+    fn exchange_error_codes_are_stable() {
+        let cases = [
+            (em(Some("("), None, None, None), "invalid_regex"),
+            (em(None, Some("GG"), None, None), "invalid_hex"),
+            (em(None, None, Some("A?"), None), "invalid_mask"),
+            (em(None, None, None, Some("sideways")), "invalid_direction"),
+        ];
+        for (m, code) in cases {
+            assert_eq!(compile_exchange_match(Some(&m)).expect_err(code).code, code);
+        }
+    }
+
+    #[test]
+    fn exchange_empty_fields_treated_as_absent_and_default_is_any_rx() {
+        // 空串/纯空白字段 = 未携带：编译成功、对应匹配器为空、dir 回落 rx
+        let c = compile_exchange_match(Some(&em(Some("  "), Some(""), None, Some(""))))
+            .expect("empty = absent");
+        assert!(c.re.is_none());
+        assert!(c.hex.is_empty());
+        assert!(c.mask.is_empty());
+        assert_eq!(c.dir, Dir::Rx);
+        // 完全不带 match 字段：默认任意 RX 行
+        let d = compile_exchange_match(None).expect("default");
+        assert_eq!(d.dir, Dir::Rx);
+        assert!(d.re.is_none() && d.hex.is_empty() && d.mask.is_empty());
+        // 合法输入正常编译（re/hex/mask 一次只携带一个）
+        let ok = compile_exchange_match(Some(&em(Some("OK\\d"), None, None, Some("tx"))))
+            .expect("valid re");
+        assert_eq!(ok.dir, Dir::Tx);
+        assert!(ok.re.is_some());
+        let ok2 = compile_exchange_match(Some(&em(None, Some("AA55"), None, None)))
+            .expect("valid hex");
+        assert_eq!(ok2.hex, vec![0xAA, 0x55]);
+        let ok3 = compile_exchange_match(Some(&em(None, None, Some("AA??55"), None)))
+            .expect("valid mask");
+        assert_eq!(ok3.mask, vec![Some(0xAA), None, Some(0x55)]);
+    }
+
+    #[test]
+    fn parse_hex_strict_accepts_pairs_and_rejects_the_rest() {
+        assert_eq!(parse_hex_strict("AA55").unwrap(), vec![0xAA, 0x55]);
+        assert_eq!(parse_hex_strict("aa 55").unwrap(), vec![0xAA, 0x55]); // 小写合法 + 空白忽略
+        assert_eq!(parse_hex_strict("A55").unwrap_err().code, "invalid_hex"); // 奇数位
+        assert_eq!(parse_hex_strict("GG").unwrap_err().code, "invalid_hex"); // 非法字符
+        assert_eq!(parse_hex_strict("").unwrap_err().code, "invalid_hex"); // 空串
+        assert_eq!(parse_hex_strict("  ").unwrap_err().code, "invalid_hex"); // 纯空白
+    }
+
+    #[test]
+    fn parse_mask_strict_accepts_wildcard_pairs_and_rejects_the_rest() {
+        assert_eq!(parse_mask_strict("AA??55").unwrap(), vec![Some(0xAA), None, Some(0x55)]);
+        assert_eq!(parse_mask_strict("AA ?? 55").unwrap(), vec![Some(0xAA), None, Some(0x55)]);
+        assert_eq!(parse_mask_strict("A?").unwrap_err().code, "invalid_mask"); // hex 与 ? 混搭
+        assert_eq!(parse_mask_strict("AA5").unwrap_err().code, "invalid_mask"); // 奇数残留
+        assert_eq!(parse_mask_strict("ZZ").unwrap_err().code, "invalid_mask"); // 非法字符
+        assert_eq!(parse_mask_strict("").unwrap_err().code, "invalid_mask"); // 空串
+    }
+
+    #[test]
+    fn find_exchange_response_filters_dir_and_matches_re_hex_mask() {
+        // dir 不等跳过
+        let m = compile_exchange_match(Some(&em(None, None, None, Some("tx")))).unwrap();
+        let lines = vec![
+            mk_line(1, Dir::Rx, "ACK", None, 1),
+            mk_line(2, Dir::Tx, "ACK", None, 2),
+        ];
+        assert_eq!(find_exchange_response(&lines, &m).unwrap().no, 2);
+
+        // re 命中第一条满足者
+        let m = compile_exchange_match(Some(&em(Some("OK"), None, None, None))).unwrap();
+        let lines = vec![
+            mk_line(1, Dir::Rx, "noise", None, 1),
+            mk_line(2, Dir::Rx, "OK=1", None, 2),
+        ];
+        assert_eq!(find_exchange_response(&lines, &m).unwrap().no, 2);
+        assert!(find_exchange_response(&lines[..1], &m).is_none());
+
+        // hex 匹配原始 bytes 优先于 text（text 为 lossy 占位，编码后并不含 AA55）
+        let m = compile_exchange_match(Some(&em(None, Some("AA55"), None, None))).unwrap();
+        let bin = vec![mk_line(3, Dir::Rx, "\u{FFFD}\u{FFFD}", Some(vec![0x00, 0xAA, 0x55]), 3)];
+        assert_eq!(find_exchange_response(&bin, &m).unwrap().no, 3);
+
+        // mask 通配：?? 跳过的字节任意
+        let m = compile_exchange_match(Some(&em(None, None, Some("AA??55"), None))).unwrap();
+        let hit = vec![mk_line(4, Dir::Rx, "", Some(vec![0xAA, 0x7F, 0x55]), 4)];
+        let miss = vec![mk_line(5, Dir::Rx, "", Some(vec![0xAA, 0x7F, 0x66]), 5)];
+        assert!(find_exchange_response(&hit, &m).is_some());
+        assert!(find_exchange_response(&miss, &m).is_none());
+    }
+
+    // ---------------- run_exchange：fake-service 排序回归（基线先行 + 快响应不丢） ----------------
+
+    /// 测试替身：std Mutex 存行（行数极少，同步锁足够）。
+    struct FakeService {
+        lines: std::sync::Mutex<Vec<BridgeLine>>,
+        /// send 时立刻追加的回包（no 需 = baseline+1），模拟快响应设备。
+        respond: Option<BridgeLine>,
+        /// 置位时 send 报错（验证 400 send_failed 路径）。
+        fail_send: bool,
+    }
+
+    impl Default for FakeService {
+        fn default() -> Self {
+            Self { lines: std::sync::Mutex::new(Vec::new()), respond: None, fail_send: false }
+        }
+    }
+
+    impl BridgeService for FakeService {
+        fn bridge_list(&self) -> Vec<SessionSnap> {
+            vec![]
+        }
+        fn bridge_snapshot(&self, _id: &str) -> Option<Vec<BridgeLine>> {
+            Some(self.lines.lock().unwrap().clone())
+        }
+        fn bridge_last_no(&self, _id: &str) -> Option<u64> {
+            Some(self.lines.lock().unwrap().last().map(|l| l.no).unwrap_or(0))
+        }
+        fn bridge_follow(&self, _id: &str, since: u64) -> Option<(Vec<BridgeLine>, u64)> {
+            let lines = self.lines.lock().unwrap();
+            let out = lines.iter().filter(|l| l.no > since).cloned().collect();
+            Some((out, lines.last().map(|l| l.no).unwrap_or(0)))
+        }
+        fn bridge_stats(&self, _id: &str) -> Option<BridgeStats> {
+            None
+        }
+        fn bridge_plot(&self, _id: &str) -> Option<PlotConfig> {
+            None
+        }
+        fn bridge_set_plot(&self, _id: &str, _cfg: PlotConfig) -> bool {
+            false
+        }
+        fn bridge_bookmarks(&self, _id: &str) -> Option<Vec<BridgeBookmark>> {
+            None
+        }
+        fn bridge_set_bookmarks(&self, _id: &str, _v: Vec<BridgeBookmark>) -> bool {
+            false
+        }
+        fn bridge_alerts(&self, _id: &str) -> Option<Vec<BridgeAlert>> {
+            None
+        }
+        fn bridge_set_alerts(&self, _id: &str, _v: Vec<BridgeAlert>) -> bool {
+            false
+        }
+        fn bridge_annotations(&self, _id: &str) -> Option<Vec<BridgeAnnotation>> {
+            None
+        }
+        fn bridge_set_annotations(&self, _id: &str, _v: Vec<BridgeAnnotation>) -> bool {
+            false
+        }
+        fn session_log_path(&self, _id: &str) -> anyhow::Result<String> {
+            Err(bytetide_core::serial::manager::anyhow::anyhow!("offline"))
+        }
+        fn send(&self, _id: &str, _req: SendRequest) -> anyhow::Result<()> {
+            if self.fail_send {
+                return Err(bytetide_core::serial::manager::anyhow::anyhow!("port gone"));
+            }
+            if let Some(l) = &self.respond {
+                self.lines.lock().unwrap().push(l.clone());
+            }
+            Ok(())
+        }
+        fn notify_annotations_changed(&self, _session_id: &str, _annotations: &[BridgeAnnotation]) {}
+        fn notify_plot_updated(&self, _session_id: &str, _config: &PlotConfig) {}
+    }
+
+    fn ex_body(text: &str, wait_ms: u64) -> ExchangeBody {
+        ExchangeBody {
+            send: SendBody { mode: None, text: text.into() },
+            wait_ms: Some(wait_ms),
+            r#match: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn run_exchange_baseline_precedes_send_and_hits_fast_response() {
+        // 回归：基线必须先于 send 捕获。send 后立刻出现的 no=baseline+1 回行
+        // 要在首次 follow 轮询命中（旧实现 send 后才 bridge_follow(id,0)，快响应被跳过）。
+        let svc = FakeService {
+            respond: Some(mk_line(8, Dir::Rx, "ACK", None, 2)),
+            ..Default::default()
+        };
+        svc.lines.lock().unwrap().push(mk_line(7, Dir::Rx, "idle", None, 1)); // baseline = 7
+        let calls = std::sync::Mutex::new(Vec::<&'static str>::new());
+        let body = ex_body("ping", 500);
+        let resp = run_exchange(&svc, "s1", &body, std::time::Duration::from_millis(1), Some(&calls))
+            .await
+            .expect("exchange ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(*calls.lock().unwrap(), vec!["last_no", "send", "follow"]);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let page: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(page["sent"], serde_json::json!(true));
+        assert_eq!(page["response"]["no"], serde_json::json!(8));
+        assert_eq!(page["response"]["text"], serde_json::json!("ACK"));
+    }
+
+    #[tokio::test]
+    async fn run_exchange_send_failure_is_400_send_failed() {
+        let svc = FakeService { fail_send: true, ..Default::default() };
+        let calls = std::sync::Mutex::new(Vec::<&'static str>::new());
+        let body = ex_body("ping", 100);
+        let err = run_exchange(&svc, "s1", &body, std::time::Duration::from_millis(1), Some(&calls))
+            .await
+            .expect_err("send failed");
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert_eq!(err.code, "send_failed");
+        // last_no 已记录；send 失败后不再进入 follow 轮询
+        assert_eq!(*calls.lock().unwrap(), vec!["last_no", "send"]);
+        // 错误响应体为稳定 JSON 信封 {"error":{"code","message"}}
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], serde_json::json!("send_failed"));
+        assert!(json["error"]["message"].is_string());
+    }
+
+    #[tokio::test]
+    async fn run_exchange_times_out_with_null_response() {
+        // 无回包：轮询到超时，sent=true、response=null
+        let svc = FakeService::default();
+        let body = ex_body("ping", 20);
+        let resp = run_exchange(&svc, "s1", &body, std::time::Duration::from_millis(1), None)
+            .await
+            .expect("exchange ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let page: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(page["response"], serde_json::Value::Null);
+        assert_eq!(page["sent"], serde_json::json!(true));
     }
 }
