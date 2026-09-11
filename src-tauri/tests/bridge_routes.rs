@@ -13,12 +13,12 @@ use parking_lot::RwLock;
 use tower::ServiceExt;
 
 use bytetide_core::serial::manager::{
-    anyhow, BridgeAlert, BridgeAnnotation, BridgeBookmark, BridgeLine, BridgeStats, PlotConfig,
+    BridgeAlert, BridgeAnnotation, BridgeBookmark, BridgeLine, BridgeStats, PlotConfig,
     SendRequest, SessionSnap, RING_CAP,
 };
 use bytetide_core::serial::port::{Dir, PortConfig};
 use serial_tool_lib::bridge::{
-    router, BridgeConfig, BridgeRuntime, BridgeService, BridgeView, RuntimeState,
+    router, BridgeConfig, BridgeRuntime, BridgeService, BridgeView, RuntimeState, ServiceError,
 };
 
 /// 测试令牌：固定 64 hex（与生产 `new_token` 输出同形状）。
@@ -74,7 +74,7 @@ fn mk_line(no: u64, dir: Dir, text: &str) -> BridgeLine {
 }
 
 impl BridgeService for FakeService {
-    fn bridge_list(&self) -> Vec<SessionSnap> {
+    fn list_sessions(&self) -> Vec<SessionSnap> {
         let g = self.inner.lock().expect("fake mutex");
         if !g.present {
             return vec![];
@@ -89,77 +89,82 @@ impl BridgeService for FakeService {
         }]
     }
 
-    fn bridge_snapshot(&self, _id: &str) -> Option<Vec<BridgeLine>> {
+    fn session(&self, id: &str) -> Result<SessionSnap, ServiceError> {
+        self.list_sessions()
+            .into_iter()
+            .find(|s| s.id == id)
+            .ok_or(ServiceError::NotFound)
+    }
+
+    fn stats(&self, _id: &str) -> Result<BridgeStats, ServiceError> {
+        Err(ServiceError::NotFound)
+    }
+
+    fn snapshot(&self, _id: &str) -> Result<Vec<BridgeLine>, ServiceError> {
         let g = self.inner.lock().expect("fake mutex");
         if g.present {
-            Some(g.lines.clone())
+            Ok(g.lines.clone())
         } else {
-            None
+            Err(ServiceError::NotFound)
         }
     }
 
-    fn bridge_last_no(&self, _id: &str) -> Option<u64> {
-        let g = self.inner.lock().expect("fake mutex");
-        if g.present {
-            Some(g.lines.last().map(|l| l.no).unwrap_or(0))
-        } else {
-            None
-        }
-    }
-
-    fn bridge_follow(&self, _id: &str, since: u64) -> Option<(Vec<BridgeLine>, u64)> {
+    fn lines_after(&self, _id: &str, no: u64, max: usize) -> Result<Vec<BridgeLine>, ServiceError> {
         let g = self.inner.lock().expect("fake mutex");
         if !g.present {
-            return None;
+            return Err(ServiceError::NotFound);
         }
-        let out = g.lines.iter().filter(|l| l.no > since).cloned().collect();
-        Some((out, g.lines.last().map(|l| l.no).unwrap_or(0)))
+        Ok(g.lines
+            .iter()
+            .filter(|l| l.no > no)
+            .take(max)
+            .cloned()
+            .collect())
     }
 
-    fn bridge_stats(&self, _id: &str) -> Option<BridgeStats> {
-        None
+    fn last_no(&self, _id: &str) -> Result<u64, ServiceError> {
+        let g = self.inner.lock().expect("fake mutex");
+        if g.present {
+            Ok(g.lines.last().map(|l| l.no).unwrap_or(0))
+        } else {
+            Err(ServiceError::NotFound)
+        }
     }
 
-    fn bridge_plot(&self, _id: &str) -> Option<PlotConfig> {
-        None
+    fn log_path(&self, _id: &str) -> Result<std::path::PathBuf, ServiceError> {
+        Err(ServiceError::Backend("offline".into()))
     }
 
-    fn bridge_set_plot(&self, _id: &str, _cfg: PlotConfig) -> bool {
-        false
+    fn plot(&self, _id: &str) -> Result<PlotConfig, ServiceError> {
+        Err(ServiceError::NotFound)
     }
 
-    fn bridge_bookmarks(&self, _id: &str) -> Option<Vec<BridgeBookmark>> {
-        None
+    fn set_plot(&self, _id: &str, _cfg: PlotConfig) -> Result<(), ServiceError> {
+        Err(ServiceError::NotFound)
     }
 
-    fn bridge_set_bookmarks(&self, _id: &str, _v: Vec<BridgeBookmark>) -> bool {
-        false
+    fn bookmarks(&self, _id: &str) -> Result<Vec<BridgeBookmark>, ServiceError> {
+        Err(ServiceError::NotFound)
     }
 
-    fn bridge_alerts(&self, _id: &str) -> Option<Vec<BridgeAlert>> {
-        None
+    fn alerts(&self, _id: &str) -> Result<Vec<BridgeAlert>, ServiceError> {
+        Err(ServiceError::NotFound)
     }
 
-    fn bridge_set_alerts(&self, _id: &str, _v: Vec<BridgeAlert>) -> bool {
-        false
+    fn annotations(&self, _id: &str) -> Result<Vec<BridgeAnnotation>, ServiceError> {
+        Err(ServiceError::NotFound)
     }
 
-    fn bridge_annotations(&self, _id: &str) -> Option<Vec<BridgeAnnotation>> {
-        None
+    fn set_annotations(&self, _id: &str, _v: Vec<BridgeAnnotation>) -> Result<(), ServiceError> {
+        Err(ServiceError::NotFound)
     }
 
-    fn bridge_set_annotations(&self, _id: &str, _v: Vec<BridgeAnnotation>) -> bool {
-        false
-    }
-
-    fn session_log_path(&self, _id: &str) -> anyhow::Result<String> {
-        Err(anyhow::anyhow!("offline"))
-    }
-
-    fn send(&self, _id: &str, _req: SendRequest) -> anyhow::Result<()> {
+    fn send(&self, _id: &str, _req: SendRequest) -> Result<(), ServiceError> {
         let mut g = self.inner.lock().expect("fake mutex");
         if !g.present {
-            return Err(anyhow::anyhow!("session not found: no such session"));
+            return Err(ServiceError::Backend(
+                "session not found: no such session".into(),
+            ));
         }
         // 立即回包：no = baseline+1（回归点：/exchange 基线先行，快响应不被跳过）
         if let Some(text) = g.reply.clone() {
