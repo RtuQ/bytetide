@@ -43,7 +43,10 @@ pub fn connect_cmd(
 
 #[tauri::command]
 pub fn disconnect_cmd(session_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    state.manager.disconnect(&session_id).map_err(|e| e.to_string())
+    state
+        .manager
+        .disconnect(&session_id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -65,7 +68,10 @@ pub fn send_cmd(
 
 #[tauri::command]
 pub fn clear_log_cmd(session_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    state.manager.clear_log(&session_id).map_err(|e| e.to_string())
+    state
+        .manager
+        .clear_log(&session_id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -131,7 +137,15 @@ pub fn export_text_cmd(path: String, content: String) -> Result<(), String> {
 /// 这是“前端自己给自己取证”的通道，卡顿中事件循环仍活着时可用；
 /// 完全死透时由后端 perf-heartbeat.log 兜底记录后端视角。
 #[tauri::command]
-pub fn append_perf_diag_cmd(app: AppHandle, kind: String, session_id: String, lag_ms: u64, batch_ms: u64, lines: u64, vis: String) -> Result<(), String> {
+pub fn append_perf_diag_cmd(
+    app: AppHandle,
+    kind: String,
+    session_id: String,
+    lag_ms: u64,
+    batch_ms: u64,
+    lines: u64,
+    vis: String,
+) -> Result<(), String> {
     use std::io::Write as _;
     let Some(mut w) = crate::open_diag_log(&app, "perf-frontend.log") else {
         return Ok(());
@@ -213,7 +227,7 @@ pub fn list_captures_cmd(app: AppHandle) -> Vec<CaptureMeta> {
             });
         }
     }
-    out.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms));
+    out.sort_by_key(|b| std::cmp::Reverse(b.modified_ms));
     out
 }
 
@@ -229,7 +243,9 @@ pub fn delete_capture_cmd(app: AppHandle, path: String) -> Result<(), String> {
     let dir = captures_dir_of(&app)
         .canonicalize()
         .map_err(|e| e.to_string())?;
-    let p = PathBuf::from(&path).canonicalize().map_err(|e| e.to_string())?;
+    let p = PathBuf::from(&path)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
     if !p.starts_with(&dir) || p.extension().and_then(|x| x.to_str()) != Some("log") {
         return Err("路径不在现场档案目录内".into());
     }
@@ -272,7 +288,10 @@ pub fn ring_bounds_cmd(
     session_id: String,
     state: State<'_, AppState>,
 ) -> Result<bytetide_core::serial::manager::RingBounds, String> {
-    state.manager.ring_bounds(&session_id).map_err(|e| e.to_string())
+    state
+        .manager
+        .ring_bounds(&session_id)
+        .map_err(|e| e.to_string())
 }
 
 /// 读取用户通过打开文件对话框选择的日志文件，返回 lossy UTF-8 文本（供离线分析）。
@@ -361,7 +380,10 @@ pub fn bridge_sync_annotations_cmd(
     annotations: Vec<BridgeAnnotation>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    if state.manager.bridge_set_annotations(&session_id, annotations) {
+    if state
+        .manager
+        .bridge_set_annotations(&session_id, annotations)
+    {
         Ok(())
     } else {
         Err("会话不存在".into())

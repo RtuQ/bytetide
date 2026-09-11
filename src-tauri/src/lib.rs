@@ -5,7 +5,7 @@ mod hotplug;
 mod state;
 
 use single_instance::SingleInstance;
-use tauri::{Manager, Listener};
+use tauri::{Listener, Manager};
 
 use crate::state::AppState;
 
@@ -15,7 +15,7 @@ use crate::state::AppState;
 #[cfg(windows)]
 fn disable_power_throttling() -> bool {
     use windows_sys::Win32::System::Threading::{
-        GetCurrentProcess, SetProcessInformation, ProcessPowerThrottling,
+        GetCurrentProcess, ProcessPowerThrottling, SetProcessInformation,
         PROCESS_POWER_THROTTLING_STATE,
     };
     const CURRENT_VERSION: u32 = 1;
@@ -55,7 +55,10 @@ pub(crate) fn open_diag_log(app: &tauri::AppHandle, name: &str) -> Option<std::f
     std::fs::create_dir_all(&dir).ok()?;
     let path = dir.join(name);
     const CAP: u64 = 5 * 1024 * 1024;
-    if std::fs::metadata(&path).map(|m| m.len() > CAP).unwrap_or(false) {
+    if std::fs::metadata(&path)
+        .map(|m| m.len() > CAP)
+        .unwrap_or(false)
+    {
         if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open(&path) {
             let _ = f.set_len(0);
             let _ = f.flush();
@@ -72,7 +75,9 @@ fn start_perf_heartbeat(app: &tauri::AppHandle) {
     use std::io::Write as _;
 
     let ecoqos_off = disable_power_throttling();
-    let Some(mut w) = open_diag_log(app, "perf-heartbeat.log") else { return };
+    let Some(mut w) = open_diag_log(app, "perf-heartbeat.log") else {
+        return;
+    };
     let _ = writeln!(
         w,
         "# heartbeat start {} ecoqos_disabled={}",
@@ -85,7 +90,9 @@ fn start_perf_heartbeat(app: &tauri::AppHandle) {
         .name("perf-heartbeat".into())
         .spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_secs(10));
-            let Some(state) = app.try_state::<AppState>() else { continue };
+            let Some(state) = app.try_state::<AppState>() else {
+                continue;
+            };
             let now = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
             for (id, lag_ms, len, rx_lines) in state.manager.perf_snapshot() {
                 let _ = writeln!(w, "{now} s={id} lag={lag_ms}ms ring={len} rx={rx_lines}");

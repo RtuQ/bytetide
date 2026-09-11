@@ -56,8 +56,14 @@ mod tests {
 
     #[test]
     fn plain_columns_exact() {
-        assert_eq!(render_line(&line(1, Dir::Rx, "hello"), false, false), "RX  hello");
-        assert_eq!(render_line(&line(2, Dir::Tx, "ping"), false, false), "TX  ping");
+        assert_eq!(
+            render_line(&line(1, Dir::Rx, "hello"), false, false),
+            "RX  hello"
+        );
+        assert_eq!(
+            render_line(&line(2, Dir::Tx, "ping"), false, false),
+            "TX  ping"
+        );
     }
 
     #[test]
@@ -75,7 +81,10 @@ mod tests {
     #[test]
     fn tx_echo_trailing_newline_not_doubled() {
         // ASCII 发送自动补的 \n 会进 TX 回显文本：显示时去掉，避免多出空行
-        assert_eq!(render_line(&line(1, Dir::Tx, "ping\n"), false, false), "TX  ping");
+        assert_eq!(
+            render_line(&line(1, Dir::Tx, "ping\n"), false, false),
+            "TX  ping"
+        );
     }
 
     #[test]

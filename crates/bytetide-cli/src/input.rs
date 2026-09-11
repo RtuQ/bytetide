@@ -41,7 +41,9 @@ pub fn parse_input(line: &str) -> InputCmd {
             if hex.is_empty() {
                 return InputCmd::Noop;
             }
-            return InputCmd::SendHex { text: hex.to_string() };
+            return InputCmd::SendHex {
+                text: hex.to_string(),
+            };
         }
     }
     match t {
@@ -79,8 +81,7 @@ pub fn parse_hex_pairs(s: &str) -> Result<Vec<u8>, String> {
     (0..cleaned.len())
         .step_by(2)
         .map(|i| {
-            u8::from_str_radix(&cleaned[i..i + 2], 16)
-                .map_err(|e| format!("十六进制解析失败: {e}"))
+            u8::from_str_radix(&cleaned[i..i + 2], 16).map_err(|e| format!("十六进制解析失败: {e}"))
         })
         .collect()
 }
@@ -91,9 +92,19 @@ mod tests {
 
     #[test]
     fn plain_send() {
-        assert_eq!(parse_input("hello"), InputCmd::Send { text: "hello".into() });
+        assert_eq!(
+            parse_input("hello"),
+            InputCmd::Send {
+                text: "hello".into()
+            }
+        );
         // 前后空白保留原样发送（仅去行尾 CR/LF）
-        assert_eq!(parse_input(" hello "), InputCmd::Send { text: " hello ".into() });
+        assert_eq!(
+            parse_input(" hello "),
+            InputCmd::Send {
+                text: " hello ".into()
+            }
+        );
     }
 
     #[test]
@@ -114,13 +125,23 @@ mod tests {
     fn hex_command() {
         assert_eq!(
             parse_input("/hex AA 01 5a"),
-            InputCmd::SendHex { text: "AA 01 5a".into() }
+            InputCmd::SendHex {
+                text: "AA 01 5a".into()
+            }
         );
-        assert_eq!(parse_input("/hex\tAA"), InputCmd::SendHex { text: "AA".into() });
+        assert_eq!(
+            parse_input("/hex\tAA"),
+            InputCmd::SendHex { text: "AA".into() }
+        );
         assert_eq!(parse_input("/hex"), InputCmd::Noop);
         assert_eq!(parse_input("/hex   "), InputCmd::Noop);
         // /hexXX 不是命令：按普通文本发送
-        assert_eq!(parse_input("/hexAA"), InputCmd::Send { text: "/hexAA".into() });
+        assert_eq!(
+            parse_input("/hexAA"),
+            InputCmd::Send {
+                text: "/hexAA".into()
+            }
+        );
     }
 
     #[test]
@@ -130,7 +151,12 @@ mod tests {
         assert_eq!(parse_input("/mode bin"), InputCmd::Noop);
         assert_eq!(parse_input("/mode"), InputCmd::Noop);
         // "/model" 是普通文本，不被 /mode 吞掉
-        assert_eq!(parse_input("/model X"), InputCmd::Send { text: "/model X".into() });
+        assert_eq!(
+            parse_input("/model X"),
+            InputCmd::Send {
+                text: "/model X".into()
+            }
+        );
     }
 
     #[test]

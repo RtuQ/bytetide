@@ -172,6 +172,12 @@ pub struct RingBuf {
     tx_bytes: AtomicU64,
 }
 
+impl Default for RingBuf {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RingBuf {
     pub fn new() -> Self {
         Self {
@@ -182,6 +188,11 @@ impl RingBuf {
             rx_bytes: AtomicU64::new(0),
             tx_bytes: AtomicU64::new(0),
         }
+    }
+
+    /// 环内现存行数是否为 0（clippy::len_without_is_empty：len 公开须配套）。
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// 推入一行（分配单调 `no`、更新计数器、超容淘汰最旧）。不改 emit/盘写/批。
@@ -458,6 +469,12 @@ struct SessionHandle {
 pub struct PortManager {
     sessions: RwLock<HashMap<String, SessionHandle>>,
     next_id: AtomicU64,
+}
+
+impl Default for PortManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PortManager {
@@ -1345,9 +1362,7 @@ fn capture_start(
         // 头注释行：前端解析按 `#` 跳过，供人肉/工具辨识来源
         w.write_raw_line(&format!(
             "# bytetide-capture v1 trigger={trigger} rule={} at_ms={at_ms} at={}",
-            rule.replace('\n', " ")
-                .replace('\r', " ")
-                .replace('\t', " "),
+            rule.replace(['\n', '\r', '\t'], " "),
             now.format("%Y-%m-%dT%H:%M:%S%.3f%:z"),
         ));
         let (snap, missing) = ring.lines_since_epoch(at_ms.saturating_sub(pre));
@@ -2104,13 +2119,13 @@ mod tests {
             format!("s1-cap-{}.log", now.format("%Y%m%d-%H%M%S"))
         );
         let stamp = p1.clone();
-        let p2 = next_capture_path(dir, "s1", &now, |p| p == &stamp);
+        let p2 = next_capture_path(dir, "s1", &now, |p| *p == stamp);
         assert_eq!(
             p2.file_name().unwrap().to_string_lossy(),
             format!("s1-cap-{}-2.log", now.format("%Y%m%d-%H%M%S"))
         );
         let stamp2 = p2.clone();
-        let p3 = next_capture_path(dir, "s1", &now, |p| p == &stamp || p == &stamp2);
+        let p3 = next_capture_path(dir, "s1", &now, |p| *p == stamp || *p == stamp2);
         assert!(p3
             .file_name()
             .unwrap()
@@ -2551,7 +2566,7 @@ mod tests {
                 .into_iter()
                 .find(|s| s.id == id)
                 .unwrap_or_else(|| panic!("会话 {id} 不在 bridge_list"));
-            let has_event = sink.0.lock().iter().any(|e| *e == want_ev);
+            let has_event = sink.0.lock().contains(&want_ev);
             if snap.status == want && has_event {
                 return snap;
             }

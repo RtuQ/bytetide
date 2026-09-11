@@ -24,7 +24,8 @@ pub enum Command {
     Monitor(MonitorArgs),
 }
 
-pub const AFTER_HELP: &str = "数据源缺省且 stdin 为终端时进入交互选择；非终端 stdin 未指定数据源直接报错。
+pub const AFTER_HELP: &str =
+    "数据源缺省且 stdin 为终端时进入交互选择；非终端 stdin 未指定数据源直接报错。
 
 交互命令（stdin 为终端时可用）：
   直接输入回车按当前模式发送（ASCII 默认追加换行）
@@ -113,7 +114,10 @@ pub fn to_port_config(args: &MonitorArgs) -> Result<Option<PortConfig>, String> 
     }
     if let Some(port) = args.tcp_listen {
         return Ok(Some(PortConfig {
-            name: args.id.clone().unwrap_or_else(|| format!("tcp-listen:{port}")),
+            name: args
+                .id
+                .clone()
+                .unwrap_or_else(|| format!("tcp-listen:{port}")),
             transport: Some("tcp-server".into()),
             tcp_port: Some(port), // tcp_host 留空 -> core 绑 0.0.0.0
             ..PortConfig::default()
@@ -217,7 +221,11 @@ mod tests {
         let c = to_port_config(&a).unwrap().unwrap();
         assert_eq!((c.baud_rate, c.data_bits), (9600, 7));
         assert_eq!(
-            (c.parity.as_str(), c.stop_bits.as_str(), c.flow_control.as_str()),
+            (
+                c.parity.as_str(),
+                c.stop_bits.as_str(),
+                c.flow_control.as_str()
+            ),
             ("odd", "2", "hardware")
         );
         assert_eq!(c.name, "/dev/ttyUSB0");
@@ -296,8 +304,12 @@ mod tests {
 
     #[test]
     fn clap_sources_mutually_exclusive() {
-        assert!(Cli::try_parse_from(["bytetide", "monitor", "-p", "COM3", "--tcp", "h:1"]).is_err());
-        assert!(Cli::try_parse_from(["bytetide", "monitor", "--tcp", "h:1", "--udp", "5"]).is_err());
+        assert!(
+            Cli::try_parse_from(["bytetide", "monitor", "-p", "COM3", "--tcp", "h:1"]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["bytetide", "monitor", "--tcp", "h:1", "--udp", "5"]).is_err()
+        );
     }
 
     #[test]
@@ -310,7 +322,9 @@ mod tests {
 
     #[test]
     fn clap_rejects_bad_enums() {
-        assert!(Cli::try_parse_from(["bytetide", "monitor", "-p", "COM3", "--parity", "x"]).is_err());
+        assert!(
+            Cli::try_parse_from(["bytetide", "monitor", "-p", "COM3", "--parity", "x"]).is_err()
+        );
         assert!(Cli::try_parse_from(["bytetide", "monitor", "-p", "COM3", "--data", "9"]).is_err());
     }
 }

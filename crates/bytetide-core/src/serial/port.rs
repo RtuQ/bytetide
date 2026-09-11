@@ -85,9 +85,12 @@ pub fn list_ports() -> Vec<PortInfo> {
 
 fn serial_info(p: SerialPortInfo) -> PortInfo {
     let (port_type, vendor, product, serial) = match p.port_type {
-        SerialPortType::UsbPort(u) => {
-            ("usb".to_string(), u.manufacturer, u.product, u.serial_number)
-        }
+        SerialPortType::UsbPort(u) => (
+            "usb".to_string(),
+            u.manufacturer,
+            u.product,
+            u.serial_number,
+        ),
         SerialPortType::PciPort => ("pci".to_string(), None, None, None),
         SerialPortType::BluetoothPort => ("bluetooth".to_string(), None, None, None),
         _ => ("unknown".to_string(), None, None, None),

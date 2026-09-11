@@ -118,7 +118,8 @@ pub fn auto_reply_payload(cfg: &AutoReplyCfg, text: &str) -> Option<(String, Str
         if !r.enabled || r.trigger.is_empty() {
             continue;
         }
-        if let Some(re) = build_test_matcher(&r.trigger, r.use_regex, r.case_sensitive, r.whole_word)
+        if let Some(re) =
+            build_test_matcher(&r.trigger, r.use_regex, r.case_sensitive, r.whole_word)
         {
             if re.is_match(text) {
                 let payload = if r.reply_mode == "ascii" && r.append_newline {
@@ -204,7 +205,8 @@ pub fn capture_eval(cfg: &CaptureCfg, text: &str) -> Vec<CaptureRuleCfg> {
         if !r.enabled || r.pattern.is_empty() {
             continue;
         }
-        if let Some(re) = build_test_matcher(&r.pattern, r.use_regex, r.case_sensitive, r.whole_word)
+        if let Some(re) =
+            build_test_matcher(&r.pattern, r.use_regex, r.case_sensitive, r.whole_word)
         {
             if re.is_match(text) {
                 hit.push(r.clone());
@@ -265,13 +267,22 @@ mod tests {
         // 追加换行语义
         let mut r = ar_rule("ok", "ACK");
         r.append_newline = true;
-        let cfg2 = AutoReplyCfg { enabled: true, rules: vec![r] };
+        let cfg2 = AutoReplyCfg {
+            enabled: true,
+            rules: vec![r],
+        };
         assert_eq!(auto_reply_payload(&cfg2, "ok").unwrap().0, "ACK\n");
 
         // 禁用/无命中/空回复
-        let off = AutoReplyCfg { enabled: false, rules: vec![ar_rule("ERROR", "R")] };
+        let off = AutoReplyCfg {
+            enabled: false,
+            rules: vec![ar_rule("ERROR", "R")],
+        };
         assert!(auto_reply_payload(&off, "ERROR").is_none());
-        let nohit = AutoReplyCfg { enabled: true, rules: vec![ar_rule("ERROR", "R")] };
+        let nohit = AutoReplyCfg {
+            enabled: true,
+            rules: vec![ar_rule("ERROR", "R")],
+        };
         assert!(auto_reply_payload(&nohit, "all good").is_none());
     }
 
@@ -291,7 +302,10 @@ mod tests {
         r.min_count = 2; // 窗口内 2 次才触发
         r.window_sec = 10;
         r.cooldown_sec = 60;
-        let cfg = AlertCfg { enabled: true, rules: vec![r] };
+        let cfg = AlertCfg {
+            enabled: true,
+            rules: vec![r],
+        };
         let mut states = HashMap::new();
 
         // 第 1 次命中：不足阈值
@@ -311,7 +325,10 @@ mod tests {
         let mut r = al_rule("fail");
         r.min_count = 2;
         r.window_sec = 10;
-        let cfg = AlertCfg { enabled: true, rules: vec![r] };
+        let cfg = AlertCfg {
+            enabled: true,
+            rules: vec![r],
+        };
         let mut states = HashMap::new();
         assert!(alert_eval(&cfg, &mut states, "fail", 1_000).is_empty());
         // 窗口已过（>10s）：计数清零重新开始
@@ -326,14 +343,20 @@ mod tests {
     fn alert_regex_and_case_flag() {
         let mut r = al_rule("(?i)error");
         r.use_regex = true;
-        let cfg = AlertCfg { enabled: true, rules: vec![r] };
+        let cfg = AlertCfg {
+            enabled: true,
+            rules: vec![r],
+        };
         let mut states = HashMap::new();
         assert_eq!(alert_eval(&cfg, &mut states, "SeVeRe ErRoR", 1).len(), 1);
     }
 
     #[test]
     fn alert_disabled_or_bad_pattern_never_fires() {
-        let off = AlertCfg { enabled: false, rules: vec![al_rule("x")] };
+        let off = AlertCfg {
+            enabled: false,
+            rules: vec![al_rule("x")],
+        };
         let mut s = HashMap::new();
         assert!(alert_eval(&off, &mut s, "x", 1).is_empty());
         let bad = AlertCfg {
@@ -369,7 +392,10 @@ mod tests {
         assert_eq!(hits.len(), 2); // 正则命中 ERROR + 字面量命中 OVERTEMP
         assert!(capture_eval(&cfg, "all normal").is_empty());
 
-        let off = CaptureCfg { enabled: false, ..cfg.clone() };
+        let off = CaptureCfg {
+            enabled: false,
+            ..cfg.clone()
+        };
         assert!(capture_eval(&off, "ERROR").is_empty());
 
         // 非法正则被跳过；disabled 规则被跳过
@@ -381,7 +407,11 @@ mod tests {
         assert!(capture_eval(&bad, "x").is_empty());
         let mut disabled = cap_rule("x", false);
         disabled.enabled = false;
-        let cfg2 = CaptureCfg { enabled: true, rules: vec![disabled], ..Default::default() };
+        let cfg2 = CaptureCfg {
+            enabled: true,
+            rules: vec![disabled],
+            ..Default::default()
+        };
         assert!(capture_eval(&cfg2, "x").is_empty());
     }
 

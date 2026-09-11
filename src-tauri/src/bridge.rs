@@ -26,13 +26,13 @@ use serde::{Deserialize, Serialize};
 use tauri::{async_runtime, AppHandle, Emitter, Manager};
 use tokio::net::TcpListener;
 
+use crate::state::AppState;
+use bytetide_core::serial::manager::anyhow;
 use bytetide_core::serial::manager::{
     BridgeAlert, BridgeAnnotation, BridgeBookmark, BridgeLine, BridgeStats, MatchHit, PlotConfig,
     SendMode, SendRequest, SessionSnap,
 };
-use bytetide_core::serial::manager::anyhow;
 use bytetide_core::serial::port::{list_ports, Dir};
-use crate::state::AppState;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_LIMIT: usize = 500;
@@ -275,7 +275,10 @@ impl BridgeService for TauriService {
         self.app.state::<AppState>().manager.bridge_snapshot(id)
     }
     fn bridge_follow(&self, id: &str, since: u64) -> Option<(Vec<BridgeLine>, u64)> {
-        self.app.state::<AppState>().manager.bridge_follow(id, since)
+        self.app
+            .state::<AppState>()
+            .manager
+            .bridge_follow(id, since)
     }
     fn bridge_last_no(&self, id: &str) -> Option<u64> {
         self.app.state::<AppState>().manager.bridge_last_no(id)
@@ -287,25 +290,37 @@ impl BridgeService for TauriService {
         self.app.state::<AppState>().manager.bridge_plot(id)
     }
     fn bridge_set_plot(&self, id: &str, cfg: PlotConfig) -> bool {
-        self.app.state::<AppState>().manager.bridge_set_plot(id, cfg)
+        self.app
+            .state::<AppState>()
+            .manager
+            .bridge_set_plot(id, cfg)
     }
     fn bridge_bookmarks(&self, id: &str) -> Option<Vec<BridgeBookmark>> {
         self.app.state::<AppState>().manager.bridge_bookmarks(id)
     }
     fn bridge_set_bookmarks(&self, id: &str, v: Vec<BridgeBookmark>) -> bool {
-        self.app.state::<AppState>().manager.bridge_set_bookmarks(id, v)
+        self.app
+            .state::<AppState>()
+            .manager
+            .bridge_set_bookmarks(id, v)
     }
     fn bridge_alerts(&self, id: &str) -> Option<Vec<BridgeAlert>> {
         self.app.state::<AppState>().manager.bridge_alerts(id)
     }
     fn bridge_set_alerts(&self, id: &str, v: Vec<BridgeAlert>) -> bool {
-        self.app.state::<AppState>().manager.bridge_set_alerts(id, v)
+        self.app
+            .state::<AppState>()
+            .manager
+            .bridge_set_alerts(id, v)
     }
     fn bridge_annotations(&self, id: &str) -> Option<Vec<BridgeAnnotation>> {
         self.app.state::<AppState>().manager.bridge_annotations(id)
     }
     fn bridge_set_annotations(&self, id: &str, v: Vec<BridgeAnnotation>) -> bool {
-        self.app.state::<AppState>().manager.bridge_set_annotations(id, v)
+        self.app
+            .state::<AppState>()
+            .manager
+            .bridge_set_annotations(id, v)
     }
     fn session_log_path(&self, id: &str) -> anyhow::Result<String> {
         self.app.state::<AppState>().manager.session_log_path(id)
@@ -392,7 +407,10 @@ impl BridgeController {
 
     /// init 自启：enabled 且已有 token 才尝试；绑失败 → Error 态（配置保留，UI 可见可改）。
     fn bootstrap(&self) {
-        let autostart = { let c = self.cfg.read(); c.enabled && !c.token.is_empty() };
+        let autostart = {
+            let c = self.cfg.read();
+            c.enabled && !c.token.is_empty()
+        };
         if autostart {
             self.start_attempt();
         }
@@ -640,7 +658,10 @@ fn router(ctx: BridgeCtx) -> Router {
         .route("/sessions", get(sessions))
         .route("/sessions/:id", get(session_detail))
         .route("/sessions/:id/stats", get(stats))
-        .route("/sessions/:id/plot-config", get(plot_config).post(plot_config_set))
+        .route(
+            "/sessions/:id/plot-config",
+            get(plot_config).post(plot_config_set),
+        )
         .route("/sessions/:id/lines", get(lines))
         .route("/sessions/:id/follow", get(follow))
         .route("/sessions/:id/histogram", get(histogram))
@@ -663,7 +684,12 @@ fn router(ctx: BridgeCtx) -> Router {
         .with_state(ctx)
 }
 
-async fn auth_mw(State(ctx): State<BridgeCtx>, headers: HeaderMap, req: Request, next: Next) -> Response {
+async fn auth_mw(
+    State(ctx): State<BridgeCtx>,
+    headers: HeaderMap,
+    req: Request,
+    next: Next,
+) -> Response {
     // /health 公开（不回令牌）
     if req.uri().path() == "/health" {
         return next.run(req).await;
@@ -683,7 +709,11 @@ async fn auth_mw(State(ctx): State<BridgeCtx>, headers: HeaderMap, req: Request,
         .map(|t| ct_eq(t, &token))
         .unwrap_or(false);
     if !ok {
-        return (StatusCode::UNAUTHORIZED, "invalid or missing bearer token".to_string()).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            "invalid or missing bearer token".to_string(),
+        )
+            .into_response();
     }
     next.run(req).await
 }
@@ -1071,7 +1101,7 @@ fn sanitize_hex_field(field: &mut String, name: &str) -> Result<(), String> {
         field.clear();
         return Ok(());
     }
-    if cleaned.len() % 2 != 0 || !cleaned.chars().all(|c| c.is_ascii_hexdigit()) {
+    if !cleaned.len().is_multiple_of(2) || !cleaned.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(format!("{name} must be hex pairs, got {:?}", field));
     }
     *field = cleaned.to_ascii_uppercase();
@@ -1138,19 +1168,20 @@ fn build_filter(f: &FilterFields) -> Result<FilterSpec, (StatusCode, String)> {
         _ => None,
     };
     let re = match f.re.as_deref() {
-        Some(p) if !p.is_empty() => Some(Regex::new(p).map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                format!("invalid regex: {e}"),
-            )
-        })?),
+        Some(p) if !p.is_empty() => Some(
+            Regex::new(p).map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid regex: {e}")))?,
+        ),
         _ => None,
     };
-    let qs = f
-        .q
-        .as_deref()
-        .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect())
-        .unwrap_or_default();
+    let qs =
+        f.q.as_deref()
+            .map(|s| {
+                s.split(',')
+                    .map(|x| x.trim().to_string())
+                    .filter(|x| !x.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
     let hex = parse_hex(f.hex.as_deref().unwrap_or(""));
     let mask = parse_mask(f.mask.as_deref().unwrap_or(""));
     Ok(FilterSpec {
@@ -1170,7 +1201,11 @@ fn parse_hex(s: &str) -> Vec<u8> {
     let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
     (0..cleaned.len())
         .step_by(2)
-        .filter_map(|i| cleaned.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
+        .filter_map(|i| {
+            cleaned
+                .get(i..i + 2)
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+        })
         .collect()
 }
 
@@ -1225,17 +1260,13 @@ fn apply_filter(l: &BridgeLine, f: &FilterSpec) -> Option<Option<MatchHit>> {
     }
     let mut hit: Option<MatchHit> = None;
     for q in &f.qs {
-        match str_find(&l.text, q, f.ci) {
-            Some(off) => {
-                if hit.is_none() {
-                    hit = Some(MatchHit {
-                        offset: off as u64,
-                        length: q.len() as u64,
-                        field: "text".into(),
-                    });
-                }
-            }
-            None => return None,
+        let off = str_find(&l.text, q, f.ci)?;
+        if hit.is_none() {
+            hit = Some(MatchHit {
+                offset: off as u64,
+                length: q.len() as u64,
+                field: "text".into(),
+            });
         }
     }
     if let Some(re) = &f.re {
@@ -1254,32 +1285,24 @@ fn apply_filter(l: &BridgeLine, f: &FilterSpec) -> Option<Option<MatchHit>> {
     }
     if !f.hex.is_empty() {
         let b = line_bytes(l);
-        match bytes_find(&b, &f.hex) {
-            Some(off) => {
-                if hit.is_none() {
-                    hit = Some(MatchHit {
-                        offset: off as u64,
-                        length: f.hex.len() as u64,
-                        field: "bytes".into(),
-                    });
-                }
-            }
-            None => return None,
+        let off = bytes_find(&b, &f.hex)?;
+        if hit.is_none() {
+            hit = Some(MatchHit {
+                offset: off as u64,
+                length: f.hex.len() as u64,
+                field: "bytes".into(),
+            });
         }
     }
     if !f.mask.is_empty() {
         let b = line_bytes(l);
-        match mask_find(&b, &f.mask) {
-            Some(off) => {
-                if hit.is_none() {
-                    hit = Some(MatchHit {
-                        offset: off as u64,
-                        length: f.mask.len() as u64,
-                        field: "bytes".into(),
-                    });
-                }
-            }
-            None => return None,
+        let off = mask_find(&b, &f.mask)?;
+        if hit.is_none() {
+            hit = Some(MatchHit {
+                offset: off as u64,
+                length: f.mask.len() as u64,
+                field: "bytes".into(),
+            });
         }
     }
     Some(hit)
@@ -1401,7 +1424,12 @@ async fn lines(
     let limit = p.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let total = selected.len();
     let truncated = total.saturating_sub(offset) > limit;
-    let page: Vec<BridgeLine> = selected.into_iter().skip(offset).take(limit).cloned().collect();
+    let page: Vec<BridgeLine> = selected
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .cloned()
+        .collect();
 
     let fmt = p.format.as_deref();
     if fmt == Some("csv") || fmt == Some("tsv") {
@@ -1411,7 +1439,12 @@ async fn lines(
             let bytes = l
                 .bytes
                 .as_ref()
-                .map(|b| b.iter().map(|x| format!("{:02X}", x)).collect::<Vec<_>>().join(" "))
+                .map(|b| {
+                    b.iter()
+                        .map(|x| format!("{:02X}", x))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
                 .unwrap_or_default();
             s.push_str(&format!(
                 "{}{sep}{}{sep}{}{sep}{}{sep}{}{sep}{}\n",
@@ -1602,7 +1635,11 @@ async fn follow(
             return (StatusCode::NOT_FOUND, "session not found").into_response();
         }
         if tokio::time::Instant::now() >= deadline {
-            let last_no = ctx.service.bridge_follow(&id, scanned).map(|(_, n)| n).unwrap_or(0);
+            let last_no = ctx
+                .service
+                .bridge_follow(&id, scanned)
+                .map(|(_, n)| n)
+                .unwrap_or(0);
             return Json(FollowPage {
                 lines: vec![],
                 last_no,
@@ -1653,7 +1690,10 @@ async fn histogram(
     }
     let out: Vec<HistBucket> = map
         .into_iter()
-        .map(|(bucket_start, count)| HistBucket { bucket_start, count })
+        .map(|(bucket_start, count)| HistBucket {
+            bucket_start,
+            count,
+        })
         .collect();
     Json(out).into_response()
 }
@@ -1845,9 +1885,7 @@ async fn decode(
     // from/to 在 no 上裁剪
     let filt: Vec<BridgeLine> = filt
         .into_iter()
-        .filter(|l| {
-            p.from.map_or(true, |x| l.no >= x) && p.to.map_or(true, |x| l.no <= x)
-        })
+        .filter(|l| p.from.is_none_or(|x| l.no >= x) && p.to.is_none_or(|x| l.no <= x))
         .collect();
 
     let limit = p.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
@@ -2048,7 +2086,16 @@ fn parse_frames(cfg: &PlotConfig, lines: &[BridgeLine], limit: usize) -> DecodeP
             }
             idx += 1;
             push_decode_frame(
-                &mut frames, idx, &bytes, &ranges, head_len, channels, bpc, cfg, i, frame_end,
+                &mut frames,
+                idx,
+                &bytes,
+                &ranges,
+                head_len,
+                channels,
+                bpc,
+                cfg,
+                i,
+                frame_end,
             );
             i = frame_end;
         }
@@ -2087,7 +2134,16 @@ fn parse_frames(cfg: &PlotConfig, lines: &[BridgeLine], limit: usize) -> DecodeP
             }
             idx += 1;
             push_decode_frame(
-                &mut frames, idx, &bytes, &ranges, 0, channels, bpc, cfg, frame_start, frame_end,
+                &mut frames,
+                idx,
+                &bytes,
+                &ranges,
+                0,
+                channels,
+                bpc,
+                cfg,
+                frame_start,
+                frame_end,
             );
             i = frame_end;
         }
@@ -2223,13 +2279,17 @@ fn value_stats(vals: &[f64], top_n: usize) -> ValueStats {
     }
     let samples = vals.len();
     let mut dist: Vec<(u64, u64)> = counts.iter().map(|(k, c)| (*k, *c)).collect();
-    dist.sort_by(|a, b| b.1.cmp(&a.1));
+    dist.sort_by_key(|b| std::cmp::Reverse(b.1));
     ValueStats {
         samples,
         distinct: counts.len(),
         min: if samples > 0 { min } else { 0.0 },
         max: if samples > 0 { max } else { 0.0 },
-        mean: if samples > 0 { sum / samples as f64 } else { 0.0 },
+        mean: if samples > 0 {
+            sum / samples as f64
+        } else {
+            0.0
+        },
         distribution: dist
             .into_iter()
             .take(top_n)
@@ -2286,9 +2346,7 @@ async fn value_hist(
     };
     let filt: Vec<BridgeLine> = filt
         .into_iter()
-        .filter(|l| {
-            p.from.map_or(true, |x| l.no >= x) && p.to.map_or(true, |x| l.no <= x)
-        })
+        .filter(|l| p.from.is_none_or(|x| l.no >= x) && p.to.is_none_or(|x| l.no <= x))
         .collect();
 
     let page = parse_frames(&base, &filt, MAX_LIMIT);
@@ -2380,7 +2438,9 @@ async fn infer(
         total += 1;
         *heads1.entry(b[0]).or_insert(0) += 1;
         if b.len() >= 2 {
-            *heads2.entry(((b[0] as u16) << 8) | b[1] as u16).or_insert(0) += 1;
+            *heads2
+                .entry(((b[0] as u16) << 8) | b[1] as u16)
+                .or_insert(0) += 1;
         }
         *tails1.entry(b[b.len() - 1]).or_insert(0) += 1;
         *lens.entry(b.len()).or_insert(0) += 1;
@@ -2418,7 +2478,7 @@ async fn infer(
             }
         }
     }
-    heads.sort_by(|a, b| b.count.cmp(&a.count));
+    heads.sort_by_key(|b| std::cmp::Reverse(b.count));
     heads.truncate(8);
 
     let mut tails: Vec<HexCount> = tails1
@@ -2429,7 +2489,7 @@ async fn infer(
             count: *c,
         })
         .collect();
-    tails.sort_by(|a, b| b.count.cmp(&a.count));
+    tails.sort_by_key(|b| std::cmp::Reverse(b.count));
     tails.truncate(8);
 
     let mut checksums = vec![];
@@ -2446,16 +2506,13 @@ async fn infer(
         });
     }
 
-    let suggested_frame_len = lens
-        .iter()
-        .max_by_key(|(_, c)| **c)
-        .and_then(|(len, c)| {
-            if *c >= min_rep && total > 0 && (*c as f64 / total as f64) >= 0.5 {
-                Some(*len)
-            } else {
-                None
-            }
-        });
+    let suggested_frame_len = lens.iter().max_by_key(|(_, c)| **c).and_then(|(len, c)| {
+        if *c >= min_rep && total > 0 && (*c as f64 / total as f64) >= 0.5 {
+            Some(*len)
+        } else {
+            None
+        }
+    });
 
     Json(InferPage {
         heads,
@@ -2491,7 +2548,13 @@ async fn send(
         Some("hex") => SendMode::Hex,
         _ => SendMode::Ascii,
     };
-    match ctx.service.send(&id, SendRequest { mode, text: body.text }) {
+    match ctx.service.send(
+        &id,
+        SendRequest {
+            mode,
+            text: body.text,
+        },
+    ) {
         Ok(()) => Json(serde_json::json!({})).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     }
@@ -2539,7 +2602,9 @@ fn opt_non_empty(s: Option<&str>) -> Option<&str> {
 /// 交换匹配器编译：None → 默认任意 RX 行；空串字段视为未携带；
 /// re/hex/mask 互斥（同时携带多于一个 → 400）；非法值返回稳定错误码
 /// （invalid_regex/invalid_hex/invalid_mask/invalid_direction），绝不降级为 match-all。
-fn compile_exchange_match(input: Option<&ExchangeMatch>) -> Result<CompiledExchangeMatch, ApiError> {
+fn compile_exchange_match(
+    input: Option<&ExchangeMatch>,
+) -> Result<CompiledExchangeMatch, ApiError> {
     let Some(m) = input else {
         return Ok(CompiledExchangeMatch {
             dir: Dir::Rx,
@@ -2594,7 +2659,10 @@ fn compile_exchange_match(input: Option<&ExchangeMatch>) -> Result<CompiledExcha
 fn parse_hex_strict(s: &str) -> Result<Vec<u8>, ApiError> {
     let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
     if cleaned.is_empty() {
-        return Err(ApiError::bad_request("invalid_hex", "hex must not be empty"));
+        return Err(ApiError::bad_request(
+            "invalid_hex",
+            "hex must not be empty",
+        ));
     }
     if !cleaned.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(ApiError::bad_request(
@@ -2602,7 +2670,7 @@ fn parse_hex_strict(s: &str) -> Result<Vec<u8>, ApiError> {
             format!("hex must be ASCII hex pairs, got {s:?}"),
         ));
     }
-    if cleaned.len() % 2 != 0 {
+    if !cleaned.len().is_multiple_of(2) {
         return Err(ApiError::bad_request(
             "invalid_hex",
             format!("hex must be even-length pairs, got {s:?}"),
@@ -2619,7 +2687,10 @@ fn parse_hex_strict(s: &str) -> Result<Vec<u8>, ApiError> {
 fn parse_mask_strict(s: &str) -> Result<Vec<Option<u8>>, ApiError> {
     let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
     if cleaned.is_empty() {
-        return Err(ApiError::bad_request("invalid_mask", "mask must not be empty"));
+        return Err(ApiError::bad_request(
+            "invalid_mask",
+            "mask must not be empty",
+        ));
     }
     // 先确保纯 ASCII（hex 或 ?），后续按字节切片才安全
     if !cleaned.chars().all(|c| c == '?' || c.is_ascii_hexdigit()) {
@@ -2628,7 +2699,7 @@ fn parse_mask_strict(s: &str) -> Result<Vec<Option<u8>>, ApiError> {
             format!("mask pairs must be hex digits or ??, got {s:?}"),
         ));
     }
-    if cleaned.len() % 2 != 0 {
+    if !cleaned.len().is_multiple_of(2) {
         return Err(ApiError::bad_request(
             "invalid_mask",
             format!("mask must be even-length pairs, got {s:?}"),
@@ -2641,7 +2712,9 @@ fn parse_mask_strict(s: &str) -> Result<Vec<Option<u8>>, ApiError> {
         if pair == "??" {
             out.push(None);
         } else if pair.chars().all(|c| c.is_ascii_hexdigit()) {
-            out.push(Some(u8::from_str_radix(pair, 16).expect("validated hex pair")));
+            out.push(Some(
+                u8::from_str_radix(pair, 16).expect("validated hex pair"),
+            ));
         } else {
             return Err(ApiError::bad_request(
                 "invalid_mask",
@@ -2658,7 +2731,7 @@ fn parse_mask_strict(s: &str) -> Result<Vec<Option<u8>>, ApiError> {
 fn find_exchange_response(lines: &[BridgeLine], m: &CompiledExchangeMatch) -> Option<BridgeLine> {
     lines
         .iter()
-        .filter(|l| {
+        .find(|l| {
             if l.dir != m.dir {
                 return false;
             }
@@ -2675,7 +2748,6 @@ fn find_exchange_response(lines: &[BridgeLine], m: &CompiledExchangeMatch) -> Op
             }
             true
         })
-        .next()
         .cloned()
 }
 
@@ -2707,8 +2779,14 @@ async fn run_exchange<S: BridgeService + ?Sized>(
         _ => SendMode::Ascii,
     };
     trace("send");
-    svc.send(id, SendRequest { mode, text: body.send.text.clone() })
-        .map_err(|e| ApiError::bad_request("send_failed", e.to_string()))?;
+    svc.send(
+        id,
+        SendRequest {
+            mode,
+            text: body.send.text.clone(),
+        },
+    )
+    .map_err(|e| ApiError::bad_request("send_failed", e.to_string()))?;
     let start = std::time::Instant::now();
     let wait = std::time::Duration::from_millis(body.wait_ms.unwrap_or(2000).min(30_000));
     let deadline = tokio::time::Instant::now() + wait;
@@ -2792,7 +2870,13 @@ mod tests {
         cfg.bytes_per_channel = 2;
         cfg.endian = "big".into();
         cfg.signed = false;
-        let line = mk_line(1, Dir::Rx, "", Some(vec![0xAA, 0x55, 0x01, 0x00, 0x02, 0x00]), 1000);
+        let line = mk_line(
+            1,
+            Dir::Rx,
+            "",
+            Some(vec![0xAA, 0x55, 0x01, 0x00, 0x02, 0x00]),
+            1000,
+        );
         let page = parse_frames(&cfg, &[line], 500);
         assert_eq!(page.frame_count, 1);
         assert_eq!(page.frames.len(), 1);
@@ -2856,7 +2940,13 @@ mod tests {
         cfg.channels = 2;
         cfg.bytes_per_channel = 2;
         cfg.endian = "big".into();
-        let line = mk_line(1, Dir::Rx, "", Some(vec![0x00, 0xAA, 0x55, 0x01, 0x00, 0x02, 0x00]), 1000);
+        let line = mk_line(
+            1,
+            Dir::Rx,
+            "",
+            Some(vec![0x00, 0xAA, 0x55, 0x01, 0x00, 0x02, 0x00]),
+            1000,
+        );
         let page = parse_frames(&cfg, &[line], 500);
         assert_eq!(page.frame_count, 1);
         assert_eq!(page.frames[0].raw_hex, "AA 55 01 00 02 00");
@@ -2870,7 +2960,15 @@ mod tests {
         cfg.bytes_per_channel = 1;
         cfg.endian = "big".into();
         // AA 01 AA 02 AA 03 -> 3 帧（head=AA,data=1B）
-        let mk = || mk_line(1, Dir::Rx, "", Some(vec![0xAA, 0x01, 0xAA, 0x02, 0xAA, 0x03]), 0);
+        let mk = || {
+            mk_line(
+                1,
+                Dir::Rx,
+                "",
+                Some(vec![0xAA, 0x01, 0xAA, 0x02, 0xAA, 0x03]),
+                0,
+            )
+        };
         // 不限 -> 全 3 帧
         let full = parse_frames(&cfg, &[mk()], 500);
         assert_eq!(full.frame_count, 3);
@@ -2943,44 +3041,82 @@ mod tests {
     #[test]
     fn apply_filter_dir_rejects_mismatch() {
         let f = spec(Some(Dir::Tx), vec![], vec![], vec![], None, None, None);
-        assert!(matches!(apply_filter(&mk_line(1, Dir::Rx, "x", None, 0), &f), None));
-        assert!(matches!(apply_filter(&mk_line(2, Dir::Tx, "x", None, 0), &f), Some(None)));
+        assert!(apply_filter(&mk_line(1, Dir::Rx, "x", None, 0), &f).is_none());
+        assert!(matches!(
+            apply_filter(&mk_line(2, Dir::Tx, "x", None, 0), &f),
+            Some(None)
+        ));
     }
 
     #[test]
     fn apply_filter_q_multiple_all_must_match() {
         let f = spec(None, vec!["OK", "ERR"], vec![], vec![], None, None, None);
-        assert!(matches!(apply_filter(&mk_line(1, Dir::Rx, "OK ERR foo", None, 0), &f), Some(Some(_))));
-        assert!(matches!(apply_filter(&mk_line(2, Dir::Rx, "OK foo", None, 0), &f), None));
+        assert!(matches!(
+            apply_filter(&mk_line(1, Dir::Rx, "OK ERR foo", None, 0), &f),
+            Some(Some(_))
+        ));
+        assert!(apply_filter(&mk_line(2, Dir::Rx, "OK foo", None, 0), &f).is_none());
     }
 
     #[test]
     fn apply_filter_hex_substring() {
         let f = spec(None, vec![], vec![0xAA, 0x55], vec![], None, None, None);
-        assert!(matches!(apply_filter(&mk_line(1, Dir::Rx, "", Some(vec![0x00, 0xAA, 0x55, 0x99]), 0), &f), Some(Some(_))));
-        assert!(matches!(apply_filter(&mk_line(2, Dir::Rx, "", Some(vec![0xAA, 0x99]), 0), &f), None));
+        assert!(matches!(
+            apply_filter(
+                &mk_line(1, Dir::Rx, "", Some(vec![0x00, 0xAA, 0x55, 0x99]), 0),
+                &f
+            ),
+            Some(Some(_))
+        ));
+        assert!(apply_filter(&mk_line(2, Dir::Rx, "", Some(vec![0xAA, 0x99]), 0), &f).is_none());
     }
 
     #[test]
     fn apply_filter_mask_wildcard() {
-        let f = spec(None, vec![], vec![], vec![Some(0xAA), None], None, None, None); // AA??
-        assert!(matches!(apply_filter(&mk_line(1, Dir::Rx, "", Some(vec![0xAA, 0x12]), 0), &f), Some(Some(_))));
-        assert!(matches!(apply_filter(&mk_line(2, Dir::Rx, "", Some(vec![0x55, 0x12]), 0), &f), None));
+        let f = spec(
+            None,
+            vec![],
+            vec![],
+            vec![Some(0xAA), None],
+            None,
+            None,
+            None,
+        ); // AA??
+        assert!(matches!(
+            apply_filter(&mk_line(1, Dir::Rx, "", Some(vec![0xAA, 0x12]), 0), &f),
+            Some(Some(_))
+        ));
+        assert!(apply_filter(&mk_line(2, Dir::Rx, "", Some(vec![0x55, 0x12]), 0), &f).is_none());
     }
 
     #[test]
     fn apply_filter_exclude_negative() {
-        let f = spec(None, vec!["DATA"], vec![], vec![], Some("NOISE"), None, None);
-        assert!(matches!(apply_filter(&mk_line(1, Dir::Rx, "DATA NOISE", None, 0), &f), None));
-        assert!(matches!(apply_filter(&mk_line(2, Dir::Rx, "DATA here", None, 0), &f), Some(Some(_))));
+        let f = spec(
+            None,
+            vec!["DATA"],
+            vec![],
+            vec![],
+            Some("NOISE"),
+            None,
+            None,
+        );
+        assert!(apply_filter(&mk_line(1, Dir::Rx, "DATA NOISE", None, 0), &f).is_none());
+        assert!(matches!(
+            apply_filter(&mk_line(2, Dir::Rx, "DATA here", None, 0), &f),
+            Some(Some(_))
+        ));
     }
 
     #[test]
     fn apply_filter_time_window() {
         let f = spec(None, vec![], vec![], vec![], None, Some(100), Some(200));
-        assert!(matches!(apply_filter(&mk_line(1, Dir::Rx, "x", None, 50), &f), None)); // before
-        assert!(matches!(apply_filter(&mk_line(2, Dir::Rx, "x", None, 150), &f), Some(None))); // inside
-        assert!(matches!(apply_filter(&mk_line(3, Dir::Rx, "x", None, 250), &f), None)); // after
+        assert!(apply_filter(&mk_line(1, Dir::Rx, "x", None, 50), &f).is_none()); // before
+        assert!(matches!(
+            apply_filter(&mk_line(2, Dir::Rx, "x", None, 150), &f),
+            Some(None)
+        )); // inside
+        assert!(apply_filter(&mk_line(3, Dir::Rx, "x", None, 250), &f).is_none());
+        // after
     }
 
     // ---------------- build_filter ----------------
@@ -3088,13 +3224,15 @@ mod tests {
 
     #[test]
     fn sanitize_plot_config_normalizes_and_clamps() {
-        let mut cfg = PlotConfig::default();
-        cfg.source = "ASCII-HEX".into();
-        cfg.checksum = " Xor ".into();
-        cfg.endian = "Little".into();
-        cfg.frame_head = "aa 55".into();
-        cfg.channels = 99;
-        cfg.max_points = 0;
+        let mut cfg = PlotConfig {
+            source: "ASCII-HEX".into(),
+            checksum: " Xor ".into(),
+            endian: "Little".into(),
+            frame_head: "aa 55".into(),
+            channels: 99,
+            max_points: 0,
+            ..Default::default()
+        };
         sanitize_plot_config(&mut cfg).expect("valid");
         assert_eq!(cfg.source, "ascii-hex");
         assert_eq!(cfg.checksum, "xor");
@@ -3106,28 +3244,40 @@ mod tests {
 
     #[test]
     fn sanitize_plot_config_rejects_bad_enum_hex_and_bytes() {
-        let mut bad = PlotConfig::default();
-        bad.source = "raw".into();
+        let mut bad = PlotConfig {
+            source: "raw".into(),
+            ..Default::default()
+        };
         assert!(sanitize_plot_config(&mut bad).is_err());
 
-        let mut bad = PlotConfig::default();
-        bad.checksum = "crc8".into();
+        let mut bad = PlotConfig {
+            checksum: "crc8".into(),
+            ..Default::default()
+        };
         assert!(sanitize_plot_config(&mut bad).is_err());
 
-        let mut bad = PlotConfig::default();
-        bad.endian = "middle".into();
+        let mut bad = PlotConfig {
+            endian: "middle".into(),
+            ..Default::default()
+        };
         assert!(sanitize_plot_config(&mut bad).is_err());
 
-        let mut bad = PlotConfig::default();
-        bad.frame_tail = "AA5".into(); // 奇数长度
+        let mut bad = PlotConfig {
+            frame_tail: "AA5".into(), // 奇数长度
+            ..Default::default()
+        };
         assert!(sanitize_plot_config(&mut bad).is_err());
 
-        let mut bad = PlotConfig::default();
-        bad.frame_head = "ZZ".into(); // 非 hex
+        let mut bad = PlotConfig {
+            frame_head: "ZZ".into(), // 非 hex
+            ..Default::default()
+        };
         assert!(sanitize_plot_config(&mut bad).is_err());
 
-        let mut bad = PlotConfig::default();
-        bad.bytes_per_channel = 3;
+        let mut bad = PlotConfig {
+            bytes_per_channel: 3,
+            ..Default::default()
+        };
         assert!(sanitize_plot_config(&mut bad).is_err());
 
         // 空 head/tail 合法（无帧头模式）
@@ -3167,8 +3317,11 @@ mod tests {
 
     #[test]
     fn merge_annotations_caps_and_drops_oldest() {
-        let existing: Vec<BridgeAnnotation> = (0..3).map(|i| mk_note(&format!("o{i}"), i, "n")).collect();
-        let incoming: Vec<BridgeAnnotation> = (10..14).map(|i| mk_note(&format!("n{i}"), i, "n")).collect();
+        let existing: Vec<BridgeAnnotation> =
+            (0..3).map(|i| mk_note(&format!("o{i}"), i, "n")).collect();
+        let incoming: Vec<BridgeAnnotation> = (10..14)
+            .map(|i| mk_note(&format!("n{i}"), i, "n"))
+            .collect();
         let (all, added) = merge_annotations(existing, incoming, 5);
         assert_eq!(added, 4);
         assert_eq!(all.len(), 5);
@@ -3208,7 +3361,9 @@ mod tests {
     #[test]
     fn follow_filter_zero_match_returns_empty_but_advances() {
         // 用例 2：零匹配 → 空行集，lastNo 仍推进到高水位（防 livelock）
-        let spec = build_filter(&mk_ff(Some("error"), None, None)).ok().unwrap();
+        let spec = build_filter(&mk_ff(Some("error"), None, None))
+            .ok()
+            .unwrap();
         assert!(!spec.is_noop());
         let (batch, truncated, last_no) =
             filter_follow_batch(mk_batch(&[3, 4, 5], "heartbeat ok"), &spec, 500, 5);
@@ -3242,7 +3397,9 @@ mod tests {
     #[test]
     fn follow_filter_regex_inline_case_insensitive() {
         // 用例 5：(?i) 行内 flag 对 text 生效（小写 error 命中大写 ERROR）
-        let spec = build_filter(&mk_ff(Some("(?i)error"), None, None)).ok().unwrap();
+        let spec = build_filter(&mk_ff(Some("(?i)error"), None, None))
+            .ok()
+            .unwrap();
         let lines = vec![
             mk_line(1, Dir::Rx, "ERROR found", None, 1000),
             mk_line(2, Dir::Rx, "all good", None, 2000),
@@ -3271,14 +3428,21 @@ mod tests {
     #[test]
     fn follow_filter_bad_regex_rejected_by_build_filter() {
         // 用例 4：非法正则在 build_filter 即被拒（handler 转 400 + 编译错误）
-        let err = build_filter(&mk_ff(Some("(unclosed"), None, None)).err().unwrap();
+        let err = build_filter(&mk_ff(Some("(unclosed"), None, None))
+            .err()
+            .unwrap();
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
         assert!(err.1.contains("invalid regex"));
     }
 
     // ---------------- /exchange 严格 matcher（非法输入 400，绝不降级 match-all） ----------------
 
-    fn em(re: Option<&str>, hex: Option<&str>, mask: Option<&str>, dir: Option<&str>) -> ExchangeMatch {
+    fn em(
+        re: Option<&str>,
+        hex: Option<&str>,
+        mask: Option<&str>,
+        dir: Option<&str>,
+    ) -> ExchangeMatch {
         ExchangeMatch {
             re: re.map(Into::into),
             hex: hex.map(Into::into),
@@ -3294,15 +3458,52 @@ mod tests {
 
     #[test]
     fn exchange_rejects_invalid_regex_hex_mask_and_dir() {
-        assert_bad("invalid_regex", ExchangeMatch { re: Some("(".into()), hex: None, mask: None, dir: None });
-        assert_bad("invalid_hex", ExchangeMatch { re: None, hex: Some("GG".into()), mask: None, dir: None });
-        assert_bad("invalid_mask", ExchangeMatch { re: None, hex: None, mask: Some("A?".into()), dir: None });
-        assert_bad("invalid_direction", ExchangeMatch { re: None, hex: None, mask: None, dir: Some("sideways".into()) });
+        assert_bad(
+            "invalid_regex",
+            ExchangeMatch {
+                re: Some("(".into()),
+                hex: None,
+                mask: None,
+                dir: None,
+            },
+        );
+        assert_bad(
+            "invalid_hex",
+            ExchangeMatch {
+                re: None,
+                hex: Some("GG".into()),
+                mask: None,
+                dir: None,
+            },
+        );
+        assert_bad(
+            "invalid_mask",
+            ExchangeMatch {
+                re: None,
+                hex: None,
+                mask: Some("A?".into()),
+                dir: None,
+            },
+        );
+        assert_bad(
+            "invalid_direction",
+            ExchangeMatch {
+                re: None,
+                hex: None,
+                mask: None,
+                dir: Some("sideways".into()),
+            },
+        );
     }
 
     #[test]
     fn exchange_matcher_never_turns_invalid_input_into_match_all() {
-        let input = ExchangeMatch { re: Some("(".into()), hex: None, mask: None, dir: None };
+        let input = ExchangeMatch {
+            re: Some("(".into()),
+            hex: None,
+            mask: None,
+            dir: None,
+        };
         assert!(compile_exchange_match(Some(&input)).is_err());
     }
 
@@ -3348,8 +3549,8 @@ mod tests {
             .expect("valid re");
         assert_eq!(ok.dir, Dir::Tx);
         assert!(ok.re.is_some());
-        let ok2 = compile_exchange_match(Some(&em(None, Some("AA55"), None, None)))
-            .expect("valid hex");
+        let ok2 =
+            compile_exchange_match(Some(&em(None, Some("AA55"), None, None))).expect("valid hex");
         assert_eq!(ok2.hex, vec![0xAA, 0x55]);
         let ok3 = compile_exchange_match(Some(&em(None, None, Some("AA??55"), None)))
             .expect("valid mask");
@@ -3368,8 +3569,14 @@ mod tests {
 
     #[test]
     fn parse_mask_strict_accepts_wildcard_pairs_and_rejects_the_rest() {
-        assert_eq!(parse_mask_strict("AA??55").unwrap(), vec![Some(0xAA), None, Some(0x55)]);
-        assert_eq!(parse_mask_strict("AA ?? 55").unwrap(), vec![Some(0xAA), None, Some(0x55)]);
+        assert_eq!(
+            parse_mask_strict("AA??55").unwrap(),
+            vec![Some(0xAA), None, Some(0x55)]
+        );
+        assert_eq!(
+            parse_mask_strict("AA ?? 55").unwrap(),
+            vec![Some(0xAA), None, Some(0x55)]
+        );
         assert_eq!(parse_mask_strict("A?").unwrap_err().code, "invalid_mask"); // hex 与 ? 混搭
         assert_eq!(parse_mask_strict("AA5").unwrap_err().code, "invalid_mask"); // 奇数残留
         assert_eq!(parse_mask_strict("ZZ").unwrap_err().code, "invalid_mask"); // 非法字符
@@ -3397,7 +3604,13 @@ mod tests {
 
         // hex 匹配原始 bytes 优先于 text（text 为 lossy 占位，编码后并不含 AA55）
         let m = compile_exchange_match(Some(&em(None, Some("AA55"), None, None))).unwrap();
-        let bin = vec![mk_line(3, Dir::Rx, "\u{FFFD}\u{FFFD}", Some(vec![0x00, 0xAA, 0x55]), 3)];
+        let bin = vec![mk_line(
+            3,
+            Dir::Rx,
+            "\u{FFFD}\u{FFFD}",
+            Some(vec![0x00, 0xAA, 0x55]),
+            3,
+        )];
         assert_eq!(find_exchange_response(&bin, &m).unwrap().no, 3);
 
         // mask 通配：?? 跳过的字节任意
@@ -3421,7 +3634,11 @@ mod tests {
 
     impl Default for FakeService {
         fn default() -> Self {
-            Self { lines: std::sync::Mutex::new(Vec::new()), respond: None, fail_send: false }
+            Self {
+                lines: std::sync::Mutex::new(Vec::new()),
+                respond: None,
+                fail_send: false,
+            }
         }
     }
 
@@ -3479,13 +3696,17 @@ mod tests {
             }
             Ok(())
         }
-        fn notify_annotations_changed(&self, _session_id: &str, _annotations: &[BridgeAnnotation]) {}
+        fn notify_annotations_changed(&self, _session_id: &str, _annotations: &[BridgeAnnotation]) {
+        }
         fn notify_plot_updated(&self, _session_id: &str, _config: &PlotConfig) {}
     }
 
     fn ex_body(text: &str, wait_ms: u64) -> ExchangeBody {
         ExchangeBody {
-            send: SendBody { mode: None, text: text.into() },
+            send: SendBody {
+                mode: None,
+                text: text.into(),
+            },
             wait_ms: Some(wait_ms),
             r#match: None,
         }
@@ -3499,15 +3720,26 @@ mod tests {
             respond: Some(mk_line(8, Dir::Rx, "ACK", None, 2)),
             ..Default::default()
         };
-        svc.lines.lock().unwrap().push(mk_line(7, Dir::Rx, "idle", None, 1)); // baseline = 7
+        svc.lines
+            .lock()
+            .unwrap()
+            .push(mk_line(7, Dir::Rx, "idle", None, 1)); // baseline = 7
         let calls = std::sync::Mutex::new(Vec::<&'static str>::new());
         let body = ex_body("ping", 500);
-        let resp = run_exchange(&svc, "s1", &body, std::time::Duration::from_millis(1), Some(&calls))
-            .await
-            .expect("exchange ok");
+        let resp = run_exchange(
+            &svc,
+            "s1",
+            &body,
+            std::time::Duration::from_millis(1),
+            Some(&calls),
+        )
+        .await
+        .expect("exchange ok");
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(*calls.lock().unwrap(), vec!["last_no", "send", "follow"]);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let page: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(page["sent"], serde_json::json!(true));
         assert_eq!(page["response"]["no"], serde_json::json!(8));
@@ -3516,12 +3748,21 @@ mod tests {
 
     #[tokio::test]
     async fn run_exchange_send_failure_is_400_send_failed() {
-        let svc = FakeService { fail_send: true, ..Default::default() };
+        let svc = FakeService {
+            fail_send: true,
+            ..Default::default()
+        };
         let calls = std::sync::Mutex::new(Vec::<&'static str>::new());
         let body = ex_body("ping", 100);
-        let err = run_exchange(&svc, "s1", &body, std::time::Duration::from_millis(1), Some(&calls))
-            .await
-            .expect_err("send failed");
+        let err = run_exchange(
+            &svc,
+            "s1",
+            &body,
+            std::time::Duration::from_millis(1),
+            Some(&calls),
+        )
+        .await
+        .expect_err("send failed");
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
         assert_eq!(err.code, "send_failed");
         // last_no 已记录；send 失败后不再进入 follow 轮询
@@ -3529,7 +3770,9 @@ mod tests {
         // 错误响应体为稳定 JSON 信封 {"error":{"code","message"}}
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"]["code"], serde_json::json!("send_failed"));
         assert!(json["error"]["message"].is_string());
@@ -3544,7 +3787,9 @@ mod tests {
             .await
             .expect("exchange ok");
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let page: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(page["response"], serde_json::Value::Null);
         assert_eq!(page["sent"], serde_json::json!(true));
@@ -3603,13 +3848,18 @@ mod tests {
         fn send(&self, _id: &str, _req: SendRequest) -> anyhow::Result<()> {
             Ok(())
         }
-        fn notify_annotations_changed(&self, _session_id: &str, _annotations: &[BridgeAnnotation]) {}
+        fn notify_annotations_changed(&self, _session_id: &str, _annotations: &[BridgeAnnotation]) {
+        }
         fn notify_plot_updated(&self, _session_id: &str, _config: &PlotConfig) {}
     }
 
     /// 测试持久化目录：std::env::temp_dir + tag+pid 唯一子目录（不引新依赖）。
     fn bridge_tmp_dir(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("bytetide-bridge-test-{}-{}", tag, std::process::id()));
+        let d = std::env::temp_dir().join(format!(
+            "bytetide-bridge-test-{}-{}",
+            tag,
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).expect("mk temp dir");
         d
@@ -3624,9 +3874,7 @@ mod tests {
             if n.fetch_add(1, AtomicOrdering::Relaxed) < fail_after {
                 Ok("ab".repeat(32))
             } else {
-                Err(BridgeConfigError::Randomness(
-                    "injected rng failure".into(),
-                ))
+                Err(BridgeConfigError::Randomness("injected rng failure".into()))
             }
         })
     }
@@ -3668,8 +3916,11 @@ mod tests {
 
     #[test]
     fn token_generate_formats_64_lowercase_hex_and_is_unique() {
-        let is_lower_hex =
-            |s: &str| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase());
+        let is_lower_hex = |s: &str| {
+            s.len() == 64
+                && s.chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        };
         let t1 = generate_token(|b| {
             b.fill(0x5a);
             Ok(())
@@ -3693,8 +3944,11 @@ mod tests {
 
     #[test]
     fn token_new_token_uses_os_csprng_format_and_unique() {
-        let is_lower_hex =
-            |s: &str| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase());
+        let is_lower_hex = |s: &str| {
+            s.len() == 64
+                && s.chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        };
         let a = new_token().expect("os randomness available");
         let b = new_token().expect("os randomness available");
         assert!(is_lower_hex(&a), "64 位小写 hex，实得 {a:?}");
@@ -3724,7 +3978,8 @@ mod tests {
 
     #[test]
     fn remote_bind_requires_explicit_confirmation() {
-        let ctrl = BridgeController::for_tests(bridge_tmp_dir("remote-gate"), fixed_tok_gen(u32::MAX));
+        let ctrl =
+            BridgeController::for_tests(bridge_tmp_dir("remote-gate"), fixed_tok_gen(u32::MAX));
         // 未确认的远程 bind → 固定错误文本，配置原样
         let err = ctrl
             .set_config(&cfg_patch(Some(true), Some("0.0.0.0"), None, None))
@@ -3741,11 +3996,17 @@ mod tests {
 
     #[test]
     fn remote_bind_confirmation_is_one_shot_per_switch() {
-        let ctrl = BridgeController::for_tests(bridge_tmp_dir("remote-oneshot"), fixed_tok_gen(u32::MAX));
+        let ctrl =
+            BridgeController::for_tests(bridge_tmp_dir("remote-oneshot"), fixed_tok_gen(u32::MAX));
         // 确认后切换成功；确认是一次性的，不写入持久化配置
         let free = free_port();
         let view = ctrl
-            .set_config(&cfg_patch(Some(true), Some("0.0.0.0"), Some(free), Some(true)))
+            .set_config(&cfg_patch(
+                Some(true),
+                Some("0.0.0.0"),
+                Some(free),
+                Some(true),
+            ))
             .expect("confirmed remote bind succeeds");
         assert_eq!(view.config.bind, "0.0.0.0");
         assert_eq!(view.runtime.state, RuntimeState::Running);
@@ -3756,7 +4017,9 @@ mod tests {
             .expect_err("confirmation is one-shot, next remote switch needs it again");
         assert_eq!(err, "remote bind requires explicit confirmation");
         // 关闭桥不涉及 bind 切换 → 无需确认
-        let view = ctrl.set_config(&cfg_patch(Some(false), None, None, None)).expect("disable needs no confirmation");
+        let view = ctrl
+            .set_config(&cfg_patch(Some(false), None, None, None))
+            .expect("disable needs no confirmation");
         assert_eq!(view.runtime.state, RuntimeState::Disabled);
         assert_eq!(view.config.bind, "0.0.0.0");
     }
@@ -3789,19 +4052,30 @@ mod tests {
 
     #[test]
     fn bridge_runtime_first_enable_bind_failure_keeps_config_and_sets_error() {
-        let ctrl = BridgeController::for_tests(bridge_tmp_dir("bind-fail"), fixed_tok_gen(u32::MAX));
+        let ctrl =
+            BridgeController::for_tests(bridge_tmp_dir("bind-fail"), fixed_tok_gen(u32::MAX));
         // 占住一个真实 loopback 端口，让 controller 绑同一端口必败
         let occupier = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("occupy");
         let port = occupier.local_addr().expect("addr").port();
         let view = ctrl
             .set_config(&cfg_patch(Some(true), Some("127.0.0.1"), Some(port), None))
             .expect("首次启用绑失败不返回 Err：配置保留 + Error 态可见");
-        assert!(view.config.enabled, "配置变更保留（enabled=true，用户可改地址或关闭）");
+        assert!(
+            view.config.enabled,
+            "配置变更保留（enabled=true，用户可改地址或关闭）"
+        );
         assert_eq!(view.config.port, port);
         assert_eq!(view.runtime.state, RuntimeState::Error);
-        let last_err = view.runtime.last_error.as_deref().expect("last_error visible");
+        let last_err = view
+            .runtime
+            .last_error
+            .as_deref()
+            .expect("last_error visible");
         assert!(last_err.contains("bind"), "错误描述绑定失败：{last_err}");
-        assert!(!last_err.contains(&view.config.token), "错误信息绝不包含 token 值");
+        assert!(
+            !last_err.contains(&view.config.token),
+            "错误信息绝不包含 token 值"
+        );
         // get_view（= bridge_get_config_cmd 路径）同样可见 Error
         let v2 = ctrl.get_view();
         assert_eq!(v2.runtime.state, RuntimeState::Error);
@@ -3816,14 +4090,18 @@ mod tests {
 
     #[test]
     fn bridge_runtime_replace_bind_failure_keeps_old_listener_and_config() {
-        let ctrl = BridgeController::for_tests(bridge_tmp_dir("replace-fail"), fixed_tok_gen(u32::MAX));
+        let ctrl =
+            BridgeController::for_tests(bridge_tmp_dir("replace-fail"), fixed_tok_gen(u32::MAX));
         // 先在空闲端口 A 启动成功
         let free = free_port();
         let view = ctrl
             .set_config(&cfg_patch(Some(true), Some("127.0.0.1"), Some(free), None))
             .expect("start on free port");
         assert_eq!(view.runtime.state, RuntimeState::Running);
-        assert_eq!(view.runtime.bound.as_deref(), Some(format!("127.0.0.1:{free}").as_str()));
+        assert_eq!(
+            view.runtime.bound.as_deref(),
+            Some(format!("127.0.0.1:{free}").as_str())
+        );
         // 占住端口 B，替换到 B → Err
         let occupier = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("occupy");
         let busy = occupier.local_addr().expect("addr").port();
@@ -3835,7 +4113,10 @@ mod tests {
         let v = ctrl.get_view();
         assert_eq!(v.config.port, free, "旧配置原样保留");
         assert_eq!(v.runtime.state, RuntimeState::Running);
-        assert_eq!(v.runtime.bound.as_deref(), Some(format!("127.0.0.1:{free}").as_str()));
+        assert_eq!(
+            v.runtime.bound.as_deref(),
+            Some(format!("127.0.0.1:{free}").as_str())
+        );
         assert!(
             std::net::TcpStream::connect(("127.0.0.1", free)).is_ok(),
             "旧监听继续服务（TCP 可握手）"
@@ -3844,16 +4125,22 @@ mod tests {
 
     #[test]
     fn bridge_runtime_running_then_disable_roundtrip() {
-        let ctrl = BridgeController::for_tests(bridge_tmp_dir("roundtrip"), fixed_tok_gen(u32::MAX));
+        let ctrl =
+            BridgeController::for_tests(bridge_tmp_dir("roundtrip"), fixed_tok_gen(u32::MAX));
         let free = free_port();
         let view = ctrl
             .set_config(&cfg_patch(Some(true), Some("127.0.0.1"), Some(free), None))
             .expect("start");
         assert_eq!(view.runtime.state, RuntimeState::Running);
-        assert_eq!(view.runtime.bound.as_deref(), Some(format!("127.0.0.1:{free}").as_str()));
+        assert_eq!(
+            view.runtime.bound.as_deref(),
+            Some(format!("127.0.0.1:{free}").as_str())
+        );
         assert!(view.runtime.last_error.is_none());
         // 关闭 → Disabled、bound 清空
-        let view = ctrl.set_config(&cfg_patch(Some(false), None, None, None)).expect("disable");
+        let view = ctrl
+            .set_config(&cfg_patch(Some(false), None, None, None))
+            .expect("disable");
         assert_eq!(view.runtime.state, RuntimeState::Disabled);
         assert_eq!(view.runtime.bound, None);
         assert_eq!(view.runtime.last_error, None);
@@ -3895,7 +4182,12 @@ mod tests {
         let ctrl = BridgeController::for_tests(dir_bad, fixed_tok_gen(u32::MAX));
         let v = ctrl.get_view();
         assert_eq!(v.runtime.state, RuntimeState::Error);
-        assert!(v.runtime.last_error.as_deref().unwrap_or_default().contains("bind"));
+        assert!(v
+            .runtime
+            .last_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("bind"));
         assert!(v.config.enabled, "配置保留（用户可改地址或关闭）");
     }
 

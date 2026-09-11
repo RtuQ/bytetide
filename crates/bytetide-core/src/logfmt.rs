@@ -19,8 +19,7 @@ pub struct LogConfig {
 pub fn sanitize_filename(s: &str) -> String {
     s.chars()
         .map(|c| {
-            if matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control()
-            {
+            if matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() {
                 '_'
             } else {
                 c
@@ -108,7 +107,9 @@ mod tests {
     use chrono::TimeZone;
 
     fn dt() -> DateTime<Local> {
-        chrono::Local.with_ymd_and_hms(2026, 9, 7, 23, 5, 9).unwrap()
+        chrono::Local
+            .with_ymd_and_hms(2026, 9, 7, 23, 5, 9)
+            .unwrap()
     }
 
     #[test]

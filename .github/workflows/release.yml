@@ -8,8 +8,59 @@ permissions:
   contents: write
 
 jobs:
+  verify:
+    # 打包前统一门禁：版本/配置预检 + 前后端测试构建 + Rust 测试/fmt/clippy + CLI 冒烟。
+    # 任一步失败即整条 release 失败，不产任何 artifact（Task 7 of stage-1 plan）。
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install JS deps
+        run: npm ci
+
+      - name: Release version check
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: npm run check:version
+
+      - name: Tauri config check
+        run: npm run check:tauri-config
+
+      - name: Frontend tests
+        run: npm test
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Rust tests
+        run: cargo test --workspace
+
+      - name: Rust fmt
+        run: cargo fmt --all -- --check
+
+      - name: Rust clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: CLI help smoke
+        run: cargo run -p bytetide-cli -- --help
+
   build-windows:
     # Windows：裸 exe 直接挂到 release，不打包 zip
+    needs: [verify]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,20 +78,8 @@ jobs:
           node-version: 20
           cache: npm
 
-      # 打包前预检：版本一致（含 tag 对照）+ 前后端测试全绿
       - name: Install JS deps
         run: npm ci
-
-      - name: Release preflight
-        env:
-          GITHUB_REF_NAME: ${{ github.ref_name }}
-        run: npm run check:version
-
-      - name: Frontend tests
-        run: npm test
-
-      - name: Rust tests
-        run: cargo test --workspace
 
       # --no-bundle：跳过 NSIS/MSI 打包，只编译裸 exe
       - name: Build app
@@ -85,20 +124,8 @@ jobs:
           node-version: 20
           cache: npm
 
-      # 打包前预检：版本一致（含 tag 对照）+ 前后端测试全绿
       - name: Install JS deps
         run: npm ci
-
-      - name: Release preflight
-        env:
-          GITHUB_REF_NAME: ${{ github.ref_name }}
-        run: npm run check:version
-
-      - name: Frontend tests
-        run: npm test
-
-      - name: Rust tests
-        run: cargo test --workspace
 
       # --bundles app：只出 .app。DMG 不交给 tauri 打（signingIdentity "-" 下
       # tauri 打出的 DMG 内 app 缺 _CodeSignature 封签，Gatekeeper 报「已损坏」），
@@ -131,6 +158,7 @@ jobs:
   build-cli:
     # 复用 CLI 工作出 aarch64 / x86_64 musl 静态 tarball + macOS ARM 包；publish=false
     # 不单独建 Release，产物经 artifact 汇入下方 release 任务，与桌面产物挂进同一份草稿 Release
+    needs: [verify]
     uses: ./.github/workflows/cli-release.yml
     with:
       publish: false

@@ -352,10 +352,7 @@ fn run_session(
         None
     };
     let record_path = if session_connected {
-        manager
-            .session_log_path(&id)
-            .ok()
-            .filter(|p| !p.is_empty())
+        manager.session_log_path(&id).ok().filter(|p| !p.is_empty())
     } else {
         None
     };
@@ -373,8 +370,14 @@ fn run_session(
     };
     einfo(color, &format!("会话结束：时长 {dur}"));
     if let Some(st) = stats {
-        einfo(color, &format!("接收 {} 行 / {} 字节", st.rx_lines, st.rx_bytes));
-        einfo(color, &format!("发送 {} 行 / {} 字节", st.tx_lines, st.tx_bytes));
+        einfo(
+            color,
+            &format!("接收 {} 行 / {} 字节", st.rx_lines, st.rx_bytes),
+        );
+        einfo(
+            color,
+            &format!("发送 {} 行 / {} 字节", st.tx_lines, st.tx_bytes),
+        );
     }
     if let Some(p) = record_path {
         einfo(color, &format!("录制文件 {p}"));
@@ -413,14 +416,26 @@ fn do_send(
             if append_nl {
                 t.push('\n');
             }
-            if let Err(e) = manager.send(id, SendRequest { mode: SendMode::Ascii, text: t }) {
+            if let Err(e) = manager.send(
+                id,
+                SendRequest {
+                    mode: SendMode::Ascii,
+                    text: t,
+                },
+            ) {
                 eerr(color, &format!("发送失败: {e}"));
             }
         }
         Mode::Hex => match parse_hex_pairs(&text) {
             Ok(b) if b.is_empty() => {}
             Ok(_) => {
-                if let Err(e) = manager.send(id, SendRequest { mode: SendMode::Hex, text }) {
+                if let Err(e) = manager.send(
+                    id,
+                    SendRequest {
+                        mode: SendMode::Hex,
+                        text,
+                    },
+                ) {
                     eerr(color, &format!("发送失败: {e}"));
                 }
             }
