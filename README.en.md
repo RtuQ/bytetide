@@ -188,7 +188,7 @@ cargo test             # Rust unit tests (run at repo root: core / cli / src-tau
 cargo run -p bytetide-cli -- --help   # try the CLI locally
 ```
 
-Requirements: Node.js 18+, Rust stable, plus the [Tauri 2 system dependencies](https://tauri.app/start/prerequisites/).
+Requirements: Node.js 20+, Rust stable, plus the [Tauri 2 system dependencies](https://tauri.app/start/prerequisites/).
 The Rust side is a Cargo workspace (`crates/bytetide-core` / `crates/bytetide-cli` / `src-tauri`): run cargo commands from the repo root; the lockfile and build artifacts live in the root `target/`.
 GitHub Actions runs the full check suite on push / PR.
 

@@ -14,6 +14,8 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       # 工作区化后 cargo 在仓库根执行，缓存默认即根 workspace / target
       - name: Cache Rust build
@@ -22,8 +24,12 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
           cache: npm
+
+      # 版本一致性预检：四份清单必须同版本
+      - name: Release version check
+        run: npm run check:version
 
       # Rust：单元测试 + 编译检查（覆盖 bytetide-core / bytetide-cli / src-tauri 全工作区）
       - name: Rust tests
@@ -31,6 +37,12 @@ jobs:
 
       - name: Rust check
         run: cargo check --workspace
+
+      - name: Rust fmt
+        run: cargo fmt --all -- --check
+
+      - name: Rust clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       # 前端：类型检查 + 构建
       - name: Install JS deps

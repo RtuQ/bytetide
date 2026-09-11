@@ -24,11 +24,23 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
           cache: npm
 
+      # 打包前预检：版本一致（含 tag 对照）+ 前后端测试全绿
       - name: Install JS deps
         run: npm ci
+
+      - name: Release preflight
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: npm run check:version
+
+      - name: Frontend tests
+        run: npm test
+
+      - name: Rust tests
+        run: cargo test --workspace
 
       # --no-bundle：跳过 NSIS/MSI 打包，只编译裸 exe
       - name: Build app
@@ -70,11 +82,23 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
           cache: npm
 
+      # 打包前预检：版本一致（含 tag 对照）+ 前后端测试全绿
       - name: Install JS deps
         run: npm ci
+
+      - name: Release preflight
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: npm run check:version
+
+      - name: Frontend tests
+        run: npm test
+
+      - name: Rust tests
+        run: cargo test --workspace
 
       # --bundles app：只出 .app。DMG 不交给 tauri 打（signingIdentity "-" 下
       # tauri 打出的 DMG 内 app 缺 _CodeSignature 封签，Gatekeeper 报「已损坏」），
