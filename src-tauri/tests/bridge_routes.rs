@@ -271,11 +271,7 @@ async fn send_and_exchange_forbidden_when_allow_send_disabled() {
 
     let resp = app
         .clone()
-        .oneshot(post_json(
-            "/sessions/s1/send",
-            r#"{"text":"ping"}"#,
-            bearer,
-        ))
+        .oneshot(post_json("/sessions/s1/send", r#"{"text":"ping"}"#, bearer))
         .await
         .expect("oneshot");
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -352,7 +348,11 @@ async fn missing_session_paths() {
     );
 
     let resp = app
-        .oneshot(post_json("/sessions/s1/send", r#"{"text":"ping"}"#, Some(TOKEN)))
+        .oneshot(post_json(
+            "/sessions/s1/send",
+            r#"{"text":"ping"}"#,
+            Some(TOKEN),
+        ))
         .await
         .expect("oneshot");
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
