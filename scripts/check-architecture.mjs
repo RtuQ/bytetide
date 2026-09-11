@@ -69,11 +69,11 @@ const IPC_IMPORT = /from\s+['"]@tauri-apps\/api\/(core|event)['"]/
 // ---------------------------------------------------------------------------
 const DEFAULT_MAX_LINES = 1200
 // 显式覆盖 = 当前现实基线（后续任务逐级收紧，路径为 / 分隔的相对路径）：
-// - crates/bytetide-core/src/serial/manager.rs 2750 → Task 2 收到 1850 → Task 3 收到 1000
+// - crates/bytetide-core/src/serial/manager.rs 2750 → T2 后 2250（现 2200 行）→ Task 3 收到 1000
 // - src-tauri/src/bridge.rs 4300 → Task 4 拆为模块后此条目删除/收紧到 1000
 // - src/stores/session.ts 1450 → Task 6 收到 700
 const MAX_LINES_OVERRIDES = {
-  'crates/bytetide-core/src/serial/manager.rs': 2750,
+  'crates/bytetide-core/src/serial/manager.rs': 2250,
   'src-tauri/src/bridge.rs': 4300,
   'src/stores/session.ts': 1450,
 }

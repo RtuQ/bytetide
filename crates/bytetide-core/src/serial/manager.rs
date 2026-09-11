@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 // Link 为具体类型后 read/write_all 需要 trait 在作用域内（as _ 不引入名字冲突）
 use std::io::{Read as _, Write as _};
@@ -8,10 +8,14 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 use super::port::{open_port, Dir, LogLine, PortConfig};
+// ring/runtime 自本文件迁出（Stage 2 Task 2）：旧公开路径经再导出保持一个发布周期
+pub use super::ring::{BridgeLine, BridgeStats, MatchHit, RingBounds, RingBuf, RING_CAP};
+use super::runtime::SessionRuntime;
+pub use super::runtime::{SessionState, SessionStatus};
 use crate::logfmt;
 use crate::serial::rules::{
     alert_eval, auto_reply_payload, capture_eval, clamp_capture_window, AlertCfg, AlertWinState,
@@ -23,9 +27,6 @@ use crate::sink::{CaptureInfo, EventSink};
 /// 经 core 再导出 `anyhow`：manager 的公开签名（send/session_log_path…）使用其类型，
 /// 桌面端 crate（src-tauri）未直接依赖 anyhow，桥服务 trait 沿用同签名时经此路径引用。
 pub use anyhow;
-
-/// 桥接环形缓冲容量（带原始字节的近期分析窗口；≈170B/行 × 10 万 ≈ 17MB/会话）。
-pub const RING_CAP: usize = 100000;
 
 /// 绘图/解码配置（与前端 `PlotConfig` camelCase 对齐；供 REST 桥 `/decode` 复用文法）。
 #[derive(Clone, Serialize, Deserialize)]
@@ -60,39 +61,6 @@ impl Default for PlotConfig {
     }
 }
 
-/// REST 桥单行。`no` 为后端独立序号（与前端 `lineCounter` 无关，环形淘汰后继续递增）。
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BridgeLine {
-    pub no: u64,
-    pub ts: String,
-    pub dir: Dir,
-    pub text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bytes: Option<Vec<u8>>,
-    pub epoch_millis: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub r#match: Option<MatchHit>,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MatchHit {
-    pub offset: u64,
-    pub length: u64,
-    pub field: String,
-}
-
-/// ring 现存行号边界（前端「翻页补旧行」判断还能不能往前翻）。
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RingBounds {
-    pub first_no: u64,
-    pub last_no: u64,
-    pub size: usize,
-    pub ring_cap: usize,
-}
-
 /// 会话列表项（REST `/sessions`）。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,24 +72,6 @@ pub struct SessionSnap {
     pub last_error: Option<String>,
     pub line_count: usize,
     pub ring_cap: usize,
-}
-
-/// 会话统计（REST `/sessions/:id/stats`）。
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BridgeStats {
-    pub rx_lines: u64,
-    pub tx_lines: u64,
-    pub rx_bytes: u64,
-    pub tx_bytes: u64,
-    pub first_no: u64,
-    pub last_no: u64,
-    pub first_ts: String,
-    pub last_ts: String,
-    pub first_epoch: u64,
-    pub last_epoch: u64,
-    pub ring_cap: usize,
-    pub size: usize,
 }
 
 /// REST 桥书签条目（前端推送的只读镜像；`no` 为前端 UI 行号，与后端 `no` 体系无关，
@@ -159,177 +109,6 @@ pub struct BridgeAnnotation {
     pub text: String,
     pub note: String,
     pub at: u64,
-}
-
-/// 每会话环形缓冲 + 计数器（读线程写入，REST 桥读取）。
-/// 不参与 emit/盘写/批；仅在既有 `batch.push(line)` 旁增量写入。
-pub struct RingBuf {
-    ring: Mutex<VecDeque<BridgeLine>>,
-    seq: AtomicU64,
-    rx_lines: AtomicU64,
-    tx_lines: AtomicU64,
-    rx_bytes: AtomicU64,
-    tx_bytes: AtomicU64,
-}
-
-impl Default for RingBuf {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RingBuf {
-    pub fn new() -> Self {
-        Self {
-            ring: Mutex::new(VecDeque::new()),
-            seq: AtomicU64::new(0),
-            rx_lines: AtomicU64::new(0),
-            tx_lines: AtomicU64::new(0),
-            rx_bytes: AtomicU64::new(0),
-            tx_bytes: AtomicU64::new(0),
-        }
-    }
-
-    /// 环内现存行数是否为 0（clippy::len_without_is_empty：len 公开须配套）。
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// 推入一行（分配单调 `no`、更新计数器、超容淘汰最旧）。不改 emit/盘写/批。
-    pub fn push(&self, line: &LogLine) -> u64 {
-        let no = self.seq.fetch_add(1, Ordering::Relaxed) + 1;
-        let bl = BridgeLine {
-            no,
-            ts: line.ts.clone(),
-            dir: line.dir,
-            text: line.text.clone(),
-            bytes: line.bytes.clone(),
-            epoch_millis: line.epoch_millis,
-            r#match: None,
-        };
-        let n = line
-            .bytes
-            .as_deref()
-            .map(|b| b.len())
-            .unwrap_or_else(|| line.text.len()) as u64;
-        match line.dir {
-            Dir::Rx => {
-                self.rx_lines.fetch_add(1, Ordering::Relaxed);
-                self.rx_bytes.fetch_add(n, Ordering::Relaxed);
-            }
-            Dir::Tx => {
-                self.tx_lines.fetch_add(1, Ordering::Relaxed);
-                self.tx_bytes.fetch_add(n, Ordering::Relaxed);
-            }
-        }
-        let mut r = self.ring.lock();
-        r.push_back(bl);
-        while r.len() > RING_CAP {
-            r.pop_front();
-        }
-        no
-    }
-
-    /// 清屏：清空环形（不重置 `seq`，保持 `no` 单调，避免 REST 引用碰撞）。
-    pub fn clear(&self) {
-        self.ring.lock().clear();
-    }
-
-    pub fn snapshot(&self) -> Vec<BridgeLine> {
-        self.ring.lock().iter().cloned().collect()
-    }
-
-    /// 仅返回 `no > since` 的行（长轮询 `/follow` 用，避免全 ring 拷贝）。
-    pub fn lines_since(&self, since: u64) -> Vec<BridgeLine> {
-        self.ring
-            .lock()
-            .iter()
-            .filter(|l| l.no > since)
-            .cloned()
-            .collect()
-    }
-
-    /// 游标拉取：`no > since_no` 的最旧 max 行（no 单调递增，二分定位）。
-    pub fn lines_after_no(&self, since_no: u64, max: usize) -> Vec<BridgeLine> {
-        let ring = self.ring.lock();
-        let from = ring.partition_point(|l| l.no <= since_no);
-        ring.iter().skip(from).take(max).cloned().collect()
-    }
-
-    /// 往前翻页：`no < before_no` 的最新 max 行（视图缓冲裁掉旧行后从 ring 回补用，
-    /// 仍按 no 升序返回；ring 已翻到最早行时返回不足 max 或空）。
-    pub fn lines_before_no(&self, before_no: u64, max: usize) -> Vec<BridgeLine> {
-        let ring = self.ring.lock();
-        let end = ring.partition_point(|l| l.no < before_no);
-        let start = end.saturating_sub(max);
-        ring.iter().skip(start).take(end - start).cloned().collect()
-    }
-
-    /// 当前末行 `no`（空环返回 0）。
-    pub fn last_no(&self) -> u64 {
-        self.ring.lock().back().map(|l| l.no).unwrap_or(0)
-    }
-
-    pub fn len(&self) -> usize {
-        self.ring.lock().len()
-    }
-
-    /// 首/末行元信息（空环返回全 0）。
-    pub fn bounds(&self) -> (u64, u64, String, String, u64, u64, usize) {
-        let r = self.ring.lock();
-        if r.is_empty() {
-            return (0, 0, String::new(), String::new(), 0, 0, 0);
-        }
-        let f = r.front().expect("non-empty");
-        let l = r.back().expect("non-empty");
-        (
-            f.no,
-            l.no,
-            f.ts.clone(),
-            l.ts.clone(),
-            f.epoch_millis,
-            l.epoch_millis,
-            r.len(),
-        )
-    }
-
-    pub fn rx_lines(&self) -> u64 {
-        self.rx_lines.load(Ordering::Relaxed)
-    }
-    pub fn tx_lines(&self) -> u64 {
-        self.tx_lines.load(Ordering::Relaxed)
-    }
-    pub fn rx_bytes(&self) -> u64 {
-        self.rx_bytes.load(Ordering::Relaxed)
-    }
-    pub fn tx_bytes(&self) -> u64 {
-        self.tx_bytes.load(Ordering::Relaxed)
-    }
-
-    /// 取 epoch_ms >= since 的全部行（升序）。第二返回值=更早的行已被 ring
-    /// 淘汰（发生过淘汰且现存首行晚于 since）——档案据此标注「前置现场可能缺失」；
-    /// 会话刚开始、数据天然不足窗口不算缺失。
-    fn lines_since_epoch(&self, since_epoch_ms: u64) -> (Vec<BridgeLine>, bool) {
-        let ring = self.ring.lock();
-        let missing_earlier = self.seq.load(Ordering::Relaxed) as usize > ring.len()
-            && ring
-                .front()
-                .is_some_and(|l| l.epoch_millis > since_epoch_ms);
-        let (mut lo, mut hi) = (0usize, ring.len());
-        while lo < hi {
-            let mid = (lo + hi) / 2;
-            if ring
-                .get(mid)
-                .is_some_and(|l| l.epoch_millis < since_epoch_ms)
-            {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        let out: Vec<BridgeLine> = ring.iter().skip(lo).cloned().collect();
-        (out, missing_earlier)
-    }
 }
 
 pub enum SendMode {
@@ -372,43 +151,9 @@ enum SessionKind {
     Offline,
 }
 
-/// 会话运行状态：REST 快照（bridge_list）与 sink 事件的共同事实源（serde 小写，
-/// 与既有 REST status 字符串一致）。读线程写、REST 读，挂在 SessionHandle.state。
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SessionStatus {
-    /// 已创建、读线程建链中（开串口/建链完成前）
-    #[default]
-    Connecting,
-    /// 链路就绪，读循环运行中
-    Connected,
-    /// 正常收尾（用户停止/对端关闭/停止标志退出）
-    Disconnected,
-    /// 终止性错误（开串口失败/建链失败/读硬错误）
-    Error,
-    /// 离线加载的日志会话（无链路）
-    Offline,
-}
-
-impl SessionStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            SessionStatus::Connecting => "connecting",
-            SessionStatus::Connected => "connected",
-            SessionStatus::Disconnected => "disconnected",
-            SessionStatus::Error => "error",
-            SessionStatus::Offline => "offline",
-        }
-    }
-}
-
-/// 每会话共享运行状态（读线程写，REST 读）。
-#[derive(Clone, Debug, Default)]
-pub struct SessionState {
-    pub status: SessionStatus,
-    pub last_error: Option<String>,
-}
-
+// SessionStatus / SessionState 定义已迁 serial/runtime.rs（顶部再导出保持旧路径）。
+// 下方 impl 保留在本模块：带 sink 事件的状态上报薄壳（先写状态后 emit 的事件顺序
+// 由调用点保证），读循环各错误路径经 `state.write().set_status/set_error` 调用。
 impl SessionState {
     /// 置状态并紧接发 sink 事件（先写状态后 emit，保证事件观察者看到的状态已就位）。
     fn set_status(&mut self, sink: &dyn EventSink, session_id: &str, status: SessionStatus) {
@@ -440,9 +185,6 @@ struct SessionHandle {
     config: PortConfig,
     kind: SessionKind,
     stop: Arc<AtomicBool>,
-    /// 共享运行状态（读线程写、REST 读）：bridge_list 快照的事实源（见 SessionState）。
-    /// 锁序与 log_path 同类：仅 sessions → state，读线程只碰 state 本身，无死锁面。
-    state: Arc<RwLock<SessionState>>,
     write_tx: mpsc::Sender<PortCmd>,
     /// 当前日志文件路径（「分段」/读线程午夜轮转后随最新分段更新；「打开日志」指向当前文件）。
     /// 共享单元（短临界区只护路径本身）：writer 的切换全部在读线程内串行（「分段」命令
@@ -451,19 +193,16 @@ struct SessionHandle {
     /// 连接时解析出的基准路径：分段命名始终基于它，避免 stem 越叠越长
     log_base: PathBuf,
     join: Option<thread::JoinHandle<()>>,
-    buf: Arc<RingBuf>,
+    /// 会话运行态五件套（ring/状态/自动回复/告警/捕获配置，见 SessionRuntime）：
+    /// 读线程写、REST 桥读。锁序与 log_path 同类：仅 sessions → runtime 内部锁，
+    /// 读线程只碰 runtime 各单元本身，无死锁面。
+    runtime: Arc<SessionRuntime>,
     plot: Arc<RwLock<PlotConfig>>,
     /// 前端推送的书签/告警历史镜像（REST 只读；后端不产生、不校验内容）。
     bookmarks: Arc<RwLock<Vec<BridgeBookmark>>>,
     alerts: Arc<RwLock<Vec<BridgeAlert>>>,
     /// AI 批注（REST 写入 + 前端同步的双向镜像）。
     annotations: Arc<RwLock<Vec<BridgeAnnotation>>>,
-    /// 自动回复规则（前端推送；读线程内评估并直接回写设备）
-    auto_reply: Arc<RwLock<AutoReplyCfg>>,
-    /// 告警规则（前端推送；读线程内评估，命中走 mirror + alert-hit 事件）
-    alert_cfg: Arc<RwLock<AlertCfg>>,
-    /// 触发式现场捕获配置（前端推送；读线程内逐行评估触发）
-    capture_cfg: Arc<RwLock<CaptureCfg>>,
 }
 
 pub struct PortManager {
@@ -497,9 +236,9 @@ impl PortManager {
     ) -> anyhow::Result<String> {
         let id = format!("s{}", self.next_id.fetch_add(1, Ordering::Relaxed));
         let stop = Arc::new(AtomicBool::new(false));
-        // 运行状态起点：Connecting（读线程 open_session_log 时同步上报 connecting 事件）
-        let state = Arc::new(RwLock::new(SessionState::default()));
-        let buf = Arc::new(RingBuf::new());
+        // 会话运行态五件套（ring/状态/自动回复/告警/捕获）收拢在 SessionRuntime：
+        // 运行状态起点 Connecting（读线程 open_session_log 时同步上报 connecting 事件）
+        let runtime = Arc::new(SessionRuntime::new());
         let plot = Arc::new(RwLock::new(PlotConfig::default()));
         let (write_tx, write_rx) = mpsc::channel::<PortCmd>();
         // 日志路径：模板非空则按当时时间+端口名+主机地址解析（token 替换值做文件名清洗），
@@ -529,11 +268,7 @@ impl PortManager {
         let cfg = config.clone();
         let id2 = id.clone();
         let stop2 = stop.clone();
-        let state2 = state.clone();
-        let buf2 = buf.clone();
-        let auto_reply_cfg = Arc::new(RwLock::new(AutoReplyCfg::default()));
-        let alert_cfg = Arc::new(RwLock::new(AlertCfg::default()));
-        let capture_cfg = Arc::new(RwLock::new(CaptureCfg::default()));
+        let rt2 = runtime.clone();
         // 现场档案目录：不落盘（CLI）时为空路径，读线程内据此跳过捕获
         let captures_dir = if sessions_dir.as_os_str().is_empty() {
             PathBuf::new()
@@ -541,9 +276,6 @@ impl PortManager {
             sessions_dir.join("captures")
         };
         let alerts_mirror = Arc::new(RwLock::new(Vec::new()));
-        let ar2 = auto_reply_cfg.clone();
-        let al2 = alert_cfg.clone();
-        let cap2 = capture_cfg.clone();
         let cdir2 = captures_dir.clone();
         let am2 = alerts_mirror.clone();
         let lp = log_path.clone();
@@ -562,7 +294,6 @@ impl PortManager {
                         id2,
                         sink,
                         stop2,
-                        state2,
                         write_rx,
                         lp,
                         lb,
@@ -570,10 +301,7 @@ impl PortManager {
                         ls,
                         ts_format,
                         custom_path,
-                        buf2,
-                        ar2,
-                        al2,
-                        cap2,
+                        rt2,
                         cdir2,
                         am2,
                     )
@@ -583,7 +311,6 @@ impl PortManager {
                         id2,
                         sink,
                         stop2,
-                        state2,
                         write_rx,
                         lp,
                         lb,
@@ -591,10 +318,7 @@ impl PortManager {
                         ls,
                         ts_format,
                         custom_path,
-                        buf2,
-                        ar2,
-                        al2,
-                        cap2,
+                        rt2,
                         cdir2,
                         am2,
                     )
@@ -608,19 +332,15 @@ impl PortManager {
                 config,
                 kind: SessionKind::Live,
                 stop,
-                state,
                 write_tx,
                 log_path: log_shared,
                 log_base: log_path,
                 join: Some(handle),
-                buf,
+                runtime,
                 plot,
                 bookmarks: Arc::new(RwLock::new(Vec::new())),
                 alerts: alerts_mirror.clone(),
                 annotations: Arc::new(RwLock::new(Vec::new())),
-                auto_reply: auto_reply_cfg.clone(),
-                alert_cfg: alert_cfg.clone(),
-                capture_cfg,
             },
         );
         Ok(id)
@@ -630,9 +350,15 @@ impl PortManager {
     /// `send` 对离线会话直接报错；`clear_log` 直接清 ring。id 用 `o{N}` 前缀，与 live 的 `s{N}` 区分。
     pub fn load_offline(&self, config: PortConfig, path: PathBuf, lines: Vec<LogLine>) -> String {
         let id = format!("o{}", self.next_id.fetch_add(1, Ordering::Relaxed));
-        let buf = Arc::new(RingBuf::new());
+        let runtime = Arc::new(SessionRuntime::new());
+        // 离线会话无链路：恒 Offline，无错误
+        {
+            let mut st = runtime.state.write();
+            st.status = SessionStatus::Offline;
+            st.last_error = None;
+        }
         for line in &lines {
-            buf.push(line);
+            runtime.ingest(line);
         }
         let plot = Arc::new(RwLock::new(PlotConfig::default()));
         // rx 立即 drop -> 写通道天然断开；send() 对离线会话会先于此处早退报错。
@@ -643,23 +369,15 @@ impl PortManager {
                 config,
                 kind: SessionKind::Offline,
                 stop: Arc::new(AtomicBool::new(false)),
-                // 离线会话无链路：恒 Offline，无错误
-                state: Arc::new(RwLock::new(SessionState {
-                    status: SessionStatus::Offline,
-                    last_error: None,
-                })),
                 write_tx,
                 log_path: Arc::new(RwLock::new(path.clone())),
                 log_base: path,
                 join: None,
-                buf,
+                runtime,
                 plot,
                 bookmarks: Arc::new(RwLock::new(Vec::new())),
                 alerts: Arc::new(RwLock::new(Vec::new())),
                 annotations: Arc::new(RwLock::new(Vec::new())),
-                auto_reply: Arc::new(RwLock::new(AutoReplyCfg::default())),
-                alert_cfg: Arc::new(RwLock::new(AlertCfg::default())),
-                capture_cfg: Arc::new(RwLock::new(CaptureCfg::default())),
             },
         );
         id
@@ -714,7 +432,7 @@ impl PortManager {
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
         if matches!(h.kind, SessionKind::Offline) {
-            h.buf.clear();
+            h.runtime.ring.clear();
             return Ok(());
         }
         h.write_tx
@@ -734,13 +452,13 @@ impl PortManager {
             // 计入只会产生随墙钟无限增长的假滞后噪音
             .filter(|(_, h)| matches!(h.kind, SessionKind::Live) && !h.stop.load(Ordering::Relaxed))
             .map(|(id, h)| {
-                let (_, _, _, _, _, last_epoch, len) = h.buf.bounds();
+                let (_, _, _, _, _, last_epoch, len) = h.runtime.ring.bounds();
                 let lag = if last_epoch == 0 {
                     0
                 } else {
                     now.saturating_sub(last_epoch)
                 };
-                (id.clone(), lag, len, h.buf.rx_lines())
+                (id.clone(), lag, len, h.runtime.ring.rx_lines())
             })
             .collect()
     }
@@ -758,7 +476,7 @@ impl PortManager {
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
         let max = max.clamp(1, RING_CAP);
-        Ok(h.buf.lines_after_no(since_no, max))
+        Ok(h.runtime.ring.lines_after_no(since_no, max))
     }
 
     /// 往前翻页补拉：返回 ring 中 `no < before_no` 的最新 max 行（升序）。
@@ -774,7 +492,7 @@ impl PortManager {
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
         let max = max.clamp(1, RING_CAP);
-        Ok(h.buf.lines_before_no(before_no, max))
+        Ok(h.runtime.ring.lines_before_no(before_no, max))
     }
 
     /// ring 现存行号边界（空环全 0）：前端判断「上滑还有没有旧行可回补」。
@@ -783,7 +501,7 @@ impl PortManager {
         let h = sessions
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
-        let (first_no, last_no, _, _, _, _, size) = h.buf.bounds();
+        let (first_no, last_no, _, _, _, _, size) = h.runtime.ring.bounds();
         Ok(RingBounds {
             first_no,
             last_no,
@@ -805,9 +523,9 @@ impl PortManager {
         let h = sessions
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
-        *h.auto_reply.write() = auto_reply;
-        *h.alert_cfg.write() = alerts;
-        *h.capture_cfg.write() = capture;
+        *h.runtime.auto_reply.write() = auto_reply;
+        *h.runtime.alerts.write() = alerts;
+        *h.runtime.capture.write() = capture;
         Ok(())
     }
 
@@ -872,13 +590,13 @@ impl PortManager {
             .map(|(id, h)| {
                 // 共享运行状态是唯一事实源：connecting/error 中间态与 last_error 来自
                 // 读线程，不再从 stop 标志推断（推不出中间态，错误期还会假报 connected）
-                let st = h.state.read().clone();
+                let st = h.runtime.state.read().clone();
                 SessionSnap {
                     id: id.clone(),
                     config: h.config.clone(),
                     status: st.status.as_str().into(),
                     last_error: st.last_error,
-                    line_count: h.buf.len(),
+                    line_count: h.runtime.ring.len(),
                     ring_cap: RING_CAP,
                 }
             })
@@ -886,7 +604,10 @@ impl PortManager {
     }
 
     pub fn bridge_snapshot(&self, id: &str) -> Option<Vec<BridgeLine>> {
-        self.sessions.read().get(id).map(|h| h.buf.snapshot())
+        self.sessions
+            .read()
+            .get(id)
+            .map(|h| h.runtime.ring.snapshot())
     }
 
     /// 长轮询：返回 `no > since` 的行 + 当前 `lastNo`（无会话返回 None）。
@@ -894,24 +615,27 @@ impl PortManager {
         self.sessions
             .read()
             .get(id)
-            .map(|h| (h.buf.lines_since(since), h.buf.last_no()))
+            .map(|h| (h.runtime.ring.lines_since(since), h.runtime.ring.last_no()))
     }
 
     /// 交换基线：只取当前 lastNo（不做全量行分配）。
     pub fn bridge_last_no(&self, id: &str) -> Option<u64> {
-        self.sessions.read().get(id).map(|h| h.buf.last_no())
+        self.sessions
+            .read()
+            .get(id)
+            .map(|h| h.runtime.ring.last_no())
     }
 
     pub fn bridge_stats(&self, id: &str) -> Option<BridgeStats> {
         let s = self.sessions.read();
         s.get(id).map(|h| {
             let (first_no, last_no, first_ts, last_ts, first_epoch, last_epoch, size) =
-                h.buf.bounds();
+                h.runtime.ring.bounds();
             BridgeStats {
-                rx_lines: h.buf.rx_lines(),
-                tx_lines: h.buf.tx_lines(),
-                rx_bytes: h.buf.rx_bytes(),
-                tx_bytes: h.buf.tx_bytes(),
+                rx_lines: h.runtime.ring.rx_lines(),
+                tx_lines: h.runtime.ring.tx_lines(),
+                rx_bytes: h.runtime.ring.rx_bytes(),
+                tx_bytes: h.runtime.ring.tx_bytes(),
                 first_no,
                 last_no,
                 first_ts,
@@ -1072,7 +796,6 @@ fn reader_loop(
     session_id: String,
     sink: Arc<dyn EventSink>,
     stop: Arc<AtomicBool>,
-    state: Arc<RwLock<SessionState>>,
     write_rx: mpsc::Receiver<PortCmd>,
     log_path: PathBuf,
     log_base: PathBuf,
@@ -1080,15 +803,12 @@ fn reader_loop(
     log_shared: Arc<RwLock<PathBuf>>,
     ts_format: Option<String>,
     custom_path: bool,
-    ring: Arc<RingBuf>,
-    auto_reply: Arc<RwLock<AutoReplyCfg>>,
-    alert_cfg: Arc<RwLock<AlertCfg>>,
-    capture_cfg: Arc<RwLock<CaptureCfg>>,
+    rt: Arc<SessionRuntime>,
     captures_dir: PathBuf,
     alerts_mirror: Arc<RwLock<Vec<BridgeAlert>>>,
 ) {
     let (session_log, ts_fmt) = open_session_log(
-        &state,
+        &rt.state,
         &*sink,
         &session_id,
         &log_path,
@@ -1100,7 +820,7 @@ fn reader_loop(
         Ok(p) => p,
         Err(e) => {
             // 错误且终止：状态置 Error 并保留（finish 不会被走到，也不得回落 disconnected）
-            state.write().set_error(
+            rt.state.write().set_error(
                 &*sink,
                 &session_id,
                 &format!("打开串口 {} 失败: {}", config.name, e),
@@ -1109,7 +829,7 @@ fn reader_loop(
             return;
         }
     };
-    state
+    rt.state
         .write()
         .set_status(&*sink, &session_id, SessionStatus::Connected);
 
@@ -1120,7 +840,7 @@ fn reader_loop(
         "写入串口失败",
         &*sink,
         &session_id,
-        &state,
+        &rt,
         stop,
         write_rx,
         &ts_fmt,
@@ -1128,10 +848,6 @@ fn reader_loop(
         log_base,
         midnight_rotate,
         log_shared,
-        ring,
-        auto_reply,
-        alert_cfg,
-        capture_cfg,
         captures_dir,
         alerts_mirror,
     );
@@ -1170,11 +886,11 @@ fn make_rx_line(raw: &[u8], ts_fmt: &str) -> LogLine {
     }
 }
 
-fn sink_line(line: &LogLine, session_log: &mut Option<SessionLog>, ring: &RingBuf) -> u64 {
+fn sink_line(line: &LogLine, session_log: &mut Option<SessionLog>, rt: &SessionRuntime) -> u64 {
     if let Some(w) = session_log.as_mut() {
         w.append(line);
     }
-    ring.push(line)
+    rt.ingest(line)
 }
 
 fn finish_loop(
@@ -1484,7 +1200,7 @@ fn stream_loop(
     write_err_msg: &str,
     sink: &dyn EventSink,
     session_id: &str,
-    state: &RwLock<SessionState>,
+    rt: &SessionRuntime,
     stop: Arc<AtomicBool>,
     write_rx: mpsc::Receiver<PortCmd>,
     ts_fmt: &str,
@@ -1492,10 +1208,6 @@ fn stream_loop(
     log_base: PathBuf,
     midnight_rotate: bool,
     log_shared: Arc<RwLock<PathBuf>>,
-    ring: Arc<RingBuf>,
-    auto_reply: Arc<RwLock<AutoReplyCfg>>,
-    alert_cfg: Arc<RwLock<AlertCfg>>,
-    capture_cfg: Arc<RwLock<CaptureCfg>>,
     captures_dir: PathBuf,
     alerts_mirror: Arc<RwLock<Vec<BridgeAlert>>>,
 ) {
@@ -1528,12 +1240,13 @@ fn stream_loop(
                                 bytes: None,
                                 epoch_millis: now_ms(),
                             };
-                            sink_line(&tx, &mut session_log, &ring);
+                            sink_line(&tx, &mut session_log, rt);
                             // armed 捕获在后续窗口内：TX 回显一并入档
                             cap_on_line(&mut cap, &tx, sink, session_id, now_ms());
                         }
                         // 写失败但连接保持：仅记 last_error，状态不变
-                        Err(_) => state
+                        Err(_) => rt
+                            .state
                             .write()
                             .set_error(sink, session_id, write_err_msg, None),
                     }
@@ -1542,7 +1255,7 @@ fn stream_loop(
                     if let Some(w) = session_log.as_mut() {
                         let _ = w.clear();
                     }
-                    ring.clear();
+                    rt.ring.clear();
                 }
                 PortCmd::RecOn(path) => {
                     // 分段/恢复录制：flush+关闭旧文件后另起新文件；创建失败则报错停写
@@ -1554,7 +1267,7 @@ fn stream_loop(
                         Ok(w) => Some(w),
                         Err(e) => {
                             // 另起新档失败连接不受影响：仅记 last_error
-                            state.write().set_error(
+                            rt.state.write().set_error(
                                 sink,
                                 session_id,
                                 &format!("另起新日志失败 {}: {}", path.display(), e),
@@ -1572,7 +1285,7 @@ fn stream_loop(
                 PortCmd::Signal { pin, level } => {
                     if let Err(e) = io.set_signal(pin, level) {
                         // 置位失败连接不受影响：仅记 last_error
-                        state.write().set_error(
+                        rt.state.write().set_error(
                             sink,
                             session_id,
                             &format!("设置信号线失败: {e}"),
@@ -1604,7 +1317,7 @@ fn stream_loop(
                         }
                         Err(e) => {
                             // 午夜分段失败连接不受影响：仅记 last_error
-                            state.write().set_error(
+                            rt.state.write().set_error(
                                 sink,
                                 session_id,
                                 &format!("午夜另起新日志失败 {}: {}", np.display(), e),
@@ -1621,7 +1334,7 @@ fn stream_loop(
             Ok(0) => {
                 // EOF：对端正常关闭。记 last_error 供 REST 观测，状态走正常断开
                 //（finish_loop 置 Disconnected，不进 Error）
-                state.write().set_error(sink, session_id, eof_msg, None);
+                rt.state.write().set_error(sink, session_id, eof_msg, None);
                 break;
             }
             Ok(n) => {
@@ -1633,24 +1346,23 @@ fn stream_loop(
                         }
                         line_buf.clear();
                         let line = make_rx_line(&raw, ts_fmt);
-                        let ring_no = sink_line(&line, &mut session_log, &ring);
+                        let ring_no = sink_line(&line, &mut session_log, rt);
                         apply_rx_rules(
                             &line,
                             ring_no,
                             io,
                             &mut session_log,
-                            &ring,
+                            rt,
                             ts_fmt,
-                            &auto_reply.read().clone(),
-                            &alert_cfg.read().clone(),
+                            &rt.auto_reply.read().clone(),
+                            &rt.alerts.read().clone(),
                             &mut alert_states,
                             &mut fired_alerts,
                             &mut cap,
-                            &capture_cfg.read().clone(),
+                            &rt.capture.read().clone(),
                             &captures_dir,
                             sink,
                             session_id,
-                            state,
                             write_err_msg,
                         );
                     } else {
@@ -1670,24 +1382,23 @@ fn stream_loop(
                     }
                     line_buf.clear();
                     let line = make_rx_line(&raw, ts_fmt);
-                    let ring_no = sink_line(&line, &mut session_log, &ring);
+                    let ring_no = sink_line(&line, &mut session_log, rt);
                     apply_rx_rules(
                         &line,
                         ring_no,
                         io,
                         &mut session_log,
-                        &ring,
+                        rt,
                         ts_fmt,
-                        &auto_reply.read().clone(),
-                        &alert_cfg.read().clone(),
+                        &rt.auto_reply.read().clone(),
+                        &rt.alerts.read().clone(),
                         &mut alert_states,
                         &mut fired_alerts,
                         &mut cap,
-                        &capture_cfg.read().clone(),
+                        &rt.capture.read().clone(),
                         &captures_dir,
                         sink,
                         session_id,
-                        state,
                         write_err_msg,
                     );
                     last_idle_flush = Instant::now();
@@ -1695,7 +1406,7 @@ fn stream_loop(
             }
             Err(e) => {
                 // 读硬错误且终止：状态置 Error，finish_loop 保留不覆盖
-                state.write().set_error(
+                rt.state.write().set_error(
                     sink,
                     session_id,
                     &format!("读取错误: {e}"),
@@ -1728,24 +1439,24 @@ fn stream_loop(
 
     // 断连现场：会话结束前把最后 pre_ms 窗口抓成档案（设备重启/掉线现场最珍贵）
     {
-        let cfg = capture_cfg.read().clone();
+        let cfg = rt.capture.read().clone();
         if cap.is_none() && cfg.enabled && cfg.on_disconnect {
             let now = now_ms();
             cap = capture_start(
                 session_id,
                 &cfg,
                 &captures_dir,
-                &ring,
+                &rt.ring,
                 "disconnect",
                 "断连",
                 now,
                 sink,
-                state,
+                &rt.state,
             );
         }
     }
     cap_finalize(&mut cap, sink, session_id);
-    finish_loop(session_log, state, sink, session_id);
+    finish_loop(session_log, &rt.state, sink, session_id);
 }
 
 /// 逐 RX 行规则评估：自动回复（读线程内直接回写设备，不依赖宿主存活）、
@@ -1757,7 +1468,7 @@ fn apply_rx_rules(
     ring_no: u64,
     io: &mut Link,
     session_log: &mut Option<SessionLog>,
-    ring: &RingBuf,
+    rt: &SessionRuntime,
     ts_fmt: &str,
     auto_reply: &AutoReplyCfg,
     alert_cfg: &AlertCfg,
@@ -1768,7 +1479,6 @@ fn apply_rx_rules(
     captures_dir: &std::path::Path,
     sink: &dyn EventSink,
     session_id: &str,
-    state: &RwLock<SessionState>,
     write_err_msg: &str,
 ) {
     if line.dir != Dir::Rx {
@@ -1792,12 +1502,13 @@ fn apply_rx_rules(
                         bytes: None,
                         epoch_millis: now_ms(),
                     };
-                    sink_line(&tx, session_log, ring);
+                    sink_line(&tx, session_log, rt);
                     // armed 捕获在后续窗口内：自动回复的 TX 也入档
                     cap_on_line(cap, &tx, sink, session_id, now_ms());
                 }
                 // 回写失败但连接保持：仅记 last_error
-                Err(_) => state
+                Err(_) => rt
+                    .state
                     .write()
                     .set_error(sink, session_id, write_err_msg, None),
             }
@@ -1827,12 +1538,12 @@ fn apply_rx_rules(
         cap,
         capture_cfg,
         captures_dir,
-        ring,
+        &rt.ring,
         alert_hit,
         line,
         sink,
         session_id,
-        state,
+        &rt.state,
     );
     cap_on_line(cap, line, sink, session_id, now_ms());
 }
@@ -1952,7 +1663,6 @@ fn net_loop(
     session_id: String,
     sink: Arc<dyn EventSink>,
     stop: Arc<AtomicBool>,
-    state: Arc<RwLock<SessionState>>,
     write_rx: mpsc::Receiver<PortCmd>,
     log_path: PathBuf,
     log_base: PathBuf,
@@ -1960,16 +1670,13 @@ fn net_loop(
     log_shared: Arc<RwLock<PathBuf>>,
     ts_format: Option<String>,
     custom_path: bool,
-    ring: Arc<RingBuf>,
-    auto_reply: Arc<RwLock<AutoReplyCfg>>,
-    alert_cfg: Arc<RwLock<AlertCfg>>,
-    capture_cfg: Arc<RwLock<CaptureCfg>>,
+    rt: Arc<SessionRuntime>,
     captures_dir: PathBuf,
     alerts_mirror: Arc<RwLock<Vec<BridgeAlert>>>,
 ) {
     let desc = describe_transport(&config);
     let (session_log, ts_fmt) = open_session_log(
-        &state,
+        &rt.state,
         &*sink,
         &session_id,
         &log_path,
@@ -1981,7 +1688,7 @@ fn net_loop(
         Ok(l) => l,
         Err(e) => {
             // 建链失败且终止：状态置 Error（无 finish，不会被覆盖成 disconnected）
-            state.write().set_error(
+            rt.state.write().set_error(
                 &*sink,
                 &session_id,
                 &format!("建立 {desc} 失败: {e}"),
@@ -1990,7 +1697,7 @@ fn net_loop(
             return;
         }
     };
-    state
+    rt.state
         .write()
         .set_status(&*sink, &session_id, SessionStatus::Connected);
 
@@ -2001,7 +1708,7 @@ fn net_loop(
         "网络写入失败",
         &*sink,
         &session_id,
-        &state,
+        &rt,
         stop,
         write_rx,
         &ts_fmt,
@@ -2009,10 +1716,6 @@ fn net_loop(
         log_base,
         midnight_rotate,
         log_shared,
-        ring,
-        auto_reply,
-        alert_cfg,
-        capture_cfg,
         captures_dir,
         alerts_mirror,
     );
@@ -2020,7 +1723,8 @@ fn net_loop(
 
 #[cfg(test)]
 mod tests {
-    //! RingBuf 纯逻辑单测：单调 no、快照顺序、游标、边界、驱逐、计数器。
+    //! manager 侧单测：会话状态机/sink 薄壳、路径命名、桥访问器与假传输（loopback TCP）集成。
+    //! （RingBuf 纯逻辑单测随实现迁 serial/ring.rs，SessionRuntime 单测在 serial/runtime.rs。）
     use super::*;
 
     fn mk_log(ts: &str, dir: Dir, text: &str, bytes: Option<Vec<u8>>, epoch: u64) -> LogLine {
@@ -2031,81 +1735,6 @@ mod tests {
             bytes,
             epoch_millis: epoch,
         }
-    }
-
-    #[test]
-    fn push_assigns_monotonic_no_and_snapshot_order() {
-        let buf = RingBuf::new();
-        for i in 0..3 {
-            buf.push(&mk_log(
-                "00:00:00.001",
-                Dir::Rx,
-                &format!("l{i}"),
-                None,
-                1000 + i,
-            ));
-        }
-        let nos: Vec<u64> = buf.snapshot().iter().map(|l| l.no).collect();
-        assert_eq!(nos, vec![1, 2, 3]);
-        assert_eq!(buf.last_no(), 3);
-        assert_eq!(buf.len(), 3);
-    }
-
-    #[test]
-    fn lines_since_epoch_slices_and_reports_missing() {
-        let buf = RingBuf::new();
-        // 空 ring：空快照且不标缺失
-        assert!(buf.lines_since_epoch(1).0.is_empty());
-        for i in 0..5 {
-            buf.push(&mk_log(
-                "00:00:00.001",
-                Dir::Rx,
-                &format!("l{i}"),
-                None,
-                1000 + i * 10,
-            ));
-        }
-        // since 落在首行之前：全量且无缺失
-        let (snap, missing) = buf.lines_since_epoch(500);
-        assert_eq!(snap.len(), 5);
-        assert!(!missing);
-        // since 命中第 3 行（epoch=1020）：取 1020..=1040 三行
-        let (snap, missing) = buf.lines_since_epoch(1020);
-        assert_eq!(snap.len(), 3);
-        assert_eq!(snap[0].text, "l2");
-        assert!(!missing);
-        // since 早于全部行且 ring 未淘汰：全量、不标缺失
-        let small = RingBuf::new();
-        for i in 0..5 {
-            small.push(&mk_log(
-                "00:00:00.001",
-                Dir::Rx,
-                &format!("s{i}"),
-                None,
-                1000 + i * 10,
-            ));
-        }
-        let (snap, missing) = small.lines_since_epoch(1000);
-        assert_eq!(snap.len(), 5);
-        assert!(!missing);
-    }
-
-    #[test]
-    fn lines_since_epoch_flags_evicted_head() {
-        // 真实淘汰：灌满 ring 溢出 5 行后，现存首行(=6)已晚于 since=1000
-        // → 更早行被覆盖，标缺失
-        let buf = RingBuf::new();
-        let n = (RING_CAP + 5) as u64;
-        for i in 0..n {
-            buf.push(&mk_log("t", Dir::Rx, &format!("e{i}"), None, 1000 + i));
-        }
-        let (snap, missing) = buf.lines_since_epoch(1000);
-        assert_eq!(snap.len(), RING_CAP);
-        assert_eq!(snap[0].text, "e5");
-        assert!(missing);
-        // since 在现存首行之前：虽然发生过淘汰，但请求窗口内数据完整
-        let (_, missing) = buf.lines_since_epoch(1000 + RING_CAP as u64);
-        assert!(!missing);
     }
 
     #[test]
@@ -2134,146 +1763,22 @@ mod tests {
     }
 
     #[test]
-    fn lines_since_cursor() {
-        let buf = RingBuf::new();
-        for i in 0..5 {
-            buf.push(&mk_log("t", Dir::Rx, "x", None, i));
-        }
-        let s1: Vec<u64> = buf.lines_since(1).iter().map(|l| l.no).collect();
-        assert_eq!(s1, vec![2, 3, 4, 5]);
-        let s0: Vec<u64> = buf.lines_since(0).iter().map(|l| l.no).collect();
-        assert_eq!(s0, vec![1, 2, 3, 4, 5]);
-    }
-
-    #[test]
-    fn lines_after_no_cursor_pages() {
-        // 拉模型游标：no>since 的最旧 max 行；游标推进不重不漏；翻页到拉空
-        let buf = RingBuf::new();
-        for i in 0..10 {
-            buf.push(&mk_log("t", Dir::Rx, "x", None, i));
-        }
-        let p1 = buf.lines_after_no(0, 4);
-        assert_eq!(
-            p1.iter().map(|l| l.no).collect::<Vec<_>>(),
-            vec![1, 2, 3, 4]
-        );
-        let p2 = buf.lines_after_no(4, 4);
-        assert_eq!(
-            p2.iter().map(|l| l.no).collect::<Vec<_>>(),
-            vec![5, 6, 7, 8]
-        );
-        let p3 = buf.lines_after_no(8, 4);
-        assert_eq!(p3.iter().map(|l| l.no).collect::<Vec<_>>(), vec![9, 10]);
-        // 拉空：游标已到最新
-        assert!(buf.lines_after_no(10, 4).is_empty());
-        // 游标超前（ring 淘汰/新会话）也安全
-        assert!(buf.lines_after_no(999, 4).is_empty());
-    }
-
-    #[test]
-    fn lines_after_no_survives_clear() {
-        // 清屏 seq 单调不回退：游标保持原位，只拉新行
-        let buf = RingBuf::new();
-        for i in 0..5 {
-            buf.push(&mk_log("t", Dir::Rx, "x", None, i));
-        }
-        buf.clear();
-        assert!(buf.lines_after_no(5, 4).is_empty());
-        buf.push(&mk_log("t", Dir::Rx, "new", None, 100));
-        let after = buf.lines_after_no(5, 4);
-        assert_eq!(after.iter().map(|l| l.no).collect::<Vec<_>>(), vec![6]);
-        assert_eq!(after[0].text, "new");
-    }
-
-    #[test]
-    fn lines_before_no_pages_backwards() {
-        // 往前翻页：no<before 的最新 max 行，升序返回；翻到 ring 最早行返空
-        let buf = RingBuf::new();
-        for i in 0..10 {
-            buf.push(&mk_log("t", Dir::Rx, "x", None, i));
-        }
-        let p1 = buf.lines_before_no(10, 4);
-        assert_eq!(
-            p1.iter().map(|l| l.no).collect::<Vec<_>>(),
-            vec![6, 7, 8, 9]
-        );
-        let p2 = buf.lines_before_no(6, 4);
-        assert_eq!(
-            p2.iter().map(|l| l.no).collect::<Vec<_>>(),
-            vec![2, 3, 4, 5]
-        );
-        let p3 = buf.lines_before_no(2, 4);
-        assert_eq!(p3.iter().map(|l| l.no).collect::<Vec<_>>(), vec![1]);
-        // 已翻到最早：安全返空；before_no 超前（比最新还大）取最新 max 行
-        assert!(buf.lines_before_no(1, 4).is_empty());
-        let p4 = buf.lines_before_no(999, 3);
-        assert_eq!(p4.iter().map(|l| l.no).collect::<Vec<_>>(), vec![8, 9, 10]);
-        assert!(buf.lines_before_no(0, 4).is_empty());
-    }
-
-    #[test]
-    fn lines_before_no_empty_ring() {
-        let buf = RingBuf::new();
-        assert!(buf.lines_before_no(100, 4).is_empty());
-        buf.push(&mk_log("t", Dir::Rx, "x", None, 0));
-        assert!(buf.lines_before_no(1, 4).is_empty());
-        assert_eq!(buf.lines_before_no(2, 4)[0].no, 1);
-    }
-
-    #[test]
-    fn bounds_and_clear_keeps_seq_monotonic() {
-        let buf = RingBuf::new();
-        buf.push(&mk_log("01:00:00.000", Dir::Rx, "a", None, 3600000));
-        buf.push(&mk_log("02:00:00.000", Dir::Tx, "b", None, 7200000));
-        let (fno, lno, fts, lts, fep, lep, len) = buf.bounds();
-        assert_eq!((fno, lno), (1, 2));
-        assert_eq!(fts, "01:00:00.000");
-        assert_eq!(lts, "02:00:00.000");
-        assert_eq!((fep, lep), (3600000, 7200000));
-        assert_eq!(len, 2);
-        // 清屏不重置 seq，避免 no 引用碰撞
-        buf.clear();
-        assert_eq!(buf.len(), 0);
-        assert_eq!(buf.last_no(), 0);
-        buf.push(&mk_log("t", Dir::Rx, "c", None, 0));
-        assert_eq!(buf.snapshot()[0].no, 3);
-    }
-
-    #[test]
-    fn evicts_oldest_beyond_cap() {
-        let buf = RingBuf::new();
-        let n = (RING_CAP + 5) as u64;
-        for i in 0..n {
-            buf.push(&mk_log("t", Dir::Rx, "x", None, i));
-        }
-        assert_eq!(buf.len(), RING_CAP);
-        let snap = buf.snapshot();
-        assert_eq!(snap.first().unwrap().no, 6); // 先 5 行被驱逐
-        assert_eq!(snap.last().unwrap().no, n);
-        assert_eq!(buf.last_no(), n);
-    }
-
-    #[test]
     fn perf_snapshot_skips_stopped_and_offline() {
         let m = PortManager::new();
         let mk_handle = |stopped: bool| {
-            let ring = Arc::new(RingBuf::new());
-            ring.push(&mk_log("t", Dir::Rx, "x", None, 1000));
+            let runtime = Arc::new(SessionRuntime::new());
+            runtime.ingest(&mk_log("t", Dir::Rx, "x", None, 1000));
             let stop = Arc::new(AtomicBool::new(stopped));
             let (tx, _rx) = mpsc::channel();
             SessionHandle {
                 config: PortConfig::default(),
                 kind: SessionKind::Live,
-                auto_reply: Arc::new(RwLock::new(AutoReplyCfg::default())),
-                alert_cfg: Arc::new(RwLock::new(AlertCfg::default())),
-                capture_cfg: Arc::new(RwLock::new(CaptureCfg::default())),
                 stop,
-                state: Arc::new(RwLock::new(SessionState::default())),
                 write_tx: tx,
                 log_path: Arc::new(RwLock::new(PathBuf::from("x.log"))),
                 log_base: PathBuf::from("x.log"),
                 join: None,
-                buf: ring,
+                runtime,
                 plot: Arc::new(RwLock::new(PlotConfig::default())),
                 bookmarks: Arc::new(RwLock::new(Vec::new())),
                 alerts: Arc::new(RwLock::new(Vec::new())),
@@ -2284,19 +1789,6 @@ mod tests {
         m.sessions.write().insert("s2".into(), mk_handle(true)); // 已停止
         let ids: Vec<String> = m.perf_snapshot().into_iter().map(|(id, ..)| id).collect();
         assert_eq!(ids, vec!["s1".to_string()]);
-    }
-
-    #[test]
-    fn counters_by_dir_and_bytes() {
-        let buf = RingBuf::new();
-        // rx 携带字节(2B) + rx 纯文本(len 3) + tx 纯文本(len 1)
-        buf.push(&mk_log("t", Dir::Rx, "x", Some(vec![0xAA, 0x55]), 0));
-        buf.push(&mk_log("t", Dir::Rx, "abc", None, 0));
-        buf.push(&mk_log("t", Dir::Tx, "y", None, 0));
-        assert_eq!(buf.rx_lines(), 2);
-        assert_eq!(buf.tx_lines(), 1);
-        assert_eq!(buf.rx_bytes(), 5); // 2 + 3
-        assert_eq!(buf.tx_bytes(), 1);
     }
 
     #[test]
