@@ -35,6 +35,10 @@ jobs:
       - name: Tauri config check
         run: npm run check:tauri-config
 
+      # 架构红线：core 纯净性 + IPC 边界 + 文件行数限额
+      - name: Architecture check
+        run: npm run check:architecture
+
       # Rust：单元测试 + 编译检查（覆盖 bytetide-core / bytetide-cli / src-tauri 全工作区）
       - name: Rust tests
         run: cargo test --workspace

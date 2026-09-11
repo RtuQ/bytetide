@@ -14,6 +14,11 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 regex = { workspace = true }
 
+# 仅测试用：tests/session_contract.rs 特征化断言冻结的 JSON 形状
+# （架构检查只看 [dependencies]，core 本体依旧零 tauri/axum/tokio/serde_json）
+[dev-dependencies]
+serde_json = { workspace = true }
+
 [features]
 default = ["udev"]
 # Linux 下 libudev 提供 USB VID/PID 等枚举元数据（C 依赖，musl 静态编译不可用；

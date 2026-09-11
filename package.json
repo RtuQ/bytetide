@@ -14,6 +14,8 @@
     "test:version": "node --test scripts/check-release-version.test.mjs",
     "check:tauri-config": "node scripts/check-tauri-config.mjs",
     "test:tauri-config": "node --test scripts/check-tauri-config.test.mjs",
+    "check:architecture": "node scripts/check-architecture.mjs",
+    "test:architecture": "node --test scripts/check-architecture.test.mjs",
     "commit": "cz"
   },
   "config": {
