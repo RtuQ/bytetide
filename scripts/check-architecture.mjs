@@ -42,22 +42,13 @@ export function cargoDependencyNames(cargoToml) {
 }
 
 // ---------------------------------------------------------------------------
-// 规则 2：前端 IPC 边界（当前宽松——允许清单 = Task 1 时的全部直连文件）
+// 规则 2：前端 IPC 边界（Task 5 起：允许清单已清空，直连只允许 src/ipc/**）
 // ---------------------------------------------------------------------------
-// Task 5 建立类型化 IPC 适配层（src/ipc/**）后把调用方逐个迁走，清单随之清空。
-// 逐个列出当前实际直连 Tauri IPC 的文件（grep invoke/listen/@tauri-apps/api 核实）。
-const ALLOWED_IPC_FILES = [
-  'src/App.vue', // emit('app-ready') + UnlistenFn 类型（@tauri-apps/api/event）
-  'src/components/CapturePanel.vue', // captures_dir_cmd
-  'src/components/ConfigPresetsPanel.vue', // export_text_cmd
-  'src/components/DockMonitor.vue', // export_text_cmd
-  'src/components/LogView.vue', // export_text_cmd
-  'src/composables/useBridgeSync.ts', // bridge_sync_bookmarks/alerts_cmd
-  'src/composables/usePerfWatch.ts', // append_perf_diag_cmd
-  'src/composables/useTauriEvents.ts', // listen 全部事件 + ring_lines/ring_bounds/append_perf_diag
-  'src/stores/bridge.ts', // bridge_get/set_config_cmd 等
-  'src/stores/session.ts', // send/disconnect/clear_log/set_signal 等 12+ 命令
-]
+// Task 1 时曾列出全部直连文件作过渡基线；Task 5 建立类型化 IPC 适配层
+// （src/ipc/{client,commands,events,types,errors}.ts）并把调用方逐个迁走后，
+// 清单清空。新增任何 invoke/listen/@tauri-apps/api(core|event) 直连都算违规：
+// 一律经 src/ipc 的命名命令/事件适配层（IpcClient 接口可注入假实现做测试）。
+const ALLOWED_IPC_FILES = []
 
 // 裸调用匹配：invoke( / invoke<…>( / listen( ——不匹配 x.invoke(、unlisten(、invokeMock(
 const BARE_INVOKE = /(?<![\w$.])invoke\s*[<(]/

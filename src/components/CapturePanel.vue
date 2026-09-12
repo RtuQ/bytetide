@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
 import { openPath } from '@tauri-apps/plugin-opener'
+import { commands } from '../ipc/commands'
 import { useSessionStore } from '../stores/session'
 import type { CaptureRule } from '../types'
 
@@ -13,7 +13,7 @@ const capDir = ref('')
 onMounted(async () => {
   void store.loadCaptures()
   try {
-    capDir.value = await invoke<string>('captures_dir_cmd')
+    capDir.value = await commands.capturesDir()
   } catch {
     /* 浏览器冒烟无后端 */
   }

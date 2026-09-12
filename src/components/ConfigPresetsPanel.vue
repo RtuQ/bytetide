@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { open, save } from '@tauri-apps/plugin-dialog'
-import { invoke } from '@tauri-apps/api/core'
+import { commands } from '../ipc/commands'
 import { useSessionStore } from '../stores/session'
 import type { ConfigPreset, PresetCategory } from '../types'
 
@@ -52,10 +52,7 @@ async function exportAll() {
     filters: [{ name: 'JSON', extensions: ['json'] }],
   })
   if (!path) return
-  await invoke('export_text_cmd', {
-    path,
-    content: JSON.stringify({ version: 1, presets: store.configPresets }, null, 2),
-  })
+  await commands.exportText(path, JSON.stringify({ version: 1, presets: store.configPresets }, null, 2))
 }
 
 async function importFile() {
@@ -65,7 +62,7 @@ async function importFile() {
   })
   if (!path || typeof path !== 'string') return
   try {
-    const raw = JSON.parse(await invoke<string>('read_text_file_cmd', { path }))
+    const raw = JSON.parse(await commands.readTextFile(path))
     const n = store.importConfigPresets(raw)
     alert(n > 0 ? `已导入 ${n} 条预设` : '未发现可导入的预设（形状不符）')
   } catch (e) {

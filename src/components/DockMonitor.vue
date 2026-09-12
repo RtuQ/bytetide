@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { save } from '@tauri-apps/plugin-dialog'
-import { invoke } from '@tauri-apps/api/core'
+import { commands } from '../ipc/commands'
 import { useSessionStore } from '../stores/session'
 import { useLineStats } from '../composables/useLineStats'
 import { usePerfWatch } from '../composables/usePerfWatch'
@@ -50,10 +50,7 @@ async function exportDiag() {
   if (!path) return
   exportStatus.value = { kind: 'pending' }
   try {
-    await invoke('export_text_cmd', {
-      path,
-      content: JSON.stringify({ exportedAt: Date.now(), entries: perf.entries.value }, null, 2),
-    })
+    await commands.exportText(path, JSON.stringify({ exportedAt: Date.now(), entries: perf.entries.value }, null, 2))
     setExportStatus('ok', path)
   } catch (e) {
     setExportStatus('err', String(e))

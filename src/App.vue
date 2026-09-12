@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, provide, ref } from 'vue'
-import { emit, type UnlistenFn } from '@tauri-apps/api/event'
 import { useSessionStore } from './stores/session'
 import { useBridgeStore } from './stores/bridge'
 import { setupEvents } from './composables/useTauriEvents'
+import { emitAppReady } from './ipc/events'
+import type { Unlisten } from './ipc/client'
 import { useHighlighter, HIGHLIGHTER_KEY } from './composables/useHighlighter'
 import { usePlotData, PLOT_DATA_KEY } from './composables/usePlotData'
 import { useTheme } from './composables/useTheme'
@@ -39,7 +40,7 @@ import { requestPopover } from './composables/usePopoverBridge'
 
 const store = useSessionStore()
 const bridge = useBridgeStore()
-const unlistens = ref<UnlistenFn[]>([])
+const unlistens = ref<Unlisten[]>([])
 
 // 顶层共享高亮器：搜索负责“只看命中/次数/命中行列表”，
 // 关键词为独立多色高亮（每个自带颜色）。子组件通过 inject 复用，避免重复全量扫描。
@@ -74,7 +75,7 @@ onMounted(async () => {
   } catch (e) {
     console.error('[startup] 启动链失败:', e)
   } finally {
-    emit('app-ready').catch(() => {})
+    emitAppReady().catch(() => {})
   }
 })
 onBeforeUnmount(() => {

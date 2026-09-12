@@ -121,16 +121,24 @@ test('允许清单之外的 src 文件裸 listen( 被拒', () => {
   })
 })
 
-test('src/ipc/** 与允许清单内文件的 invoke/listen 放行', () => {
-  const f = fixture({
+test('src/ipc/** 的 invoke/listen 放行；允许清单已清空，清单外一律拒绝', () => {
+  const ok = fixture({
     'crates/bytetide-core/Cargo.toml': CLEAN_CORE_TOML,
     'crates/bytetide-core/src/lib.rs': CLEAN_CORE_RS,
     'src/ipc/client.ts': "import { invoke, listen } from '@tauri-apps/api/core'\nawait invoke('x')\nawait listen('y', () => {})\n",
-    'src/composables/useTauriEvents.ts': "import { listen, type UnlistenFn } from '@tauri-apps/api/event'\nimport { invoke } from '@tauri-apps/api/core'\nawait listen('session-status', () => {})\nvoid invoke('ring_lines_no_cmd')\n",
-    'src/stores/session.ts': "import { invoke } from '@tauri-apps/api/core'\nawait invoke('send_cmd')\n",
-    'src/stores/other.ts': "import { ref } from 'vue'\nexport const r = ref(unlisten)\n",
   })
-  assert.doesNotThrow(() => checkArchitecture('/fixture', f))
+  assert.doesNotThrow(() => checkArchitecture('/fixture', ok))
+  // Task 5 起 ALLOWED_IPC_FILES = []：src/ipc/** 之外的裸 invoke/listen（含旧允许清单
+  // 里的 useTauriEvents.ts / session.ts）都算违规——必须经 src/ipc 命名适配层
+  const bad = fixture({
+    'crates/bytetide-core/Cargo.toml': CLEAN_CORE_TOML,
+    'crates/bytetide-core/src/lib.rs': CLEAN_CORE_RS,
+    'src/composables/useTauriEvents.ts': "import { listen, type UnlistenFn } from '@tauri-apps/api/event'\nimport { invoke } from '@tauri-apps/api/core'\nawait listen('session-status', () => {})\nvoid invoke('ring_lines_no_cmd')\n",
+  })
+  assert.throws(() => checkArchitecture('/fixture', bad), (e) => {
+    assert.match(e.message, /src\/composables\/useTauriEvents\.ts/)
+    return true
+  })
 })
 
 test('非 IPC 的 tauri API（window/app/plugin-*）不受限', () => {
@@ -162,11 +170,11 @@ test('覆盖表里的文件按各自阈值判（阈值内通过、超限拒绝�
     'crates/bytetide-core/Cargo.toml': CLEAN_CORE_TOML,
     'crates/bytetide-core/src/lib.rs': CLEAN_CORE_RS,
   }
-  // manager.rs 2750 行在覆盖阈值内、默认 1200 会误报 → 覆盖表生效
-  const within = fixture({ ...base, 'crates/bytetide-core/src/serial/manager.rs': lines(2750) })
+  // manager.rs 在覆盖阈值内（当前 2250）、默认 1200 会误报 → 覆盖表生效
+  const within = fixture({ ...base, 'crates/bytetide-core/src/serial/manager.rs': lines(2250) })
   assert.doesNotThrow(() => checkArchitecture('/fixture', within))
-  const over = fixture({ ...base, 'crates/bytetide-core/src/serial/manager.rs': lines(2751) })
-  assert.throws(() => checkArchitecture('/fixture', over), /2751/)
+  const over = fixture({ ...base, 'crates/bytetide-core/src/serial/manager.rs': lines(2251) })
+  assert.throws(() => checkArchitecture('/fixture', over), /2251/)
 })
 
 test('tests 目录与 *.test.ts 不参与行数限额', () => {

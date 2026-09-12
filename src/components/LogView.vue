@@ -3,7 +3,7 @@ import { computed, inject, nextTick, onBeforeUnmount, onScopeDispose, ref, watch
 import LogScroller from './LogScroller.vue'
 import { useThrottleFn } from '@vueuse/core'
 import { save } from '@tauri-apps/plugin-dialog'
-import { invoke } from '@tauri-apps/api/core'
+import { commands } from '../ipc/commands'
 import { useSessionStore, type Session } from '../stores/session'
 import { HIGHLIGHTER_KEY, buildTestMatcher, hlStyle } from '../composables/useHighlighter'
 import { parseAnsi, stripAnsi, type AnsiStyle } from '../composables/useAnsi'
@@ -215,7 +215,7 @@ async function exportLog() {
   const content =
     s.lines.map((l) => `${l.ts}\t${l.dir === 'rx' ? 'RX' : 'TX'}\t${l.text}`).join('\n') + '\n'
   try {
-    await invoke('export_text_cmd', { path, content })
+    await commands.exportText(path, content)
     toast('日志已导出', 'success', 3000, path)
   } catch (e) {
     toast('日志导出失败', 'error', 4500, String(e))

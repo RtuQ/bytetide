@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+import { commands } from '../ipc/commands'
 
 /**
  * 前端性能哨兵（模块级单例，与 useTheme 同风格）。
@@ -43,14 +43,16 @@ function push(e: DiagEntry) {
   entries.value = [e, ...entries.value].slice(0, MAX_ENTRIES)
   // 旁路落盘：不 await、失败静默。前端卡顿但事件循环仍活时这里能写出去；
   // 与后端 perf-heartbeat.log 互补（前端死透时靠后者证明后端视角正常）。
-  void invoke('append_perf_diag_cmd', {
-    kind: e.kind,
-    sessionId: e.sessionId,
-    lagMs: e.lagMs,
-    batchMs: e.batchMs,
-    lines: e.lines,
-    vis: e.vis,
-  }).catch(() => {})
+  void commands
+    .appendPerfDiagnostic({
+      kind: e.kind,
+      sessionId: e.sessionId,
+      lagMs: e.lagMs,
+      batchMs: e.batchMs,
+      lines: e.lines,
+      vis: e.vis,
+    })
+    .catch(() => {})
 }
 
 export function usePerfWatch() {
@@ -141,14 +143,16 @@ if (import.meta.env.DEV) {
           : typeof document === 'undefined'
             ? 'unknown'
             : 'hidden'
-      void invoke('append_perf_diag_cmd', {
-        kind: 'tick',
-        sessionId: '-',
-        lagMs: gap,
-        batchMs: 0,
-        lines: 0,
-        vis,
-      }).catch(() => {})
+      void commands
+        .appendPerfDiagnostic({
+          kind: 'tick',
+          sessionId: '-',
+          lagMs: gap,
+          batchMs: 0,
+          lines: 0,
+          vis,
+        })
+        .catch(() => {})
     }
   }, 1000)
 }

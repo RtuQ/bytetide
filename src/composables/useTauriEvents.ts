@@ -1,5 +1,3 @@
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore } from '../stores/session'
 import { useAlertStore } from '../stores/alerts'
 import { playAlertBeep } from './useAlertBeep'
@@ -8,15 +6,20 @@ import { recordBatch } from './usePerfWatch'
 import { setupBridgeSync } from './useBridgeSync'
 import { feedParser } from './useParserEngine'
 import { connectionErrorHint, toast } from './useToast'
-import type {
-  AiAnnotation,
-  AlertLevel,
-  ErrorPayload,
-  LogLine,
-  PlotConfig,
-  PortInfo,
-  StatusPayload,
-} from '../types'
+import { commands } from '../ipc/commands'
+import {
+  onAlertHit,
+  onBridgeAnnotationsUpdated,
+  onBridgePlotUpdated,
+  onCaptureActive,
+  onCaptureSaved,
+  onPortChanged,
+  onSessionError,
+  onSessionStatus,
+} from '../ipc/events'
+import type { Unlisten } from '../ipc/client'
+import type { PulledLine } from '../ipc/types'
+import type { AlertLevel } from '../types'
 
 /**
  * 拉模型视图通道：后端 ring 是唯一真相（`no` 游标单调递增、清屏不回退），
@@ -33,15 +36,6 @@ const PULL_PAGE_MAX = 5000
 const PULL_MAX_PAGES = 24
 /** 上滑回补单页行数：比正向拉取小，保证滚动响应即时（可连续触发多页） */
 const BACKFILL_PAGE_MAX = 2000
-
-interface PulledLine {
-  no: number
-  ts: string
-  dir: LogLine['dir']
-  text: string
-  bytes: number[] | null
-  epochMillis: number
-}
 
 /** 正在拉取的会话集合（防同会话并发 drain 导致游标回退覆盖） */
 const draining = new Set<string>()
@@ -64,7 +58,7 @@ export async function requestBackfill(sessionId: string): Promise<void> {
   if (!head || head.rn === undefined || head.no <= s.reconnectNo) return
   // ring 最早行不早于视图头：没有更旧的行可补（省一次 invoke）
   try {
-    const bounds = await invoke<{ firstNo: number }>('ring_bounds_cmd', { sessionId })
+    const bounds = await commands.ringBounds(sessionId)
     if (bounds.firstNo >= head.rn) {
       s.backfillExhausted = true
       return
@@ -76,11 +70,7 @@ export async function requestBackfill(sessionId: string): Promise<void> {
   try {
     let pulled: PulledLine[]
     try {
-      pulled = await invoke<PulledLine[]>('ring_lines_before_cmd', {
-        sessionId,
-        beforeNo: head.rn,
-        max: BACKFILL_PAGE_MAX,
-      })
+      pulled = await commands.ringLinesBefore(sessionId, head.rn, BACKFILL_PAGE_MAX)
     } catch {
       return // 会话已断开/移除，静默
     }
@@ -120,11 +110,7 @@ async function drainSession(sessionId: string): Promise<void> {
       if (s.status !== 'connected' && s.status !== 'connecting') return
       let pulled: PulledLine[]
       try {
-        pulled = await invoke<PulledLine[]>('ring_lines_no_cmd', {
-          sessionId,
-          sinceNo: s.pullNo,
-          max: PULL_PAGE_MAX,
-        })
+        pulled = await commands.ringLinesAfter(sessionId, s.pullNo, PULL_PAGE_MAX)
       } catch {
         return // 无后端（浏览器冒烟）或会话已断开，静默
       }
@@ -151,23 +137,27 @@ async function drainSession(sessionId: string): Promise<void> {
       const handlerMs = performance.now() - t0
       if (import.meta.env.DEV && handlerMs > 5) {
         const s2 = store.sessions[sessionId]
-        void invoke('append_perf_diag_cmd', {
-          kind: 'seg',
-          sessionId,
-          lagMs: Math.min(Date.now() - fresh[fresh.length - 1]!.epochMillis, 4_000_000),
-          batchMs: Math.round(handlerMs * 10) / 10,
-          lines: s2?.lines.length ?? 0,
-          vis: `a=${fresh.length},pg=${page + 1}`,
-        }).catch(() => {})
-        requestAnimationFrame(() => {
-          void invoke('append_perf_diag_cmd', {
-            kind: 'raf',
+        void commands
+          .appendPerfDiagnostic({
+            kind: 'seg',
             sessionId,
-            lagMs: Math.round(performance.now() - t0),
-            batchMs: 0,
+            lagMs: Math.min(Date.now() - fresh[fresh.length - 1]!.epochMillis, 4_000_000),
+            batchMs: Math.round(handlerMs * 10) / 10,
             lines: s2?.lines.length ?? 0,
-            vis: '',
-          }).catch(() => {})
+            vis: `a=${fresh.length},pg=${page + 1}`,
+          })
+          .catch(() => {})
+        requestAnimationFrame(() => {
+          void commands
+            .appendPerfDiagnostic({
+              kind: 'raf',
+              sessionId,
+              lagMs: Math.round(performance.now() - t0),
+              batchMs: 0,
+              lines: s2?.lines.length ?? 0,
+              vis: '',
+            })
+            .catch(() => {})
         })
       }
       if (pulled.length < PULL_PAGE_MAX) return // 拉空，已到最新
@@ -178,9 +168,9 @@ async function drainSession(sessionId: string): Promise<void> {
 }
 
 /** 注册后端事件监听与拉取循环；返回取消函数列表 */
-export async function setupEvents(): Promise<UnlistenFn[]> {
+export async function setupEvents(): Promise<Unlisten[]> {
   const store = useSessionStore()
-  const unlistens: UnlistenFn[] = []
+  const unlistens: Unlisten[] = []
 
   // 拉取循环：所有 live 会话按 PULL_INTERVAL_MS 拉自己的游标 delta。
   // 低频 IPC（每会话 5 次/秒、空转返回空），渲染进程调度不再被事件洪水挤占。
@@ -191,41 +181,38 @@ export async function setupEvents(): Promise<UnlistenFn[]> {
 
   // 会话停止时立即拉最后一波（disconnect 前后端已 flush 完 ring）
   unlistens.push(
-    await listen<StatusPayload>('session-status', (e) => {
-      store.setStatus(e.payload.sessionId, e.payload.status)
-      const session = store.sessions[e.payload.sessionId]
-      if (e.payload.status === 'connected') toast('连接成功', 'success', 2600, session?.config.name)
-      if (e.payload.status === 'disconnected') toast('连接已断开', 'info', 2600, session?.config.name)
-      if (e.payload.status === 'disconnected') void drainSession(e.payload.sessionId)
+    await onSessionStatus((p) => {
+      store.setStatus(p.sessionId, p.status)
+      const session = store.sessions[p.sessionId]
+      if (p.status === 'connected') toast('连接成功', 'success', 2600, session?.config.name)
+      if (p.status === 'disconnected') toast('连接已断开', 'info', 2600, session?.config.name)
+      if (p.status === 'disconnected') void drainSession(p.sessionId)
     }),
   )
   unlistens.push(
-    await listen<ErrorPayload>('session-error', (e) => {
-      store.setError(e.payload.sessionId, e.payload.error)
+    await onSessionError((p) => {
+      store.setError(p.sessionId, p.error)
       // 正常断连（eof「已断开」文案）hint 返回 null：由 disconnected 状态提示负责，不报 error
-      const hint = connectionErrorHint(e.payload.error)
+      const hint = connectionErrorHint(p.error)
       if (hint) toast(hint.title, 'error', 4500, hint.action)
     }),
   )
   unlistens.push(
-    await listen<PortInfo[]>('port-changed', (e) => {
-      store.setPorts(e.payload)
+    await onPortChanged((ports) => {
+      store.setPorts(ports)
     }),
   )
   // REST 桥写回绘图文法（POST /plot-config）：前端即时采纳，绘图面板与曲线同步刷新
   unlistens.push(
-    await listen<{ sessionId: string; config: PlotConfig }>('bridge-plot-updated', (e) => {
-      store.adoptBridgePlot(e.payload.sessionId, e.payload.config)
+    await onBridgePlotUpdated((p) => {
+      store.adoptBridgePlot(p.sessionId, p.config)
     }),
   )
   // AI 批注（POST/DELETE /annotations）：日志行标记与侧栏面板实时刷新
   unlistens.push(
-    await listen<{ sessionId: string; annotations: AiAnnotation[] }>(
-      'bridge-annotations-updated',
-      (e) => {
-        store.applyBridgeAnnotations(e.payload.sessionId, e.payload.annotations)
-      },
-    ),
+    await onBridgeAnnotationsUpdated((p) => {
+      store.applyBridgeAnnotations(p.sessionId, p.annotations)
+    }),
   )
   // 书签/告警历史推送到后端桥镜像（REST /bookmarks、/alerts 只读）
   unlistens.push(...setupBridgeSync())
@@ -234,43 +221,40 @@ export async function setupEvents(): Promise<UnlistenFn[]> {
   const alertStore = useAlertStore()
   alertStore.load()
   unlistens.push(
-    await listen<{ sessionId: string; hits: { ruleId: string; pattern: string; level: string; no: number; ts: string; text: string; at: number }[] }>(
-      'alert-hit',
-      (e) => {
-        for (const h of e.payload.hits) {
-          // ring no -> UI 行号（拉模型下两者不同；rn 由 appendPulled 携带）
-          const s = store.sessions[e.payload.sessionId]
-          const uiNo = s?.lines.find((l) => l.rn === h.no)?.no ?? null
-          const title = `${ALERT_LEVEL_LABEL[h.level] ?? h.level} · ${s?.config.name ?? e.payload.sessionId}`
-          const body = `[${h.pattern}] ${alertSnippet(h.text)}`
-          void ensureNotify(title, body)
-          toast(title, 'warning', 4200, body)
-          if (alertStore.sound) playAlertBeep()
-          alertStore.push({
-            sessionId: e.payload.sessionId,
-            sessionName: s?.config.name ?? '',
-            ruleId: h.ruleId,
-            pattern: h.pattern,
-            level: h.level as AlertLevel,
-            no: uiNo ?? 0,
-            ts: h.ts,
-            text: alertSnippet(h.text),
-            at: h.at,
-          })
-        }
-      },
-    ),
+    await onAlertHit((p) => {
+      for (const h of p.hits) {
+        // ring no -> UI 行号（拉模型下两者不同；rn 由 appendPulled 携带）
+        const s = store.sessions[p.sessionId]
+        const uiNo = s?.lines.find((l) => l.rn === h.no)?.no ?? null
+        const title = `${ALERT_LEVEL_LABEL[h.level] ?? h.level} · ${s?.config.name ?? p.sessionId}`
+        const body = `[${h.pattern}] ${alertSnippet(h.text)}`
+        void ensureNotify(title, body)
+        toast(title, 'warning', 4200, body)
+        if (alertStore.sound) playAlertBeep()
+        alertStore.push({
+          sessionId: p.sessionId,
+          sessionName: s?.config.name ?? '',
+          ruleId: h.ruleId,
+          pattern: h.pattern,
+          level: h.level as AlertLevel,
+          no: uiNo ?? 0,
+          ts: h.ts,
+          text: alertSnippet(h.text),
+          at: h.at,
+        })
+      }
+    }),
   )
 
   // 现场捕获事件（极稀疏）：armed 置「捕获中」呼吸指示，档案落成刷新列表并解除指示
   unlistens.push(
-    await listen<{ sessionId: string; rule: string }>('capture-active', (e) => {
-      store.setCaptureActive(e.payload.sessionId, e.payload.rule)
+    await onCaptureActive((p) => {
+      store.setCaptureActive(p.sessionId, p.rule)
     }),
   )
   unlistens.push(
-    await listen<{ sessionId: string }>('capture-saved', (e) => {
-      store.setCaptureActive(e.payload.sessionId, null)
+    await onCaptureSaved((p) => {
+      store.setCaptureActive(p.sessionId, null)
       toast('现场捕获已保存', 'success', 3200)
       void store.loadCaptures()
     }),

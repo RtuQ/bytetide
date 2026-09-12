@@ -1,11 +1,11 @@
 import { defineStore } from 'pinia'
-import { invoke } from '@tauri-apps/api/core'
+import { commands } from '../ipc/commands'
+import { normalizeIpcError } from '../ipc/errors'
 import {
   DEFAULT_BRIDGE_CONFIG,
   DEFAULT_BRIDGE_RUNTIME,
   type BridgeConfig,
   type BridgeRuntime,
-  type BridgeView,
 } from '../types'
 
 /**
@@ -36,12 +36,12 @@ export const useBridgeStore = defineStore('bridge', {
   actions: {
     async load() {
       try {
-        const view = await invoke<BridgeView>('bridge_get_config_cmd')
+        const view = await commands.getBridgeConfig()
         this.config = view.config
         this.runtime = view.runtime
       } catch (e) {
         // 拉不到后端（浏览器冒烟/后端异常）：回退默认配置，runtime 保持默认，错误入 lastError
-        this.lastError = String(e)
+        this.lastError = normalizeIpcError(e)
         this.config = { ...DEFAULT_BRIDGE_CONFIG }
       }
       this.loaded = true
@@ -54,15 +54,15 @@ export const useBridgeStore = defineStore('bridge', {
     async update(patch: Partial<BridgeConfig> & { confirmRemote?: boolean }) {
       this.busy = true
       try {
-        const view = await invoke<BridgeView>('bridge_set_config_cmd', { patch })
+        const view = await commands.setBridgeConfig(patch)
         this.config = view.config
         this.runtime = view.runtime
         this.lastError = ''
       } catch (e) {
         // 拒绝（替换绑失败/随机源失败等）：lastError 记录，runtime 置错误态便于面板展示
         //（保留原 bound——后端此时仍按旧配置监听，下次 load 与后端重新对齐）
-        this.lastError = String(e)
-        this.runtime = { ...this.runtime, state: 'error', lastError: String(e) }
+        this.lastError = normalizeIpcError(e)
+        this.runtime = { ...this.runtime, state: 'error', lastError: normalizeIpcError(e) }
       } finally {
         this.busy = false
       }
@@ -71,13 +71,13 @@ export const useBridgeStore = defineStore('bridge', {
     async regenToken() {
       this.busy = true
       try {
-        const view = await invoke<BridgeView>('bridge_regen_token_cmd')
+        const view = await commands.regenerateBridgeToken()
         this.config = view.config
         this.runtime = view.runtime
         this.lastError = ''
       } catch (e) {
-        this.lastError = String(e)
-        this.runtime = { ...this.runtime, state: 'error', lastError: String(e) }
+        this.lastError = normalizeIpcError(e)
+        this.runtime = { ...this.runtime, state: 'error', lastError: normalizeIpcError(e) }
       } finally {
         this.busy = false
       }

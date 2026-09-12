@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
-import { invoke } from '@tauri-apps/api/core'
+import { commands } from '../ipc/commands'
+import { ipcErrorDetail } from '../ipc/errors'
 import { markRaw } from 'vue'
 import {
   DEFAULT_ALERT_STATE,
@@ -494,7 +495,7 @@ export const useSessionStore = defineStore('session', {
     async setSignal(id: string, pin: 'dtr' | 'rts', level: boolean) {
       const s = this.sessions[id]
       if (!s || s.kind !== 'live') return
-      await invoke('set_signal_cmd', { sessionId: id, pin, level })
+      await commands.setSignal(id, pin, level)
     },
     /** 运行发送序列：步骤按序执行（发送/延时/信号），循环模式轮间隔后重复。
      *  断开、切换目标会话状态失效或 stopSequence 即中止；同一时刻仅一个序列 */
@@ -601,16 +602,13 @@ export const useSessionStore = defineStore('session', {
     },
     async refreshPorts() {
       try {
-        this.ports = await invoke<PortInfo[]>('list_ports_cmd')
+        this.ports = await commands.listPorts()
       } catch {
         this.ports = []
       }
     },
     async openTab(config: PortConfig) {
-      const id = await invoke<string>('connect_cmd', {
-        config,
-        logSettings: this.logConfig,
-      })
+      const id = await commands.connect(config, this.logConfig)
       const s = makeSession(id, config)
       this.sessions[id] = s
       this.order.push(id)
@@ -633,7 +631,7 @@ export const useSessionStore = defineStore('session', {
     },
     /** 从日志文件离线载入：后端建 ring 会话（o{N}），前端仍灌 UI ring；REST 桥可见 */
     async loadOfflineSession(path: string) {
-      const content = await invoke<string>('read_text_file_cmd', { path })
+      const content = await commands.readTextFile(path)
       const parsed = parseLogFile(content)
       const baseName = path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') || '离线日志'
       const config: PortConfig = {
@@ -644,11 +642,7 @@ export const useSessionStore = defineStore('session', {
         stopBits: '1',
         flowControl: 'none',
       }
-      const id = await invoke<string>('create_offline_session_cmd', {
-        config,
-        path,
-        lines: parsed.lines,
-      })
+      const id = await commands.createOfflineSession(config, path, parsed.lines)
       const s = makeSession(id, config)
       s.kind = 'offline'
       s.status = 'offline'
@@ -660,7 +654,7 @@ export const useSessionStore = defineStore('session', {
     },
     async closeTab(id: string) {
       try {
-        await invoke('disconnect_cmd', { sessionId: id })
+        await commands.disconnect(id)
       } catch {
         /* ignore */
       }
@@ -678,7 +672,7 @@ export const useSessionStore = defineStore('session', {
       if (!s) return
       if (s.kind === 'offline') return
       try {
-        await invoke('disconnect_cmd', { sessionId: id })
+        await commands.disconnect(id)
       } catch {
         /* ignore */
       }
@@ -692,12 +686,9 @@ export const useSessionStore = defineStore('session', {
       const config = s.config
       let newId: string
       try {
-        newId = await invoke<string>('connect_cmd', {
-          config,
-          logSettings: this.logConfig,
-        })
+        newId = await commands.connect(config, this.logConfig)
       } catch (e: unknown) {
-        s.error = String(e instanceof Error ? e.message : e)
+        s.error = ipcErrorDetail(e)
         s.status = 'error'
         return
       }
@@ -747,7 +738,7 @@ export const useSessionStore = defineStore('session', {
     async send(id: string, text: string, mode: 'ascii' | 'hex') {
       const s = this.sessions[id]
       if (!s) return
-      await invoke('send_cmd', { sessionId: id, mode, text })
+      await commands.send(id, mode, text)
       s.sendHistory = [text, ...s.sendHistory.filter((t) => t !== text)].slice(0, 20)
     },
     async clearLog(id: string) {
@@ -773,9 +764,9 @@ export const useSessionStore = defineStore('session', {
       s.aiNotes = []
       // 解码帧同样锚定行号：清空并由解析引擎复位该会话切帧状态（gen+1）
       s.decoded = []
-      invoke('bridge_sync_annotations_cmd', { sessionId: id, annotations: [] }).catch(() => {})
+      commands.syncAnnotations(id, []).catch(() => {})
       try {
-        await invoke('clear_log_cmd', { sessionId: id })
+        await commands.clearLog(id)
       } catch {
         /* ignore */
       }
@@ -785,12 +776,13 @@ export const useSessionStore = defineStore('session', {
     pushLiveRules(id: string) {
       const s = this.sessions[id]
       if (!s || s.kind !== 'live') return
-      invoke('set_live_rules_cmd', {
-        sessionId: id,
-        autoReply: { enabled: s.autoReply.enabled, rules: s.autoReply.rules },
-        alerts: { enabled: s.alerts.enabled, rules: s.alerts.rules },
-        capture: { ...s.capture },
-      }).catch(() => {})
+      commands
+        .setLiveRules(id, {
+          autoReply: { enabled: s.autoReply.enabled, rules: s.autoReply.rules },
+          alerts: { enabled: s.alerts.enabled, rules: s.alerts.rules },
+          capture: { ...s.capture },
+        })
+        .catch(() => {})
     },
     /** 更新现场捕获配置（会话级，重连迁移）：本地合并后整包推送后端读线程 */
     updateCapture(id: string, patch: Partial<CaptureCfg>) {
@@ -802,16 +794,16 @@ export const useSessionStore = defineStore('session', {
     /** 现场档案列表（全局，非会话级）：连接/收到 capture-saved 后刷新 */
     async loadCaptures() {
       try {
-        this.captures = await invoke<CaptureMeta[]>('list_captures_cmd')
+        this.captures = await commands.listCaptures()
       } catch {
         /* 浏览器冒烟无后端：静默 */
       }
     },
     async deleteCapture(path: string) {
       try {
-        await invoke('delete_capture_cmd', { path })
+        await commands.deleteCapture(path)
       } catch (e: unknown) {
-        alert(String(e instanceof Error ? e.message : e))
+        alert(ipcErrorDetail(e))
       }
       await this.loadCaptures()
     },
@@ -824,7 +816,7 @@ export const useSessionStore = defineStore('session', {
     async openLogPath(id: string) {
       let p = ''
       try {
-        p = await invoke<string>('session_log_path_cmd', { sessionId: id })
+        p = await commands.sessionLogPath(id)
       } catch (e) {
         toast('无法打开日志文件', 'error', 4000, String(e))
         return
@@ -846,7 +838,7 @@ export const useSessionStore = defineStore('session', {
       if (!s || s.kind !== 'live') return
       s.recOn = on
       try {
-        await invoke('set_recording_cmd', { sessionId: id, on })
+        await commands.setRecording(id, on)
       } catch (e) {
         s.recOn = !on
         alert(String(e))
@@ -858,7 +850,7 @@ export const useSessionStore = defineStore('session', {
       const s = this.sessions[id]
       if (!s || s.kind !== 'live') return
       try {
-        await invoke('rotate_log_cmd', { sessionId: id })
+        await commands.rotateLog(id)
       } catch (e) {
         alert(String(e))
       }
@@ -1156,7 +1148,7 @@ export const useSessionStore = defineStore('session', {
     _pushPlot(id: string) {
       const s = this.sessions[id]
       if (!s || s.kind !== 'live') return
-      invoke('set_plot_config_cmd', { sessionId: id, config: { ...s.plot } }).catch(() => {})
+      commands.setPlotConfig(id, { ...s.plot }).catch(() => {})
     },
     /** 采纳 REST 桥写回的绘图文法（bridge-annotations-updated 同源通道）：整包替换本地状态。
      *  后端 manager 已持有该配置，无需回推 _pushPlot；缺省字段用默认值回填。 */
@@ -1189,9 +1181,7 @@ export const useSessionStore = defineStore('session', {
     _pushAiNotes(id: string) {
       const s = this.sessions[id]
       if (!s) return
-      invoke('bridge_sync_annotations_cmd', { sessionId: id, annotations: [...s.aiNotes] }).catch(
-        () => {},
-      )
+      commands.syncAnnotations(id, [...s.aiNotes]).catch(() => {})
     },
     setAutoReplyEnabled(id: string, v: boolean) {
       const s = this.sessions[id]

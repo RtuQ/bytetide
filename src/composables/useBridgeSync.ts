@@ -1,8 +1,9 @@
-import { invoke } from '@tauri-apps/api/core'
-import type { UnlistenFn } from '@tauri-apps/api/event'
 import { watch } from 'vue'
 import { useSessionStore, type Session } from '../stores/session'
 import { useAlertStore } from '../stores/alerts'
+import { commands } from '../ipc/commands'
+import type { Unlisten } from '../ipc/client'
+import type { BridgeAlert, BridgeBookmark } from '../ipc/types'
 import type { AlertHit } from '../types'
 
 /** REST 桥侧栏数据推送：书签/告警历史是前端状态，后端桥只持有只读镜像，
@@ -13,31 +14,12 @@ const CLIP = 200
 /** 推送防抖毫秒（书签批量操作/告警风暴时合并为一次） */
 const DEBOUNCE_MS = 300
 
-/** 后端 BridgeBookmark（camelCase 对齐） */
-interface BridgeBookmarkPayload {
-  no: number
-  ts: string
-  text: string
-}
-
-/** 后端 BridgeAlert（camelCase 对齐；sessionName 冗余不推） */
-interface BridgeAlertPayload {
-  id: string
-  ruleId: string
-  pattern: string
-  level: string
-  no: number
-  ts: string
-  text: string
-  at: number
-}
-
 function clip(s: string): string {
   return s.length > CLIP ? s.slice(0, CLIP) : s
 }
 
 /** 书签快照：UI 行号 + 行文本/时间戳（行被环形淘汰后 text 为空，仍保留行号） */
-function bookmarkPayload(s: Session): BridgeBookmarkPayload[] {
+function bookmarkPayload(s: Session): BridgeBookmark[] {
   if (s.bookmarks.length === 0) return []
   const byNo = new Map(s.lines.map((l) => [l.no, l]))
   return s.bookmarks.map((no) => {
@@ -46,7 +28,7 @@ function bookmarkPayload(s: Session): BridgeBookmarkPayload[] {
   })
 }
 
-function alertPayload(sessionId: string, hits: AlertHit[]): BridgeAlertPayload[] {
+function alertPayload(sessionId: string, hits: AlertHit[]): BridgeAlert[] {
   return hits
     .filter((h) => h.sessionId === sessionId)
     .map((h) => ({
@@ -62,10 +44,10 @@ function alertPayload(sessionId: string, hits: AlertHit[]): BridgeAlertPayload[]
 }
 
 /** 注册书签/告警 → 后端镜像的推送 watcher；返回停止函数列表（随 setupEvents 一并注销） */
-export function setupBridgeSync(): UnlistenFn[] {
+export function setupBridgeSync(): Unlisten[] {
   const store = useSessionStore()
   const alerts = useAlertStore()
-  const stops: UnlistenFn[] = []
+  const stops: Unlisten[] = []
 
   let timer: ReturnType<typeof setTimeout> | undefined
   const debounce = (fn: () => void) => {
@@ -75,16 +57,12 @@ export function setupBridgeSync(): UnlistenFn[] {
 
   const pushBookmarks = () => {
     for (const s of Object.values(store.sessions)) {
-      invoke('bridge_sync_bookmarks_cmd', { sessionId: s.id, bookmarks: bookmarkPayload(s) }).catch(
-        () => {},
-      )
+      commands.syncBookmarks(s.id, bookmarkPayload(s)).catch(() => {})
     }
   }
   const pushAlerts = () => {
     for (const id of Object.keys(store.sessions)) {
-      invoke('bridge_sync_alerts_cmd', { sessionId: id, alerts: alertPayload(id, alerts.hits) }).catch(
-        () => {},
-      )
+      commands.syncAlerts(id, alertPayload(id, alerts.hits)).catch(() => {})
     }
   }
 
