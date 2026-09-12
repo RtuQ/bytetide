@@ -198,6 +198,8 @@ pub fn run() {
             commands::captures_dir_cmd,
             commands::read_text_file_cmd,
             commands::create_offline_session_cmd,
+            commands::open_offline_session_cmd,
+            commands::offline_lines_after_cmd,
             commands::bridge_get_config_cmd,
             commands::bridge_set_config_cmd,
             commands::bridge_regen_token_cmd,

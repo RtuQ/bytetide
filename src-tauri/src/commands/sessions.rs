@@ -194,3 +194,76 @@ pub fn create_offline_session_cmd(
         .manager
         .load_offline(config, PathBuf::from(path), lines))
 }
+
+/// 流式打开离线日志会话的结果（plan Task 8 形状：{sessionId,lineCount,firstEpoch,lastEpoch}）。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfflineOpenResult {
+    pub session_id: String,
+    pub line_count: u64,
+    pub first_epoch: u64,
+    pub last_epoch: u64,
+}
+
+/// 流式打开离线日志：core 一次顺序扫描建稀疏索引（每 4096 数据行记字节偏移），
+/// ring 恒空，不经前端全量传输、不把文件灌进 ring。之后用 `offline_lines_after_cmd`
+/// 按页拉取（行 no=文件内第 N 个数据行，1 起；游标语义与 ring 拉取一致）。
+/// 旧路径 `read_text_file_cmd` + `create_offline_session_cmd` 保留一个发布周期。
+#[tauri::command]
+pub fn open_offline_session_cmd(
+    path: String,
+    config: PortConfig,
+    state: State<'_, AppState>,
+) -> Result<OfflineOpenResult, String> {
+    let (session_id, index) = state
+        .manager
+        .load_offline_indexed(config, PathBuf::from(&path))
+        .map_err(|e| e.to_string())?;
+    Ok(OfflineOpenResult {
+        session_id,
+        line_count: index.line_count,
+        first_epoch: index.first_epoch,
+        last_epoch: index.last_epoch,
+    })
+}
+
+/// 离线会话分页拉取：取 `no > sinceNo` 的前 max 行（升序；core 按页直读源文件）。
+/// 与 `ring_lines_no_cmd` 同一游标语义——后端内部就是同一个 manager 查询面。
+#[tauri::command]
+pub fn offline_lines_after_cmd(
+    session_id: String,
+    since_no: u64,
+    max: Option<usize>,
+    state: State<'_, AppState>,
+) -> Result<Vec<bytetide_core::serial::manager::BridgeLine>, String> {
+    state
+        .manager
+        .ring_lines_after_no(&session_id, since_no, max.unwrap_or(5000))
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    //! 命令层形状冻结：OfflineOpenResult 的 serde camelCase 键与 plan Task 8 对齐。
+    use super::OfflineOpenResult;
+
+    #[test]
+    fn offline_open_result_serializes_camel_case() {
+        let v = serde_json::to_value(OfflineOpenResult {
+            session_id: "o1".into(),
+            line_count: 200_001,
+            first_epoch: 1_000,
+            last_epoch: 86_399_999,
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "sessionId": "o1",
+                "lineCount": 200001,
+                "firstEpoch": 1000,
+                "lastEpoch": 86399999
+            })
+        );
+    }
+}

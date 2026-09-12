@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 
 use super::port::{LogLine, PortConfig};
 use super::recording::{default_log_path, next_segment_path};
@@ -17,6 +17,7 @@ use super::rules::{AlertCfg, AutoReplyCfg, CaptureCfg};
 use super::runtime::{session_thread, IngestOrigin};
 use super::transport::host_of;
 use crate::logfmt;
+use crate::offline::{open_offline, OfflineIndex, OfflineReader};
 use crate::sink::EventSink;
 // ring/runtime/transport/共享 DTO 自本文件迁出（Stage 2 Task 2/3）：
 // 旧公开路径经再导出保持一个发布周期
@@ -60,6 +61,9 @@ struct SessionHandle {
     alerts: Arc<RwLock<Vec<BridgeAlert>>>,
     /// AI 批注（REST 写入 + 前端同步的双向镜像）。
     annotations: Arc<RwLock<Vec<BridgeAnnotation>>>,
+    /// 离线分页读取器（`load_offline_indexed` 会话独有）：查询按页直读源文件
+    /// （虚拟 ring，ring 恒空）。live 会话与旧全量 `load_offline` 会话为 None。
+    offline: Option<Arc<Mutex<OfflineReader>>>,
 }
 
 pub struct PortManager {
@@ -176,6 +180,7 @@ impl PortManager {
                 bookmarks: Arc::new(RwLock::new(Vec::new())),
                 alerts: alerts_mirror.clone(),
                 annotations: Arc::new(RwLock::new(Vec::new())),
+                offline: None,
             },
         );
         Ok(id)
@@ -215,9 +220,54 @@ impl PortManager {
                 bookmarks: Arc::new(RwLock::new(Vec::new())),
                 alerts: Arc::new(RwLock::new(Vec::new())),
                 annotations: Arc::new(RwLock::new(Vec::new())),
+                offline: None,
             },
         );
         id
+    }
+
+    /// 创建离线分页会话（Stage 2 Task 8）：core 建稀疏索引（每 4096 数据行记字节
+    /// 偏移）后 ring 保持为空——`ring_lines_after_no`/`ring_lines_before_no`/
+    /// `bridge_snapshot`/`bridge_follow`/`bridge_last_no`/`bridge_stats`/
+    /// `ring_bounds` 对该会话改走 `OfflineReader` 按页直读源文件（虚拟 ring），
+    /// 不把全文件灌进 ring。行 no 语义与现离线会话一致：数据行按序连续分配、
+    /// 首行 no=1（同 `RingBuf::push`）。`log_path` 指向源文件（「打开日志」/导出）。
+    /// 前端不再全量解析推后端；旧 `load_offline`（前端已解析行整包灌 ring）保留。
+    pub fn load_offline_indexed(
+        &self,
+        config: PortConfig,
+        path: PathBuf,
+    ) -> anyhow::Result<(String, OfflineIndex)> {
+        let (index, reader) = open_offline(&path)?;
+        let id = format!("o{}", self.next_id.fetch_add(1, Ordering::Relaxed));
+        let runtime = Arc::new(SessionRuntime::new());
+        // 离线会话无链路：恒 Offline，无错误
+        {
+            let mut st = runtime.state.write();
+            st.status = SessionStatus::Offline;
+            st.last_error = None;
+        }
+        // rx 立即 drop -> 写通道天然断开；send() 对离线会话会先于此处早退报错。
+        let (write_tx, _rx) = mpsc::channel::<super::PortCmd>();
+        self.sessions.write().insert(
+            id.clone(),
+            SessionHandle {
+                config,
+                kind: SessionKind::Offline,
+                stop: Arc::new(AtomicBool::new(false)),
+                write_tx,
+                log_path: Arc::new(RwLock::new(path.clone())),
+                log_base: path,
+                join: None,
+                runtime,
+                plot: Arc::new(RwLock::new(PlotConfig::default())),
+                bookmarks: Arc::new(RwLock::new(Vec::new())),
+                alerts: Arc::new(RwLock::new(Vec::new())),
+                annotations: Arc::new(RwLock::new(Vec::new())),
+                offline: Some(Arc::new(Mutex::new(reader))),
+            },
+        );
+        Ok((id, index))
     }
 
     pub fn disconnect(&self, id: &str) -> anyhow::Result<()> {
@@ -269,7 +319,12 @@ impl PortManager {
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
         if matches!(h.kind, SessionKind::Offline) {
-            h.runtime.ring.clear();
+            match &h.offline {
+                // 分页离线会话：虚拟 ring 清屏=后端镜像遗忘（后续查询全空，
+                // no 游标语义/计数器与 RingBuf::clear 一致；源文件不动）
+                Some(r) => r.lock().clear(),
+                None => h.runtime.ring.clear(),
+            }
             return Ok(());
         }
         h.write_tx
@@ -302,6 +357,7 @@ impl PortManager {
 
     /// 游标补拉：返回 ring 中 `no > since_no` 的行（前端视图拉模型的数据通道）。
     /// `no` 单调递增且 clear 不回退——游标语义下不重不漏；二分定位 O(log n)。
+    /// 离线分页会话改走 `OfflineReader` 页读（no 连续：第 i 行 no=since_no+1+i）。
     pub fn ring_lines_after_no(
         &self,
         id: &str,
@@ -313,11 +369,15 @@ impl PortManager {
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
         let max = max.clamp(1, RING_CAP);
-        Ok(h.runtime.ring.lines_after_no(since_no, max))
+        Ok(match &h.offline {
+            Some(r) => r.lock().lines_after(since_no, max)?,
+            None => h.runtime.ring.lines_after_no(since_no, max),
+        })
     }
 
     /// 往前翻页补拉：返回 ring 中 `no < before_no` 的最新 max 行（升序）。
     /// 与 `ring_lines_after_no` 同一套 clamp 与会话守卫；前端视图缓冲裁掉旧行后回补用。
+    /// 离线分页会话改走 `OfflineReader` 页读（虚拟 ring 的 no<before 最新窗口）。
     pub fn ring_lines_before_no(
         &self,
         id: &str,
@@ -329,21 +389,38 @@ impl PortManager {
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
         let max = max.clamp(1, RING_CAP);
-        Ok(h.runtime.ring.lines_before_no(before_no, max))
+        Ok(match &h.offline {
+            Some(r) => r.lock().lines_before(before_no, max)?,
+            None => h.runtime.ring.lines_before_no(before_no, max),
+        })
     }
 
     /// ring 现存行号边界（空环全 0）：前端判断「上滑还有没有旧行可回补」。
+    /// 离线分页会话返回虚拟 ring 边界（首行 no=1、末行 no=line_count）。
     pub fn ring_bounds(&self, id: &str) -> anyhow::Result<RingBounds> {
         let sessions = self.sessions.read();
         let h = sessions
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
-        let (first_no, last_no, _, _, _, _, size) = h.runtime.ring.bounds();
-        Ok(RingBounds {
-            first_no,
-            last_no,
-            size,
-            ring_cap: RING_CAP,
+        Ok(match &h.offline {
+            Some(r) => {
+                let (first_no, last_no, .., size) = r.lock().bounds();
+                RingBounds {
+                    first_no,
+                    last_no,
+                    size,
+                    ring_cap: RING_CAP,
+                }
+            }
+            None => {
+                let (first_no, last_no, _, _, _, _, size) = h.runtime.ring.bounds();
+                RingBounds {
+                    first_no,
+                    last_no,
+                    size,
+                    ring_cap: RING_CAP,
+                }
+            }
         })
     }
 
@@ -433,7 +510,11 @@ impl PortManager {
                     config: h.config.clone(),
                     status: st.status.as_str().into(),
                     last_error: st.last_error,
-                    line_count: h.runtime.ring.len(),
+                    // 离线分页会话：line_count=文件数据行数（ring 恒空，不能报 0）
+                    line_count: match &h.offline {
+                        Some(r) => r.lock().size(),
+                        None => h.runtime.ring.len(),
+                    },
                     ring_cap: RING_CAP,
                 }
             })
@@ -441,46 +522,69 @@ impl PortManager {
     }
 
     pub fn bridge_snapshot(&self, id: &str) -> Option<Vec<BridgeLine>> {
-        self.sessions
-            .read()
-            .get(id)
-            .map(|h| h.runtime.ring.snapshot())
+        self.sessions.read().get(id).map(|h| match &h.offline {
+            // 离线分页会话：快照=分页走完整个文件（REST 显式调用；io 失败退空）
+            Some(r) => r.lock().snapshot().unwrap_or_default(),
+            None => h.runtime.ring.snapshot(),
+        })
     }
 
     /// 长轮询：返回 `no > since` 的行 + 当前 `lastNo`（无会话返回 None）。
     pub fn bridge_follow(&self, id: &str, since: u64) -> Option<(Vec<BridgeLine>, u64)> {
-        self.sessions
-            .read()
-            .get(id)
-            .map(|h| (h.runtime.ring.lines_since(since), h.runtime.ring.last_no()))
+        self.sessions.read().get(id).map(|h| match &h.offline {
+            Some(r) => r.lock().follow(since).unwrap_or((Vec::new(), 0)),
+            None => (h.runtime.ring.lines_since(since), h.runtime.ring.last_no()),
+        })
     }
 
     /// 交换基线：只取当前 lastNo（不做全量行分配）。
     pub fn bridge_last_no(&self, id: &str) -> Option<u64> {
-        self.sessions
-            .read()
-            .get(id)
-            .map(|h| h.runtime.ring.last_no())
+        self.sessions.read().get(id).map(|h| match &h.offline {
+            Some(r) => r.lock().last_no(),
+            None => h.runtime.ring.last_no(),
+        })
     }
 
     pub fn bridge_stats(&self, id: &str) -> Option<BridgeStats> {
         let s = self.sessions.read();
-        s.get(id).map(|h| {
-            let (first_no, last_no, first_ts, last_ts, first_epoch, last_epoch, size) =
-                h.runtime.ring.bounds();
-            BridgeStats {
-                rx_lines: h.runtime.ring.rx_lines(),
-                tx_lines: h.runtime.ring.tx_lines(),
-                rx_bytes: h.runtime.ring.rx_bytes(),
-                tx_bytes: h.runtime.ring.tx_bytes(),
-                first_no,
-                last_no,
-                first_ts,
-                last_ts,
-                first_epoch,
-                last_epoch,
-                ring_cap: RING_CAP,
-                size,
+        s.get(id).map(|h| match &h.offline {
+            Some(r) => {
+                let r = r.lock();
+                let (first_no, last_no, first_ts, last_ts, first_epoch, last_epoch, size) =
+                    r.bounds();
+                let (rx_lines, tx_lines, rx_bytes, tx_bytes) = r.dir_counters();
+                BridgeStats {
+                    rx_lines,
+                    tx_lines,
+                    rx_bytes,
+                    tx_bytes,
+                    first_no,
+                    last_no,
+                    first_ts,
+                    last_ts,
+                    first_epoch,
+                    last_epoch,
+                    ring_cap: RING_CAP,
+                    size,
+                }
+            }
+            None => {
+                let (first_no, last_no, first_ts, last_ts, first_epoch, last_epoch, size) =
+                    h.runtime.ring.bounds();
+                BridgeStats {
+                    rx_lines: h.runtime.ring.rx_lines(),
+                    tx_lines: h.runtime.ring.tx_lines(),
+                    rx_bytes: h.runtime.ring.rx_bytes(),
+                    tx_bytes: h.runtime.ring.tx_bytes(),
+                    first_no,
+                    last_no,
+                    first_ts,
+                    last_ts,
+                    first_epoch,
+                    last_epoch,
+                    ring_cap: RING_CAP,
+                    size,
+                }
             }
         })
     }
@@ -611,6 +715,7 @@ mod tests {
                 bookmarks: Arc::new(RwLock::new(Vec::new())),
                 alerts: Arc::new(RwLock::new(Vec::new())),
                 annotations: Arc::new(RwLock::new(Vec::new())),
+                offline: None,
             }
         };
         m.sessions.write().insert("s1".into(), mk_handle(false));
@@ -849,4 +954,8 @@ mod tests {
         assert_eq!(snap.status, "offline");
         assert_eq!(snap.last_error, None);
     }
+
+    // 离线分页会话（load_offline_indexed）的虚拟 ring 查询路由端到端用例
+    // 在 offline 模块单测（crate::offline::tests）与 src-tauri/tests/offline_pages.rs：
+    // 本文件只保留编排面，行数受架构检查器 1000 行限额约束。
 }
