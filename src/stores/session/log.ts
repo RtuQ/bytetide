@@ -79,14 +79,16 @@ export function appendPulledInto(
  * 翻页补旧行（方案 B，原 prependBackfill 主体）：视图缓冲裁掉的行若仍在后端
  * ring 窗口内，上滑时回补到头部。沿用被裁前的原行号（no = headNo-k+i 连续延伸
  * ——no 连续性是 SearchPanel O(1) 映射与书签/跳转的前提），不推进
- * lineCounter/pullNo，不动 droppedLines/ringDropped/evictedPending。仅 live
- * 会话且视图头属当前 ring 纪元（head.no > reconnectNo）时可补；返回本次回补的行。
+ * lineCounter/pullNo，不动 droppedLines/ringDropped/evictedPending。
+ * live 会话要求视图头属当前 ring 纪元（head.no > reconnectNo）方可补；
+ * indexed 离线（Task 8 分页）no==rn 恒等、reconnectNo 恒 0，同一守卫天然放行。
+ * 返回本次回补的行。
  */
 export function prependBackfillInto(
   s: Session,
   lines: (RawLogLine & { ringNo: number })[],
 ): LogLine[] {
-  if (s.kind !== 'live' || lines.length === 0) return []
+  if (lines.length === 0) return []
   const head = s.lines[0]
   if (!head || head.no <= s.reconnectNo) return []
   // 防御性去重：调用方以 head.rn 为 beforeNo 拉取，正常不会带回 ≥ 它的行

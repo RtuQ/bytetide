@@ -13,6 +13,7 @@ import type {
   CaptureMeta,
   LiveRulesPayload,
   LogConfig,
+  OfflineOpenResult,
   PerfDiagnostic,
   PlotConfig,
   PortConfig,
@@ -67,6 +68,17 @@ export function createCommands(client: IpcClient) {
     },
     createOfflineSession(config: PortConfig, path: string, lines: RawLogLine[]): Promise<string> {
       return client.invoke<string>('create_offline_session_cmd', { config, path, lines })
+    },
+    /** 流式打开离线日志（Task 8）：core 一次顺序扫描建稀疏索引建会话（ring 恒空、
+     *  不经 WebView 传全量行），返回 {sessionId,lineCount,firstEpoch,lastEpoch} */
+    openOfflineSession(path: string, config: PortConfig): Promise<OfflineOpenResult> {
+      return client.invoke<OfflineOpenResult>('open_offline_session_cmd', { path, config })
+    },
+    /** 离线会话分页拉取：no > sinceNo 的前 max 行（升序；max 缺省 5000，后端钳 RING_CAP） */
+    offlineLinesAfter(sessionId: string, sinceNo: number, max?: number): Promise<PulledLine[]> {
+      return max === undefined
+        ? client.invoke<PulledLine[]>('offline_lines_after_cmd', { sessionId, sinceNo })
+        : client.invoke<PulledLine[]>('offline_lines_after_cmd', { sessionId, sinceNo, max })
     },
     setLiveRules(sessionId: string, rules: LiveRulesPayload): Promise<void> {
       return client.invoke<void>('set_live_rules_cmd', {

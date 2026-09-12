@@ -42,6 +42,10 @@ export const FIELD_POLICY: Record<SessionField, 'carry' | 'resetReconnect' | 're
   rxLines: 'carry',
   txLines: 'carry',
   jump: 'carry',
+  // 离线源文件元信息：描述源文件本身，重连（仅 live 可达）与清屏均不抹
+  offlineLineCount: 'carry',
+  offlineFirstEpoch: 'carry',
+  offlineLastEpoch: 'carry',
   // ---- resetClear：重连迁移 + 清屏归零（绑定当前视图行数据） ----
   lines: 'resetClear',
   lineCounter: 'resetClear',
@@ -99,6 +103,9 @@ export function carrySessionForReconnect(previous: Session, newId: string): Sess
     rxLines: previous.rxLines,
     txLines: previous.txLines,
     jump: previous.jump,
+    offlineLineCount: previous.offlineLineCount,
+    offlineFirstEpoch: previous.offlineFirstEpoch,
+    offlineLastEpoch: previous.offlineLastEpoch,
   }
 }
 

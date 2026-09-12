@@ -52,9 +52,11 @@ export async function requestBackfill(sessionId: string): Promise<void> {
   if (backfilling.has(sessionId)) return
   const store = useSessionStore()
   const s = store.sessions[sessionId]
-  if (!s || s.kind !== 'live' || s.backfillExhausted) return
+  // live 与 indexed 离线（Task 8 分页）会话均可回补——离线的"ring"是整个源文件
+  if (!s || s.backfillExhausted) return
   const head = s.lines[0]
-  // 无可补视图（空/清屏后）或视图头属旧 ring 纪元（重连迁移行，旧 ring 已销毁）
+  // 无可补视图（空/清屏后）、视图头无 rn（本地/旧全量链路行）或属旧 ring 纪元
+  // （重连迁移行，旧 ring 已销毁；离线会话 reconnectNo 恒 0 不受影响）
   if (!head || head.rn === undefined || head.no <= s.reconnectNo) return
   // ring 最早行不早于视图头：没有更旧的行可补（省一次 invoke）
   try {

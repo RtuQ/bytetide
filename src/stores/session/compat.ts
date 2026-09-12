@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia'
 import { commands } from '../../ipc/commands'
 import { ipcErrorDetail } from '../../ipc/errors'
-import { parseLogFile } from '../../composables/useLogParser'
 import { toast } from '../../composables/useToast'
 import { openPath } from '@tauri-apps/plugin-opener'
 import type { DecodedFrame } from '../../types/parser'
@@ -52,6 +51,10 @@ let parserOnClear: ((id: string) => void) | null = null
 export function registerParserOnClear(fn: (id: string) => void) {
   parserOnClear = fn
 }
+
+/** 离线初始装载页大小：与 live 拉取单页批量同规模（useTauriEvents 的
+ *  PULL_PAGE_MAX=5000；不跨模块导入，两处常量各自成文，改一处须想起另一处） */
+const OFFLINE_FIRST_PAGE = 5000
 
 /** 当前运行的停止旗标（模块级：无需响应式，run 循环内轮询；停止走 presets.sleepInterruptible） */
 let seqStopFlag: { stopped: boolean } | null = null
@@ -230,10 +233,16 @@ export const useSessionStore = defineStore('session', {
       this.flushPending(id)
       return id
     },
-    /** 从日志文件离线载入：后端建 ring 会话（o{N}），前端仍灌 UI ring；REST 桥可见 */
+    /** 从日志文件离线载入（Task 8 流式分页）：后端一次顺序扫描建稀疏索引建会话
+     *  （o{N}，ring 恒空、不经 WebView 传全量行），前端再按页拉取初始视口；REST 桥可见。
+     *  初始装载=尾窗（N=OFFLINE_FIRST_PAGE）：与旧全量链路视觉等价（parseLogFile
+     *  截尾 50k + followTail 停在文件尾），文件不超过一页时即 sinceNo=0 全量；
+     *  更早的行走上滑回补（requestBackfill，ring_lines_before 已路由离线分页会话）。
+     *  游标/行号水位先定位到尾窗起点：pullNo 不把跳过的行误计为 ring 覆盖缺口，
+     *  lineCounter 使 UI 行号 no 与文件行号（rn）恒等——回补 no=headNo-k 连续延伸
+     *  正好落在真实文件行号上，翻到文件头时 no=1（否则负行号 + reconnectNo 守卫
+     *  会卡死第二页回补）。 */
     async loadOfflineSession(path: string) {
-      const content = await commands.readTextFile(path)
-      const parsed = parseLogFile(content)
       const baseName = path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') || '离线日志'
       const config: PortConfig = {
         name: baseName,
@@ -243,13 +252,31 @@ export const useSessionStore = defineStore('session', {
         stopBits: '1',
         flowControl: 'none',
       }
-      const id = await commands.createOfflineSession(config, path, parsed.lines)
-      const s = createSession(id, config)
+      const opened = await commands.openOfflineSession(path, config)
+      const s = createSession(opened.sessionId, config)
       s.kind = 'offline'
       s.status = 'offline'
+      s.offlineLineCount = opened.lineCount
+      s.offlineFirstEpoch = opened.firstEpoch
+      s.offlineLastEpoch = opened.lastEpoch
       registerSession(this as unknown as RegistryState, s)
-      if (parsed.lines.length) this.appendLines(id, parsed.lines)
-      return id
+      const startNo = Math.max(0, opened.lineCount - OFFLINE_FIRST_PAGE)
+      s.pullNo = startNo
+      s.lineCounter = startNo
+      this.appendPulled(
+        opened.sessionId,
+        (await commands.offlineLinesAfter(opened.sessionId, startNo, OFFLINE_FIRST_PAGE)).map(
+          (l) => ({
+            ts: l.ts,
+            dir: l.dir,
+            text: l.text,
+            bytes: l.bytes,
+            epochMillis: l.epochMillis,
+            ringNo: l.no,
+          }),
+        ),
+      )
+      return opened.sessionId
     },
     async closeTab(id: string) {
       try {
@@ -413,13 +440,14 @@ export const useSessionStore = defineStore('session', {
       if (!s) return 0
       return takeEvictedFrom(s)
     },
-    /** 翻页补旧行（方案 B）：上滑时把仍在 ring 窗口内的被裁行回补到头部（语义见 log.ts） */
+    /** 翻页补旧行（方案 B）：上滑时把仍在 ring 窗口内的被裁行回补到头部（语义见 log.ts）。
+     *  live 与 indexed 离线（Task 8 分页）会话均可补；可补性由调用方按 rn/bounds 判定 */
     prependBackfill(
       id: string,
       lines: (RawLogLine & { ringNo: number })[],
     ): LogLine[] {
       const s = this.sessions[id]
-      if (!s || s.kind !== 'live' || lines.length === 0) return []
+      if (!s || lines.length === 0) return []
       return prependBackfillInto(s, lines)
     },
     /** 视口锚定补偿（头部插入方向）：返回本批回补的行并清空暂存（未知会话返回 []） */

@@ -123,6 +123,10 @@ function sentinelSession(): Session {
   s.rxLines = 10
   s.txLines = 20
   s.jump = { no: 5, token: 12345 }
+  // 离线源文件元信息（kind=offline 的哨兵顺带覆盖）
+  s.offlineLineCount = 12345
+  s.offlineFirstEpoch = 111
+  s.offlineLastEpoch = 222
   return s
 }
 
@@ -173,6 +177,9 @@ describe('SESSION_FIELDS 与 createSession 工厂', () => {
     expect(s.rxLines).toBe(0)
     expect(s.txLines).toBe(0)
     expect(s.jump).toBeNull()
+    expect(s.offlineLineCount).toBe(0)
+    expect(s.offlineFirstEpoch).toBe(0)
+    expect(s.offlineLastEpoch).toBe(0)
   })
 
   it('工厂隔离性：rules 数组等嵌套引用各自独立，不共享常量', () => {
@@ -293,6 +300,10 @@ describe('carrySessionForReconnect（重连迁移）', () => {
       rxLines: 10,
       txLines: 20,
       jump: { no: 5, token: 12345 },
+      // carry：离线源文件元信息随迁（离线会话实际不可达重连，策略穷举仍要求一致）
+      offlineLineCount: 12345,
+      offlineFirstEpoch: 111,
+      offlineLastEpoch: 222,
     }
     expect(carried).toEqual(expected)
   })
@@ -394,6 +405,10 @@ describe('clearSessionData（清屏纪律）', () => {
       rxLines: 10,
       txLines: 20,
       jump: { no: 5, token: 12345 },
+      // carry 保留：离线源文件元信息描述源文件本身，清屏不抹
+      offlineLineCount: 12345,
+      offlineFirstEpoch: 111,
+      offlineLastEpoch: 222,
       kind: 'offline',
       config: before.config,
     }

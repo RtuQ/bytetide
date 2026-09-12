@@ -619,10 +619,18 @@ describe('prependBackfill 翻页补旧行（方案 B）', () => {
     // 旧 ring 纪元：reconnectNo 抬到当前 lineCounter 后头部不可补
     store.sessions[id]!.reconnectNo = store.sessions[id]!.lineCounter
     expect(store.prependBackfill(id, [mkPulledBf(0)])).toEqual([])
-    // offline 会话不可补（离线行无 rn，无 ring 翻页语义）
+    // indexed 离线会话（Task 8 分页）可回补：no==rn 对齐下按原行号插到头部
     const off = store.createLocalSession('bf-3-off', CFG)
     store.sessions[off]!.kind = 'offline'
-    expect(store.prependBackfill(off, [mkPulledBf(1)])).toEqual([])
+    // 模拟流式打开的尾窗定位：no/rn 从 5 起（行号=文件行号）
+    store.sessions[off]!.lineCounter = 4
+    store.sessions[off]!.pullNo = 4
+    store.appendPulled(off, [mkPulledBf(5), mkPulledBf(6)])
+    expect(store.sessions[off]!.lines.map((l) => l.no)).toEqual([5, 6])
+    const backOff = store.prependBackfill(off, [mkPulledBf(3), mkPulledBf(4)])
+    expect(backOff.map((l) => l.no)).toEqual([3, 4])
+    expect(backOff.map((l) => l.rn)).toEqual([3, 4])
+    expect(store.sessions[off]!.lines.map((l) => l.rn)).toEqual([3, 4, 5, 6])
   })
 
   it('clearLog 归零 backfill 状态；重连不迁移（carried 用 makeSession 默认值）', async () => {
@@ -639,6 +647,90 @@ describe('prependBackfill 翻页补旧行（方案 B）', () => {
     expect(s.backfillPending).toEqual([])
     expect(s.backfillExhausted).toBe(false)
     expect(s.reconnectNo).toBe(0)
+  })
+})
+
+describe('loadOfflineSession 流式分页打开（Task 8）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    invokeMock.mockReset()
+  })
+
+  /** offline_lines_after_cmd 返回的 BridgeLine 形状（no=文件内第 N 数据行，1 起连续） */
+  function offlinePage(from: number, to: number) {
+    return Array.from({ length: to - from + 1 }, (_, i) => ({
+      no: from + i,
+      ts: '00:00:01.000',
+      dir: 'rx',
+      text: `l${from + i}`,
+      bytes: null,
+      epochMillis: 1000 + from + i,
+    }))
+  }
+
+  it('indexed 打开 → 初始页入表 → lineCount/firstEpoch/lastEpoch 写入会话（小文件 sinceNo=0 全量）', async () => {
+    invokeMock.mockImplementation(async (...a: unknown[]) => {
+      const cmd = a[0] as string
+      if (cmd === 'open_offline_session_cmd') {
+        return { sessionId: 'o1', lineCount: 3, firstEpoch: 1000, lastEpoch: 3000 }
+      }
+      if (cmd === 'offline_lines_after_cmd') return offlinePage(1, 3)
+      return null
+    })
+    const store = useSessionStore()
+    const id = await store.loadOfflineSession('/tmp/demo.log')
+    expect(id).toBe('o1')
+    expect(invokeMock).toHaveBeenCalledWith('open_offline_session_cmd', {
+      path: '/tmp/demo.log',
+      config: { name: 'demo', baudRate: 0, dataBits: 8, parity: 'none', stopBits: '1', flowControl: 'none' },
+    })
+    expect(invokeMock).toHaveBeenCalledWith('offline_lines_after_cmd', {
+      sessionId: 'o1',
+      sinceNo: 0,
+      max: 5000,
+    })
+    const s = store.sessions['o1']!
+    expect(s.kind).toBe('offline')
+    expect(s.status).toBe('offline')
+    expect(s.offlineLineCount).toBe(3)
+    expect(s.offlineFirstEpoch).toBe(1000)
+    expect(s.offlineLastEpoch).toBe(3000)
+    // 经 appendPulled 入表：no==rn（行号=文件行号），游标推进到文件尾
+    expect(s.lines.map((l) => l.no)).toEqual([1, 2, 3])
+    expect(s.lines.map((l) => l.rn)).toEqual([1, 2, 3])
+    expect(s.pullNo).toBe(3)
+    expect(s.ringDropped).toBe(0)
+    expect(s.droppedLines).toBe(0)
+  })
+
+  it('大文件尾窗定位：首拉 sinceNo=lineCount-5000，游标/行号水位预置不算 ring 缺口', async () => {
+    invokeMock.mockImplementation(async (...a: unknown[]) => {
+      const cmd = a[0] as string
+      const args = a[1] as { sinceNo?: number }
+      if (cmd === 'open_offline_session_cmd') {
+        return { sessionId: 'o2', lineCount: 12000, firstEpoch: 1, lastEpoch: 2 }
+      }
+      if (cmd === 'offline_lines_after_cmd') return offlinePage(args.sinceNo! + 1, 12000)
+      return null
+    })
+    const store = useSessionStore()
+    await store.loadOfflineSession('/tmp/big.log')
+    expect(invokeMock).toHaveBeenCalledWith('offline_lines_after_cmd', {
+      sessionId: 'o2',
+      sinceNo: 7000,
+      max: 5000,
+    })
+    const s = store.sessions['o2']!
+    expect(s.lines).toHaveLength(5000)
+    expect(s.lines[0]!.no).toBe(7001)
+    expect(s.lines[0]!.rn).toBe(7001)
+    expect(s.pullNo).toBe(12000)
+    expect(s.lineCounter).toBe(12000)
+    // 尾窗之前的 7000 行是定位跳过、不是 ring 覆盖缺口（走上滑回补取回）
+    expect(s.ringDropped).toBe(0)
+    expect(s.droppedLines).toBe(0)
+    // followTail 默认开：装载后视口与旧全量链路等价地停在文件尾部
+    expect(s.followTail).toBe(true)
   })
 })
 

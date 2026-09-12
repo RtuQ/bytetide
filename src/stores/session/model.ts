@@ -93,6 +93,12 @@ export interface Session {
   rxLines: number
   txLines: number
   jump: { no: number; token: number } | null
+  /** 离线源文件元信息（Task 8 流式打开写入）：数据行数与首/末行 epoch 毫秒。
+   *  live 会话恒 0；描述源文件本身（清屏/重连均不抹）。现状无 UI 消费者
+   *  （旧全量链路 parseLogFile 的 total 直接丢弃），预留给状态栏/对比视图 */
+  offlineLineCount: number
+  offlineFirstEpoch: number
+  offlineLastEpoch: number
 }
 
 /**
@@ -140,6 +146,9 @@ export const SESSION_FIELDS = [
   'rxLines',
   'txLines',
   'jump',
+  'offlineLineCount',
+  'offlineFirstEpoch',
+  'offlineLastEpoch',
 ] as const
 
 export type SessionField = (typeof SESSION_FIELDS)[number]
@@ -187,5 +196,8 @@ export function createSession(id: string, config: PortConfig): Session {
     rxLines: 0,
     txLines: 0,
     jump: null,
+    offlineLineCount: 0,
+    offlineFirstEpoch: 0,
+    offlineLastEpoch: 0,
   }
 }

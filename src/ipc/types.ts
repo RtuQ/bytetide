@@ -48,7 +48,8 @@ export interface RingBounds {
   ringCap: number
 }
 
-/** （Task 8 预留）离线会话按页打开后的元信息；当前 createOfflineSession 仍返回纯 id */
+/** 流式打开离线日志（Task 8）的返回：core 一次顺序扫描建稀疏索引建会话（ring 恒空），
+ *  行经 offlineLinesAfter 分页拉取（no=文件内第 N 数据行，1 起连续）；epoch 为毫秒 */
 export interface OfflineOpenResult {
   sessionId: string
   lineCount: number

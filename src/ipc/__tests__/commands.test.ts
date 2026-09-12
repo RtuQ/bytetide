@@ -124,7 +124,7 @@ describe('commands 适配层：命令字符串与 camelCase 参数键', () => {
     expect(out).toEqual(bounds)
   })
 
-  it('readTextFile / createOfflineSession：离线载入两步', async () => {
+  it('readTextFile / createOfflineSession：离线载入两步（旧链路，保留一个发布周期）', async () => {
     const { client, calls } = makeFakeClient(['TSV 内容', 'o1'])
     const c = createCommands(client)
     const config = { name: 'demo', baudRate: 0, dataBits: 8, parity: 'none', stopBits: '1', flowControl: 'none' }
@@ -133,6 +133,25 @@ describe('commands 适配层：命令字符串与 camelCase 参数键', () => {
     expect(lastCall(calls)).toEqual({ command: 'read_text_file_cmd', args: { path: '/tmp/a.log' } })
     expect(await c.createOfflineSession(config as never, '/tmp/a.log', lines as never)).toBe('o1')
     expect(lastCall(calls)).toEqual({ command: 'create_offline_session_cmd', args: { config, path: '/tmp/a.log', lines } })
+  })
+
+  it('openOfflineSession：映射 open_offline_session_cmd（path/config），OfflineOpenResult 透传', async () => {
+    const opened = { sessionId: 'o1', lineCount: 200001, firstEpoch: 1000, lastEpoch: 86399999 }
+    const { client, calls } = makeFakeClient([opened])
+    const config = { name: 'demo', baudRate: 0, dataBits: 8, parity: 'none', stopBits: '1', flowControl: 'none' }
+    const out = await createCommands(client).openOfflineSession('/tmp/a.log', config as never)
+    expect(lastCall(calls)).toEqual({ command: 'open_offline_session_cmd', args: { path: '/tmp/a.log', config } })
+    expect(out).toEqual(opened)
+  })
+
+  it('offlineLinesAfter：映射 offline_lines_after_cmd（sessionId/sinceNo/max）；max 缺省时不传键', async () => {
+    const lines = [pulledLine(1), pulledLine(2)]
+    const { client, calls } = makeFakeClient([lines, lines])
+    const c = createCommands(client)
+    expect(await c.offlineLinesAfter('o1', 7000, 5000)).toEqual(lines)
+    expect(lastCall(calls)).toEqual({ command: 'offline_lines_after_cmd', args: { sessionId: 'o1', sinceNo: 7000, max: 5000 } })
+    await c.offlineLinesAfter('o1', 0)
+    expect(lastCall(calls)).toEqual({ command: 'offline_lines_after_cmd', args: { sessionId: 'o1', sinceNo: 0 } })
   })
 
   it('listCaptures / deleteCapture / capturesDir：现场档案三命令', async () => {

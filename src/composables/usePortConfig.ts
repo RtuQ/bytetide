@@ -65,9 +65,11 @@ export function useOpenLog() {
       if (!path) return
       const store = useSessionStore()
       const id = await store.loadOfflineSession(path)
-      // 离线会话不走拉取循环（行经 appendLines 一次入表），解码引擎在此喂数
+      // 离线会话不走拉取循环（初始尾窗经 appendPulled 一次入表），解码引擎在此喂数：
+      // 只喂最近 2000 行（Task 8——行本身经 offline_lines_after_cmd 分页取得，
+      // 不再 readTextFile 全文；对齐引擎 setEnabled 回溯的 2000 行惯例）
       const s = store.sessions[id]
-      if (s) feedParser(id, s.lines)
+      if (s) feedParser(id, s.lines.slice(-2000))
     } catch (e: unknown) {
       alert(String(e instanceof Error ? e.message : e))
     } finally {

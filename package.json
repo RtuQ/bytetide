@@ -16,6 +16,7 @@
     "test:tauri-config": "node --test scripts/check-tauri-config.test.mjs",
     "check:architecture": "node scripts/check-architecture.mjs",
     "test:architecture": "node --test scripts/check-architecture.test.mjs",
+    "probe:offline": "node scripts/probe-offline-1g.mjs",
     "commit": "cz"
   },
   "config": {
