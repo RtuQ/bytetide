@@ -59,14 +59,12 @@ const IPC_IMPORT = /from\s+['"]@tauri-apps\/api\/(core|event)['"]/
 // 规则 3：文件行数限额
 // ---------------------------------------------------------------------------
 const DEFAULT_MAX_LINES = 1200
-// 显式覆盖 = 当前现实基线（后续任务逐级收紧，路径为 / 分隔的相对路径）：
-// - crates/bytetide-core/src/serial/manager.rs 2750 → T2 后 2250 → T3 收到 1000（现 852 行，plan 目标达成）
-// - src-tauri/src/bridge.rs 4300 → Task 4 拆为模块后此条目删除/收紧到 1000
-// - src/stores/session.ts 1450 → Task 6 收到 700
+// 显式覆盖 = 拆分任务尚未达标的过渡基线（路径为 / 分隔的相对路径）。
+// 收紧历史：manager.rs 2750→2250(T2)→1000(T3，现 852 行)；bridge.rs 4300 已由
+// T4 拆为 bridge/ 模块（各文件 ≤1000，条目删除）；session.ts 1450 已由 T6 拆为
+// session/ 模块（9 行门面 + compat 680，条目删除）。
 const MAX_LINES_OVERRIDES = {
   'crates/bytetide-core/src/serial/manager.rs': 1000,
-  'src-tauri/src/bridge.rs': 4300,
-  'src/stores/session.ts': 1450,
 }
 
 /** wc -l 语义的行数（末尾有换行不打虚行；无换行的末行也计 1）。 */
