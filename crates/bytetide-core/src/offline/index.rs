@@ -241,4 +241,56 @@ mod tests {
         assert!(page[1].text.contains('\u{FFFD}'));
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn open_offline_consumes_golden_tsv_fixture() {
+        // 共享黄金样本 testdata/protocol/tsv-v1.log（TS useLogParser.test.ts 同源）：
+        // 流式索引/分页全链路，含 # 注释头、坏行、epoch 回退、lossy U+FFFD。
+        use crate::offline::test_support::TSV_FIXTURE;
+        let dir = temp_dir("idx-fixture");
+        // LF 原样（仓库 .gitattributes eol=lf，include_str! 拿到 LF 版本）
+        let path = dir.join("golden.log");
+        std::fs::write(&path, TSV_FIXTURE).unwrap();
+        let (index, mut reader) = open_offline(&path).unwrap();
+        assert_eq!(index.line_count, 9);
+        assert_eq!((index.first_epoch, index.last_epoch), (1000, 8250));
+        assert_eq!(reader.error_count(), 1);
+        let page = reader.read_page(0, 100).unwrap();
+        assert_eq!(page.len(), 9);
+        assert_eq!(page[5].epoch_millis, 5); // garbage-ts → 行序回退
+        assert_eq!(page[4].text, "text may contain\ta tab here");
+        assert!(page[6].text.contains('\u{FFFD}'));
+        assert!(page[6].bytes.is_none()); // 有损 TSV 落盘无原始字节
+                                          // CRLF 变体（运行时 LF→CRLF 全文转换，对齐 TS 黄金 CRLF 用例）：逐行一致
+        let crlf_path = dir.join("golden-crlf.log");
+        std::fs::write(&crlf_path, TSV_FIXTURE.replace('\n', "\r\n")).unwrap();
+        let (crlf_index, mut crlf_reader) = open_offline(&crlf_path).unwrap();
+        assert_eq!(crlf_index.line_count, 9);
+        assert_eq!(
+            (crlf_index.first_epoch, crlf_index.last_epoch),
+            (1000, 8250)
+        );
+        assert_eq!(crlf_reader.error_count(), 1);
+        let crlf_page = crlf_reader.read_page(0, 100).unwrap();
+        assert_eq!(crlf_page.len(), page.len());
+        for (a, b) in page.iter().zip(&crlf_page) {
+            assert_eq!(
+                (
+                    a.ts.as_str(),
+                    a.dir,
+                    a.text.as_str(),
+                    a.bytes.clone(),
+                    a.epoch_millis
+                ),
+                (
+                    b.ts.as_str(),
+                    b.dir,
+                    b.text.as_str(),
+                    b.bytes.clone(),
+                    b.epoch_millis
+                )
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

@@ -828,109 +828,203 @@ mod tests {
         assert!(build_filter(&bad).is_err());
     }
 
-    // ---------------- line_bytes ----------------
+    // ---------------- line_bytes（黄金样本 plot-v1.json lineBytesSamples） ----------------
 
-    #[test]
-    fn line_bytes_borrows_raw_or_falls_back_to_text() {
-        let with_bytes = mk_line(1, Dir::Rx, "x", Some(vec![0xAA, 0x55]), 0);
-        assert_eq!(&*line_bytes(&with_bytes), &[0xAA, 0x55]);
-        let no_bytes = mk_line(2, Dir::Rx, "abc", None, 0);
-        assert_eq!(&*line_bytes(&no_bytes), b"abc");
+    /// 共享黄金样本顶层（serde 白名单取键，未知键如 `$about`/`version`/`declSample`
+    /// 自动忽略）。向量与期望值以 fixture 为准，与 TS 侧
+    /// `usePlotParser.test.ts` / `lineBytes.test.ts` 同源——任一侧实现漂移即红。
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PlotFixture {
+        plot_cases: FxPlotCases,
+        value_boundaries: FxValueBoundaries,
+        checksum_vectors: FxChecksumVectors,
+        line_bytes_samples: FxLineBytesSamples,
     }
 
-    // ---------------- parse_frames：三个 golden case + 边界 ----------------
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FxPlotCases {
+        groups: Vec<FxPlotGroup>,
+    }
 
-    #[test]
-    fn parse_frames_binary_head_two_channels_big_unsigned() {
-        // AA 55 | 01 00 | 02 00   -> ch1=0x0100=256, ch2=0x0200=512
-        let mut cfg = mk_plot();
-        cfg.source = "binary".into();
-        cfg.frame_head = "AA55".into();
-        cfg.checksum = "none".into();
-        cfg.channels = 2;
-        cfg.bytes_per_channel = 2;
-        cfg.endian = "big".into();
-        cfg.signed = false;
-        let line = mk_line(
-            1,
-            Dir::Rx,
-            "",
-            Some(vec![0xAA, 0x55, 0x01, 0x00, 0x02, 0x00]),
-            1000,
-        );
-        let page = parse_frames(&cfg, &[line], 500);
-        assert_eq!(page.frame_count, 1);
-        assert_eq!(page.frames.len(), 1);
-        assert_eq!(page.frames[0].values, vec![256.0, 512.0]);
-        assert_eq!(page.frames[0].raw_hex, "AA 55 01 00 02 00");
-        assert!(page.last_error.is_empty());
+    #[derive(Deserialize)]
+    struct FxPlotGroup {
+        name: String,
+        /// 直接反序列化进 `PlotConfig`（camelCase 对齐，键全集在 fixture 中）。
+        config: serde_json::Value,
+        cases: Vec<FxPlotCase>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FxPlotCase {
+        name: String,
+        lines: Vec<FxPlotLine>,
+        expected: FxPlotExpected,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FxPlotLine {
+        dir: String,
+        text: String,
+        bytes: Option<Vec<u8>>,
+        epoch_millis: u64,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FxPlotExpected {
+        frame_count: u32,
+        points: Vec<FxPlotPoint>,
+        last_error: String,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FxPlotPoint {
+        values: Vec<f64>,
+        raw_hex: String,
+        epoch_millis: u64,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FxValueBoundaries {
+        cases: Vec<FxValueCase>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FxValueCase {
+        bytes: Vec<u8>,
+        offset: usize,
+        len: usize,
+        endian: String,
+        signed: bool,
+        expected: f64,
+    }
+
+    #[derive(Deserialize)]
+    struct FxChecksumVectors {
+        sum: FxCkVector,
+        xor: FxCkVector,
+        none: FxCkVector,
+    }
+
+    #[derive(Deserialize)]
+    struct FxCkVector {
+        bytes: Vec<u8>,
+        expected: u8,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FxLineBytesSamples {
+        cases: Vec<FxLineBytesCase>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FxLineBytesCase {
+        name: String,
+        source: String,
+        line: FxLineBytesLine,
+        expected_bytes: Vec<u8>,
+    }
+
+    #[derive(Deserialize)]
+    struct FxLineBytesLine {
+        text: String,
+        bytes: Option<Vec<u8>>,
+    }
+
+    fn plot_fixture() -> PlotFixture {
+        // 相对本文件 4 级上跳到仓库根（routes → bridge → src → src-tauri → 根）
+        serde_json::from_str(include_str!("../../../../testdata/protocol/plot-v1.json"))
+            .expect("plot-v1.json fixture parses")
     }
 
     #[test]
-    fn parse_frames_binary_head_signed_sum_checksum() {
-        // FF | 80 | 80   head=FF, data=0x80(signed -> -128), cs=sum(0x80)=0x80
-        let mut cfg = mk_plot();
-        cfg.source = "binary".into();
-        cfg.frame_head = "FF".into();
-        cfg.checksum = "sum".into();
-        cfg.channels = 1;
-        cfg.bytes_per_channel = 1;
-        cfg.endian = "big".into();
-        cfg.signed = true;
-        let line = mk_line(1, Dir::Rx, "", Some(vec![0xFF, 0x80, 0x80]), 1000);
-        let page = parse_frames(&cfg, &[line], 500);
-        assert_eq!(page.frame_count, 1);
-        assert_eq!(page.frames[0].values, vec![-128.0]);
-        assert_eq!(page.frames[0].raw_hex, "FF 80 80");
-        assert!(page.last_error.is_empty());
-
-        // 校验错 -> 拒收，0 帧，last_error 记录失配
-        let bad = mk_line(2, Dir::Rx, "", Some(vec![0xFF, 0x80, 0x00]), 2000);
-        let p2 = parse_frames(&cfg, &[bad], 500);
-        assert_eq!(p2.frame_count, 0);
-        assert!(p2.frames.is_empty());
-        assert!(p2.last_error.contains("checksum mismatch"));
+    fn line_bytes_matches_fixture_binary_samples() {
+        let fx = plot_fixture();
+        for (i, c) in fx.line_bytes_samples.cases.iter().enumerate() {
+            if c.source != "binary" {
+                // ascii-hex 抽取向量留在 TS 侧：Rust `line_frame_bytes` 按下标配对、
+                // 宽松度与 TS 正则扫描不同；两侧一致的部分经 plotCases ascii-hex
+                // 组（紧凑 hex 文本）覆盖
+                continue;
+            }
+            // fixture 语义：空 bytes 数组视同缺失；Rust `None` 即缺失
+            let bytes = c.line.bytes.clone().filter(|b| !b.is_empty());
+            let l = mk_line(1, Dir::Rx, &c.line.text, bytes, 0);
+            assert_eq!(
+                &*line_bytes(&l),
+                &c.expected_bytes[..],
+                "lineBytesSamples[{i}] {}",
+                c.name
+            );
+        }
     }
 
-    #[test]
-    fn parse_frames_ascii_hex_tail_little() {
-        // 文本 "AA550DBB660D" 经 ascii-hex -> [AA,55,0D,BB,66,0D]
-        // tail=0D，2ch×1B 小端无校验 -> 帧1[170,85] 帧2[187,102]
-        let mut cfg = mk_plot();
-        cfg.source = "ascii-hex".into();
-        cfg.frame_tail = "0D".into();
-        cfg.checksum = "none".into();
-        cfg.channels = 2;
-        cfg.bytes_per_channel = 1;
-        cfg.endian = "little".into();
-        cfg.signed = false;
-        let line = mk_line(7, Dir::Rx, "AA550DBB660D", None, 3000);
-        let page = parse_frames(&cfg, &[line], 500);
-        assert_eq!(page.frame_count, 2);
-        assert_eq!(page.frames[0].values, vec![170.0, 85.0]);
-        assert_eq!(page.frames[0].raw_hex, "AA 55 0D");
-        assert_eq!(page.frames[1].values, vec![187.0, 102.0]);
-        assert_eq!(page.frames[1].raw_hex, "BB 66 0D");
-    }
+    // ---------------- parse_frames：共享黄金样本（plot-v1.json plotCases） ----------------
 
     #[test]
-    fn parse_frames_head_mismatch_advances_one_byte() {
-        // 前导垃圾 00，随后真帧 AA 55 01 00 02 00 -> 扫描失配按 1 字节前进
-        let mut cfg = mk_plot();
-        cfg.frame_head = "AA55".into();
-        cfg.channels = 2;
-        cfg.bytes_per_channel = 2;
-        cfg.endian = "big".into();
-        let line = mk_line(
-            1,
-            Dir::Rx,
-            "",
-            Some(vec![0x00, 0xAA, 0x55, 0x01, 0x00, 0x02, 0x00]),
-            1000,
-        );
-        let page = parse_frames(&cfg, &[line], 500);
-        assert_eq!(page.frame_count, 1);
-        assert_eq!(page.frames[0].raw_hex, "AA 55 01 00 02 00");
+    fn parse_frames_matches_plot_fixture_golden_cases() {
+        let fx = plot_fixture();
+        for group in &fx.plot_cases.groups {
+            let cfg: PlotConfig = serde_json::from_value(group.config.clone())
+                .unwrap_or_else(|e| panic!("{} config: {e}", group.name));
+            for (ci, case) in group.cases.iter().enumerate() {
+                // points < frameCount 的用例编码了 TS 侧 maxPoints 窗口裁剪（前端
+                // 消费者行为）；parse_frames 逐帧产出，页 limit 截断另测
+                // （parse_frames_limit_truncates）——该类用例 Rust 不适用
+                if case.expected.points.len() as u32 != case.expected.frame_count {
+                    continue;
+                }
+                let lines: Vec<BridgeLine> = case
+                    .lines
+                    .iter()
+                    .enumerate()
+                    .map(|(li, l)| {
+                        let dir = if l.dir == "tx" { Dir::Tx } else { Dir::Rx };
+                        mk_line(
+                            (li + 1) as u64,
+                            dir,
+                            &l.text,
+                            l.bytes.clone(),
+                            l.epoch_millis,
+                        )
+                    })
+                    .collect();
+                let page = parse_frames(&cfg, &lines, 500);
+                let tag = format!("plotCases {}[{}] {}", group.name, ci, case.name);
+                assert_eq!(page.frame_count, case.expected.frame_count, "{tag}");
+                assert_eq!(page.frames.len(), case.expected.points.len(), "{tag}");
+                for (pi, pt) in case.expected.points.iter().enumerate() {
+                    assert_eq!(page.frames[pi].values, pt.values, "{tag} point[{pi}]");
+                    assert_eq!(page.frames[pi].raw_hex, pt.raw_hex, "{tag} point[{pi}]");
+                    assert_eq!(
+                        page.frames[pi].epoch_millis, pt.epoch_millis,
+                        "{tag} point[{pi}]"
+                    );
+                }
+                if case.expected.frame_count > 0 {
+                    assert!(page.last_error.is_empty(), "{tag}: {:?}", page.last_error);
+                } else if !case.expected.last_error.is_empty() {
+                    assert_eq!(page.last_error, case.expected.last_error, "{tag}");
+                } else {
+                    // 0 帧且 fixture lastError 为空（TS 静默跳帧语义）；Rust 记
+                    // checksum mismatch 但同样不产出帧（plotCases.$about 的跨语言差异项）
+                    assert!(
+                        page.last_error.is_empty() || page.last_error.contains("checksum mismatch"),
+                        "{tag}: {:?}",
+                        page.last_error
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -970,14 +1064,41 @@ mod tests {
         assert_eq!(page.last_error, "need frame head or tail");
     }
 
-    // ---------------- parse_value ----------------
+    // ---------------- parse_value / 校验和（黄金样本向量） ----------------
 
     #[test]
-    fn parse_value_endian_and_signed_boundary() {
-        assert_eq!(parse_value(&[0x01, 0x00], 0, 2, "big", false), 256.0);
-        assert_eq!(parse_value(&[0x01, 0x00], 0, 2, "little", false), 1.0);
-        assert_eq!(parse_value(&[0x80], 0, 1, "big", true), -128.0);
-        assert_eq!(parse_value(&[0x7F], 0, 1, "big", true), 127.0);
-        assert_eq!(parse_value(&[0x80, 0x00], 0, 2, "big", true), -32768.0);
+    fn parse_value_matches_fixture_value_boundaries() {
+        let fx = plot_fixture();
+        for (i, c) in fx.value_boundaries.cases.iter().enumerate() {
+            assert_eq!(
+                parse_value(&c.bytes, c.offset, c.len, &c.endian, c.signed),
+                c.expected,
+                "valueBoundaries[{i}] (endian={}, signed={}, len={})",
+                c.endian,
+                c.signed,
+                c.len
+            );
+        }
+    }
+
+    #[test]
+    fn checksum_vectors_match_fixture() {
+        let fx = plot_fixture();
+        let v = &fx.checksum_vectors;
+        assert_eq!(
+            Checksum::from_str("sum").compute(&v.sum.bytes),
+            v.sum.expected,
+            "sum vector"
+        );
+        assert_eq!(
+            Checksum::from_str("xor").compute(&v.xor.bytes),
+            v.xor.expected,
+            "xor vector"
+        );
+        assert_eq!(
+            Checksum::from_str("none").compute(&v.none.bytes),
+            v.none.expected,
+            "none vector"
+        );
     }
 }

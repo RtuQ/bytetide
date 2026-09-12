@@ -190,6 +190,12 @@ pub(crate) mod test_support {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
 
+    /// 共享黄金样本（仓库 `testdata/protocol/tsv-v1.log`，TS 侧
+    /// `useLogParser.test.ts` 同源消费）：`#` 注释头、坏行、非法 dir、tab text、
+    /// epoch 回退、lossy U+FFFD。仓库 `.gitattributes eol=lf` 规范化，拿到的是
+    /// LF 版本（CRLF 语义由消费方运行时转换验证）。
+    pub(crate) const TSV_FIXTURE: &str = include_str!("../../../../testdata/protocol/tsv-v1.log");
+
     static SEQ: AtomicU32 = AtomicU32::new(0);
 
     /// 第 i 行的确定性 ts/epoch（当日毫秒 = i mod 86400000）。
@@ -375,6 +381,53 @@ mod tests {
                 String::from_utf8_lossy(raw)
             );
         }
+    }
+
+    // ===== 共享黄金样本（testdata/protocol/tsv-v1.log，TS useLogParser.test.ts 同源）=====
+
+    #[test]
+    fn golden_fixture_tsv_v1_classifies_like_frontend() {
+        let mut rows: Vec<LogLine> = Vec::new();
+        let mut bad = 0usize;
+        for raw in test_support::TSV_FIXTURE.lines() {
+            match classify_line(raw.as_bytes(), rows.len() as u64) {
+                RawRow::Skip => {}
+                RawRow::Bad => bad += 1,
+                RawRow::Row(l) => rows.push(l),
+            }
+        }
+        // 与前端 golden 断言同源：9 数据行、仅无 tab 行计坏行（# 注释/空行跳过）
+        assert_eq!(rows.len(), 9, "fixture data rows: {rows:?}");
+        assert_eq!(bad, 1, "only the no-tab line is bad");
+        // dir 归一：rx/TX/小写 rx/「 TX 」/其余一律按前端 trim+大小写不敏感规则
+        let dirs: Vec<Dir> = rows.iter().map(|l| l.dir).collect();
+        assert_eq!(
+            dirs,
+            [
+                Dir::Rx,
+                Dir::Tx,
+                Dir::Rx,
+                Dir::Tx,
+                Dir::Rx,
+                Dir::Rx,
+                Dir::Rx,
+                Dir::Rx,
+                Dir::Rx
+            ],
+            "dirs in fixture order"
+        );
+        // epoch：合法 ts 逐行解析成当日毫秒；garbage-ts 回退行序 seq=5（此前 5 个数据行）
+        let epochs: Vec<u64> = rows.iter().map(|l| l.epoch_millis).collect();
+        assert_eq!(epochs, [1000, 2000, 3500, 4000, 5123, 5, 7000, 8000, 8250]);
+        // ts 字段保留原文（回退而非丢弃）
+        assert_eq!(rows[5].ts, "garbage-ts");
+        // 仅按前两个 tab 切：text 可含 tab
+        assert_eq!(rows[4].text, "text may contain\ta tab here");
+        // 二进制 lossy 行：有损 TSV 落盘即 U+FFFD 文本（fixture 内是合法 UTF-8 的
+        // 替换符），原始字节不落盘 → bytes=None；Rust「仅 text 列原始非法时
+        // bytes=Some」语义由 classify_invalid_utf8_carries_text_column_bytes 覆盖
+        assert_eq!(rows[6].text, "binary lossy: \u{FFFD}\u{FFFD} OK\u{FFFD}");
+        assert!(rows[6].bytes.is_none());
     }
 
     // ===== manager 接入端到端（load_offline_indexed 的虚拟 ring 查询路由）=====

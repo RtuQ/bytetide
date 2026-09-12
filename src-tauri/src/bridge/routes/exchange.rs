@@ -335,6 +335,10 @@ pub(crate) async fn exchange(
 mod tests {
     //! /exchange 严格 matcher（非法输入 400，绝不降级 match-all）与
     //! run_exchange：fake-service 排序回归（基线先行 + 快响应不丢）。
+    //!
+    //! matcher 向量全部来自共享黄金样本 `testdata/protocol/matcher-v1.json`
+    //! （TS 消费：`src/__tests__/protocol-fixtures.test.ts`）——错误码是 Stage 1
+    //! 冻结的跨语言契约，任一侧漂移即红。
 
     use super::*;
     use crate::bridge::error::ServiceError;
@@ -342,190 +346,249 @@ mod tests {
     use bytetide_core::serial::manager::{
         BridgeAlert, BridgeAnnotation, BridgeBookmark, BridgeStats, PlotConfig, SessionSnap,
     };
+    use serde::Deserialize;
     use std::path::PathBuf;
 
-    fn em(
-        re: Option<&str>,
-        hex: Option<&str>,
-        mask: Option<&str>,
-        dir: Option<&str>,
-    ) -> ExchangeMatch {
+    // ---------------- 共享黄金样本（matcher-v1.json） ----------------
+
+    /// fixture 顶层（serde 白名单取键，未知键如 `$about`/`version` 自动忽略）。
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct MatcherFixture {
+        valid_matchers: FxValidMatchers,
+        invalid_matchers: FxInvalidMatchers,
+        hex_strict: FxStrict,
+        mask_strict: FxStrict,
+        find_cases: FxFindCases,
+    }
+
+    #[derive(Deserialize)]
+    struct FxValidMatchers {
+        cases: Vec<FxValidCase>,
+    }
+
+    #[derive(Deserialize)]
+    struct FxValidCase {
+        name: String,
+        #[serde(rename = "match")]
+        match_: Option<FxMatch>,
+        compiled: FxCompiled,
+    }
+
+    #[derive(Deserialize)]
+    struct FxMatch {
+        re: Option<String>,
+        hex: Option<String>,
+        mask: Option<String>,
+        dir: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FxCompiled {
+        dir: String,
+        re_source: Option<String>,
+        hex_bytes: Vec<u8>,
+        mask: Vec<Option<u8>>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FxInvalidMatchers {
+        cases: Vec<FxInvalidCase>,
+        stable_codes: Vec<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct FxInvalidCase {
+        name: String,
+        #[serde(rename = "match")]
+        match_: FxMatch,
+        code: String,
+    }
+
+    #[derive(Deserialize)]
+    struct FxStrict {
+        cases: Vec<FxStrictCase>,
+    }
+
+    /// hexStrict 期望 `bytes`、maskStrict 期望 `mask`，二选一存在。
+    #[derive(Deserialize)]
+    struct FxStrictCase {
+        input: String,
+        ok: bool,
+        bytes: Option<Vec<u8>>,
+        mask: Option<Vec<Option<u8>>>,
+        code: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FxFindCases {
+        cases: Vec<FxFindCase>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FxFindCase {
+        name: String,
+        #[serde(rename = "match")]
+        match_: FxMatch,
+        lines: Vec<FxFindLine>,
+        expected_no: Option<u64>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FxFindLine {
+        no: u64,
+        dir: String,
+        text: String,
+        bytes: Option<Vec<u8>>,
+        epoch_millis: u64,
+    }
+
+    fn matcher_fixture() -> MatcherFixture {
+        // 相对本文件 4 级上跳到仓库根（routes → bridge → src → src-tauri → 根）
+        serde_json::from_str(include_str!(
+            "../../../../testdata/protocol/matcher-v1.json"
+        ))
+        .expect("matcher-v1.json fixture parses")
+    }
+
+    fn to_exchange_match(m: &FxMatch) -> ExchangeMatch {
         ExchangeMatch {
-            re: re.map(Into::into),
-            hex: hex.map(Into::into),
-            mask: mask.map(Into::into),
-            dir: dir.map(Into::into),
+            re: m.re.clone(),
+            hex: m.hex.clone(),
+            mask: m.mask.clone(),
+            dir: m.dir.clone(),
         }
     }
 
-    fn assert_bad(name: &str, m: ExchangeMatch) {
-        let err = compile_exchange_match(Some(&m)).expect_err(name);
-        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+    fn fixture_dir(s: &str) -> Dir {
+        if s == "tx" {
+            Dir::Tx
+        } else {
+            Dir::Rx
+        }
     }
 
-    #[test]
-    fn exchange_rejects_invalid_regex_hex_mask_and_dir() {
-        assert_bad(
-            "invalid_regex",
-            ExchangeMatch {
-                re: Some("(".into()),
-                hex: None,
-                mask: None,
-                dir: None,
-            },
-        );
-        assert_bad(
-            "invalid_hex",
-            ExchangeMatch {
-                re: None,
-                hex: Some("GG".into()),
-                mask: None,
-                dir: None,
-            },
-        );
-        assert_bad(
-            "invalid_mask",
-            ExchangeMatch {
-                re: None,
-                hex: None,
-                mask: Some("A?".into()),
-                dir: None,
-            },
-        );
-        assert_bad(
-            "invalid_direction",
-            ExchangeMatch {
-                re: None,
-                hex: None,
-                mask: None,
-                dir: Some("sideways".into()),
-            },
-        );
-    }
-
-    #[test]
-    fn exchange_matcher_never_turns_invalid_input_into_match_all() {
-        let input = ExchangeMatch {
-            re: Some("(".into()),
-            hex: None,
-            mask: None,
-            dir: None,
-        };
-        assert!(compile_exchange_match(Some(&input)).is_err());
-    }
-
-    #[test]
-    fn exchange_rejects_conflicting_matchers_with_stable_code() {
-        // re/hex/mask 互斥：同时携带多于一个 → 400 conflicting_matchers
-        assert_bad("conflicting", em(Some("OK"), Some("AA55"), None, None));
-        assert_bad("conflicting", em(None, Some("AA55"), Some("AA??"), None));
-        assert_bad("conflicting", em(Some("OK"), None, Some("AA??"), None));
-        let err = compile_exchange_match(Some(&em(Some("OK"), Some("AA55"), None, None)))
-            .expect_err("conflicting");
-        assert_eq!(err.code, "conflicting_matchers");
-    }
-
-    #[test]
-    fn exchange_error_codes_are_stable() {
-        let cases = [
-            (em(Some("("), None, None, None), "invalid_regex"),
-            (em(None, Some("GG"), None, None), "invalid_hex"),
-            (em(None, None, Some("A?"), None), "invalid_mask"),
-            (em(None, None, None, Some("sideways")), "invalid_direction"),
-        ];
-        for (m, code) in cases {
-            assert_eq!(compile_exchange_match(Some(&m)).expect_err(code).code, code);
+    fn compile_fixture(m: Option<&FxMatch>) -> Result<CompiledExchangeMatch, ApiError> {
+        match m {
+            Some(m) => compile_exchange_match(Some(&to_exchange_match(m))),
+            None => compile_exchange_match(None),
         }
     }
 
     #[test]
-    fn exchange_empty_fields_treated_as_absent_and_default_is_any_rx() {
-        // 空串/纯空白字段 = 未携带：编译成功、对应匹配器为空、dir 回落 rx
-        let c = compile_exchange_match(Some(&em(Some("  "), Some(""), None, Some(""))))
-            .expect("empty = absent");
-        assert!(c.re.is_none());
-        assert!(c.hex.is_empty());
-        assert!(c.mask.is_empty());
-        assert_eq!(c.dir, Dir::Rx);
-        // 完全不带 match 字段：默认任意 RX 行
-        let d = compile_exchange_match(None).expect("default");
-        assert_eq!(d.dir, Dir::Rx);
-        assert!(d.re.is_none() && d.hex.is_empty() && d.mask.is_empty());
-        // 合法输入正常编译（re/hex/mask 一次只携带一个）
-        let ok = compile_exchange_match(Some(&em(Some("OK\\d"), None, None, Some("tx"))))
-            .expect("valid re");
-        assert_eq!(ok.dir, Dir::Tx);
-        assert!(ok.re.is_some());
-        let ok2 =
-            compile_exchange_match(Some(&em(None, Some("AA55"), None, None))).expect("valid hex");
-        assert_eq!(ok2.hex, vec![0xAA, 0x55]);
-        let ok3 = compile_exchange_match(Some(&em(None, None, Some("AA??55"), None)))
-            .expect("valid mask");
-        assert_eq!(ok3.mask, vec![Some(0xAA), None, Some(0x55)]);
-    }
-
-    #[test]
-    fn parse_hex_strict_accepts_pairs_and_rejects_the_rest() {
-        assert_eq!(parse_hex_strict("AA55").unwrap(), vec![0xAA, 0x55]);
-        assert_eq!(parse_hex_strict("aa 55").unwrap(), vec![0xAA, 0x55]); // 小写合法 + 空白忽略
-        assert_eq!(parse_hex_strict("A55").unwrap_err().code, "invalid_hex"); // 奇数位
-        assert_eq!(parse_hex_strict("GG").unwrap_err().code, "invalid_hex"); // 非法字符
-        assert_eq!(parse_hex_strict("").unwrap_err().code, "invalid_hex"); // 空串
-        assert_eq!(parse_hex_strict("  ").unwrap_err().code, "invalid_hex"); // 纯空白
-    }
-
-    #[test]
-    fn parse_mask_strict_accepts_wildcard_pairs_and_rejects_the_rest() {
-        assert_eq!(
-            parse_mask_strict("AA??55").unwrap(),
-            vec![Some(0xAA), None, Some(0x55)]
+    fn matcher_fixture_valid_cases_compile_to_expected_shapes() {
+        let fx = matcher_fixture();
+        assert!(
+            !fx.valid_matchers.cases.is_empty(),
+            "fixture has valid cases"
         );
-        assert_eq!(
-            parse_mask_strict("AA ?? 55").unwrap(),
-            vec![Some(0xAA), None, Some(0x55)]
-        );
-        assert_eq!(parse_mask_strict("A?").unwrap_err().code, "invalid_mask"); // hex 与 ? 混搭
-        assert_eq!(parse_mask_strict("AA5").unwrap_err().code, "invalid_mask"); // 奇数残留
-        assert_eq!(parse_mask_strict("ZZ").unwrap_err().code, "invalid_mask"); // 非法字符
-        assert_eq!(parse_mask_strict("").unwrap_err().code, "invalid_mask"); // 空串
+        for (i, c) in fx.valid_matchers.cases.iter().enumerate() {
+            let tag = format!("validMatchers[{i}] {}", c.name);
+            let compiled =
+                compile_fixture(c.match_.as_ref()).unwrap_or_else(|e| panic!("{tag}: {e:?}"));
+            assert_eq!(compiled.dir, fixture_dir(&c.compiled.dir), "{tag} dir");
+            match &c.compiled.re_source {
+                Some(src) => {
+                    let re = compiled
+                        .re
+                        .as_ref()
+                        .unwrap_or_else(|| panic!("{tag}: re missing"));
+                    assert_eq!(re.as_str(), src, "{tag} re source");
+                }
+                None => assert!(compiled.re.is_none(), "{tag}: re should be absent"),
+            }
+            assert_eq!(compiled.hex, c.compiled.hex_bytes, "{tag} hex");
+            assert_eq!(compiled.mask, c.compiled.mask, "{tag} mask");
+        }
     }
 
     #[test]
-    fn find_exchange_response_filters_dir_and_matches_re_hex_mask() {
-        // dir 不等跳过
-        let m = compile_exchange_match(Some(&em(None, None, None, Some("tx")))).unwrap();
-        let lines = vec![
-            mk_line(1, Dir::Rx, "ACK", None, 1),
-            mk_line(2, Dir::Tx, "ACK", None, 2),
-        ];
-        assert_eq!(find_exchange_response(&lines, &m).unwrap().no, 2);
+    fn matcher_fixture_invalid_cases_rejected_with_stable_codes() {
+        let fx = matcher_fixture();
+        assert_eq!(
+            fx.invalid_matchers.stable_codes,
+            [
+                "invalid_regex",
+                "invalid_hex",
+                "invalid_mask",
+                "invalid_direction",
+                "conflicting_matchers",
+            ],
+            "stable error codes are a frozen cross-language contract"
+        );
+        for (i, c) in fx.invalid_matchers.cases.iter().enumerate() {
+            let tag = format!("invalidMatchers[{i}] {}", c.name);
+            assert!(
+                fx.invalid_matchers.stable_codes.contains(&c.code),
+                "{tag}: code not in stableCodes"
+            );
+            let err = compile_fixture(Some(&c.match_)).expect_err(&tag);
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{tag} status");
+            assert_eq!(err.code, c.code, "{tag} code");
+        }
+    }
 
-        // re 命中第一条满足者
-        let m = compile_exchange_match(Some(&em(Some("OK"), None, None, None))).unwrap();
-        let lines = vec![
-            mk_line(1, Dir::Rx, "noise", None, 1),
-            mk_line(2, Dir::Rx, "OK=1", None, 2),
-        ];
-        assert_eq!(find_exchange_response(&lines, &m).unwrap().no, 2);
-        assert!(find_exchange_response(&lines[..1], &m).is_none());
+    #[test]
+    fn matcher_fixture_hex_strict_vectors() {
+        let fx = matcher_fixture();
+        for (i, c) in fx.hex_strict.cases.iter().enumerate() {
+            let tag = format!("hexStrict[{i}] {:?}", c.input);
+            match parse_hex_strict(&c.input) {
+                Ok(bytes) => {
+                    assert!(c.ok, "{tag}: expected rejection");
+                    assert_eq!(bytes, c.bytes.as_deref().unwrap_or(&[]), "{tag} bytes");
+                }
+                Err(e) => {
+                    assert!(!c.ok, "{tag}: expected ok");
+                    assert_eq!(e.code, c.code.as_deref().unwrap_or(""), "{tag} code");
+                }
+            }
+        }
+    }
 
-        // hex 匹配原始 bytes 优先于 text（text 为 lossy 占位，编码后并不含 AA55）
-        let m = compile_exchange_match(Some(&em(None, Some("AA55"), None, None))).unwrap();
-        let bin = vec![mk_line(
-            3,
-            Dir::Rx,
-            "\u{FFFD}\u{FFFD}",
-            Some(vec![0x00, 0xAA, 0x55]),
-            3,
-        )];
-        assert_eq!(find_exchange_response(&bin, &m).unwrap().no, 3);
+    #[test]
+    fn matcher_fixture_mask_strict_vectors() {
+        let fx = matcher_fixture();
+        for (i, c) in fx.mask_strict.cases.iter().enumerate() {
+            let tag = format!("maskStrict[{i}] {:?}", c.input);
+            match parse_mask_strict(&c.input) {
+                Ok(mask) => {
+                    assert!(c.ok, "{tag}: expected rejection");
+                    assert_eq!(mask, c.mask.clone().unwrap_or_default(), "{tag} mask");
+                }
+                Err(e) => {
+                    assert!(!c.ok, "{tag}: expected ok");
+                    assert_eq!(e.code, c.code.as_deref().unwrap_or(""), "{tag} code");
+                }
+            }
+        }
+    }
 
-        // mask 通配：?? 跳过的字节任意
-        let m = compile_exchange_match(Some(&em(None, None, Some("AA??55"), None))).unwrap();
-        let hit = vec![mk_line(4, Dir::Rx, "", Some(vec![0xAA, 0x7F, 0x55]), 4)];
-        let miss = vec![mk_line(5, Dir::Rx, "", Some(vec![0xAA, 0x7F, 0x66]), 5)];
-        assert!(find_exchange_response(&hit, &m).is_some());
-        assert!(find_exchange_response(&miss, &m).is_none());
+    #[test]
+    fn matcher_fixture_find_cases_bytes_priority() {
+        let fx = matcher_fixture();
+        assert!(!fx.find_cases.cases.is_empty(), "fixture has find cases");
+        for (i, c) in fx.find_cases.cases.iter().enumerate() {
+            let tag = format!("findCases[{i}] {}", c.name);
+            let m = compile_fixture(Some(&c.match_))
+                .unwrap_or_else(|e| panic!("{tag}: compile failed: {e:?}"));
+            let lines: Vec<BridgeLine> = c
+                .lines
+                .iter()
+                .map(|l| {
+                    // fixture 语义：空 bytes 数组视同缺失（回退 text UTF-8）
+                    let bytes = l.bytes.clone().filter(|b| !b.is_empty());
+                    mk_line(l.no, fixture_dir(&l.dir), &l.text, bytes, l.epoch_millis)
+                })
+                .collect();
+            let hit = find_exchange_response(&lines, &m);
+            assert_eq!(hit.map(|l| l.no), c.expected_no, "{tag}");
+        }
     }
 
     // ---------------- run_exchange：fake-service 排序回归（基线先行 + 快响应不丢） ----------------

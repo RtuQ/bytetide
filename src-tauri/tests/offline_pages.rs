@@ -42,7 +42,10 @@ fn temp_dir(tag: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("bytetide-it-offline-{tag}-{}-{nanos}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "bytetide-it-offline-{tag}-{}-{nanos}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     dir
 }
@@ -152,7 +155,10 @@ fn offline_before_no_bounds_and_snapshot_match_ring_semantics() {
     );
     // bounds：虚拟 ring 全量在场
     let b = m.ring_bounds(&id).unwrap();
-    assert_eq!((b.first_no, b.last_no, b.size, b.ring_cap), (1, N, N as usize, RING_CAP));
+    assert_eq!(
+        (b.first_no, b.last_no, b.size, b.ring_cap),
+        (1, N, N as usize, RING_CAP)
+    );
     // 快照=分页走完整个文件
     let snap = m.bridge_snapshot(&id).unwrap();
     assert_eq!(snap.len() as u64, N);
@@ -176,8 +182,14 @@ fn offline_before_no_bounds_and_snapshot_match_ring_semantics() {
     }
     assert_eq!((stats.rx_lines, stats.tx_lines), (rx, tx));
     assert_eq!((stats.rx_bytes, stats.tx_bytes), (rb, tb));
-    assert_eq!((stats.first_no, stats.last_no, stats.size), (1, N, N as usize));
-    assert_eq!((stats.first_epoch, stats.last_epoch), (0, line_epoch(N - 1)));
+    assert_eq!(
+        (stats.first_no, stats.last_no, stats.size),
+        (1, N, N as usize)
+    );
+    assert_eq!(
+        (stats.first_epoch, stats.last_epoch),
+        (0, line_epoch(N - 1))
+    );
     assert_eq!(stats.first_ts, ts_of(0));
     assert_eq!(stats.last_ts, ts_of(N - 1));
     // REST follow 面：no>since 全量 + lastNo
@@ -202,9 +214,17 @@ fn offline_session_guards_clear_and_log_path() {
     assert_eq!((snap.status.as_str(), snap.line_count), ("offline", 10));
     // 守卫：发送 / 信号线 / 分段 / 录制开关
     assert!(m
-        .send(&id, SendRequest { mode: SendMode::Ascii, text: "x".into() })
+        .send(
+            &id,
+            SendRequest {
+                mode: SendMode::Ascii,
+                text: "x".into()
+            }
+        )
         .is_err());
-    assert!(m.set_signal(&id, bytetide_core::serial::manager::Pin::Dtr, true).is_err());
+    assert!(m
+        .set_signal(&id, bytetide_core::serial::manager::Pin::Dtr, true)
+        .is_err());
     assert!(m.rotate_log(&id).is_err());
     assert!(m.set_recording(&id, false).is_err());
     // 清屏=虚拟镜像遗忘：查询全空、no 游标语义不回退、文件事实保留
@@ -218,7 +238,7 @@ fn offline_session_guards_clear_and_log_path() {
     let stats = m.bridge_stats(&id).unwrap();
     assert_eq!(stats.size, 0);
     assert_eq!((stats.rx_lines, stats.tx_lines), (7, 3)); // 计数器不重置
-    // 断开=清理；旧全量路径（create_offline_session_cmd 背后）不受影响
+                                                          // 断开=清理；旧全量路径（create_offline_session_cmd 背后）不受影响
     m.disconnect(&id).unwrap();
     assert!(m.ring_lines_after_no(&id, 0, 10).is_err());
     let old = m.load_offline(PortConfig::default(), PathBuf::from("x.log"), vec![]);
@@ -238,15 +258,20 @@ fn memory_probe_index_is_sparse_and_pages_bounded() {
     let dir = temp_dir("probe");
     const N: u64 = 2_000_001;
     // ~100B/行 → ~214MB 文件，测试运行时生成、结束即删
-    let path = write_log(&dir, "huge.log", N, |i| format!("{:<90}", format!("line-{i:07}")));
+    let path = write_log(&dir, "huge.log", N, |i| {
+        format!("{:<90}", format!("line-{i:07}"))
+    });
     let (index, reader) = open_offline(&path).expect("open huge");
     assert_eq!(index.line_count, N);
     assert_eq!(reader.error_count(), 0);
     // 结构性内存断言 1：锚点表长度（≈行数/4096）
     assert_eq!(reader.anchor_count() as u64, N.div_ceil(4096), "锚点=块数");
-    let index_bytes = reader.anchor_count() * std::mem::size_of::<u64>()
-        + std::mem::size_of::<OfflineReader>();
-    assert!(index_bytes < 16 * 1024, "索引期持久内存应 <16KiB，实际 {index_bytes}B");
+    let index_bytes =
+        reader.anchor_count() * std::mem::size_of::<u64>() + std::mem::size_of::<OfflineReader>();
+    assert!(
+        index_bytes < 16 * 1024,
+        "索引期持久内存应 <16KiB，实际 {index_bytes}B"
+    );
     // 结构性内存断言 2：页读有界
     let mut r2 = reopen(&path);
     let first = r2.read_page(0, 5000).expect("first page");
