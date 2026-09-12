@@ -1,0 +1,143 @@
+{
+  "$about": "bytetide 协议黄金样本 v1（REST 桥 /exchange 交换匹配器）。错误码与 Stage 1 冻结的稳定契约一致（src-tauri/src/bridge/routes/exchange.rs）：invalid_regex / invalid_hex / invalid_mask / invalid_direction / conflicting_matchers，非法输入一律 400 绝不降级 match-all。TS 消费：src/__tests__/protocol-fixtures.test.ts；Rust 消费：exchange.rs 测试 include_str!（Task 7 收尾接入）。改动本文件必须两侧测试同步。",
+  "version": 1,
+
+  "validMatchers": {
+    "$about": "compile_exchange_match 成功路径：空串/纯空白字段=未携带（与缺省等价）；缺省 match = 任意 RX 行；re/hex/mask 互斥（valid 用例恰好携带一个）",
+    "cases": [
+      {
+        "name": "re on tx",
+        "match": { "re": "OK\\d", "dir": "tx" },
+        "compiled": { "dir": "tx", "reSource": "OK\\d", "hexBytes": [], "mask": [] }
+      },
+      {
+        "name": "hex pairs",
+        "match": { "hex": "AA55" },
+        "compiled": { "dir": "rx", "reSource": null, "hexBytes": [170, 85], "mask": [] }
+      },
+      {
+        "name": "hex lowercase with whitespace",
+        "match": { "hex": "aa 55" },
+        "compiled": { "dir": "rx", "reSource": null, "hexBytes": [170, 85], "mask": [] }
+      },
+      {
+        "name": "mask wildcard pairs",
+        "match": { "mask": "AA??55" },
+        "compiled": { "dir": "rx", "reSource": null, "hexBytes": [], "mask": [170, null, 85] }
+      },
+      {
+        "name": "mask with whitespace between pairs",
+        "match": { "mask": "AA ?? 55" },
+        "compiled": { "dir": "rx", "reSource": null, "hexBytes": [], "mask": [170, null, 85] }
+      },
+      {
+        "name": "empty/whitespace fields are treated as absent",
+        "match": { "re": "  ", "hex": "", "dir": "" },
+        "compiled": { "dir": "rx", "reSource": null, "hexBytes": [], "mask": [] }
+      },
+      {
+        "name": "no match field defaults to any rx line",
+        "match": null,
+        "compiled": { "dir": "rx", "reSource": null, "hexBytes": [], "mask": [] }
+      }
+    ]
+  },
+
+  "invalidMatchers": {
+    "$about": "compile_exchange_match 拒绝路径：稳定错误码，HTTP 400 ApiError 信封 {error:{code,message}}",
+    "cases": [
+      { "name": "unparseable regex", "match": { "re": "(" }, "code": "invalid_regex" },
+      { "name": "non-hex chars", "match": { "hex": "GG" }, "code": "invalid_hex" },
+      { "name": "odd trailing nibble", "match": { "hex": "A55" }, "code": "invalid_hex" },
+      { "name": "mask mixes hex and ?", "match": { "mask": "A?" }, "code": "invalid_mask" },
+      { "name": "mask odd residue", "match": { "mask": "AA5" }, "code": "invalid_mask" },
+      { "name": "mask bad char", "match": { "mask": "ZZ" }, "code": "invalid_mask" },
+      { "name": "dir out of range", "match": { "dir": "sideways" }, "code": "invalid_direction" },
+      { "name": "re+hex conflict", "match": { "re": "OK", "hex": "AA55" }, "code": "conflicting_matchers" },
+      { "name": "hex+mask conflict", "match": { "hex": "AA55", "mask": "AA??" }, "code": "conflicting_matchers" },
+      { "name": "re+mask conflict", "match": { "re": "OK", "mask": "AA??" }, "code": "conflicting_matchers" },
+      { "name": "re+hex+mask conflict", "match": { "re": "OK", "hex": "AA55", "mask": "AA??" }, "code": "conflicting_matchers" }
+    ],
+    "stableCodes": ["invalid_regex", "invalid_hex", "invalid_mask", "invalid_direction", "conflicting_matchers"]
+  },
+
+  "hexStrict": {
+    "$about": "parse_hex_strict 函数级向量（空白剔除后须非空、偶长、纯 ASCII hex 对）。注意 compile 层空串字段视为未携带，不会走到这里——空串向量只在直接调用该纯函数时成立",
+    "cases": [
+      { "input": "AA55", "ok": true, "bytes": [170, 85] },
+      { "input": "aa 55", "ok": true, "bytes": [170, 85] },
+      { "input": "A55", "ok": false, "code": "invalid_hex" },
+      { "input": "GG", "ok": false, "code": "invalid_hex" },
+      { "input": "", "ok": false, "code": "invalid_hex" },
+      { "input": "  ", "ok": false, "code": "invalid_hex" }
+    ]
+  },
+
+  "maskStrict": {
+    "$about": "parse_mask_strict 函数级向量（每对要么 ?? 要么两位 hex）",
+    "cases": [
+      { "input": "AA??55", "ok": true, "mask": [170, null, 85] },
+      { "input": "AA ?? 55", "ok": true, "mask": [170, null, 85] },
+      { "input": "A?", "ok": false, "code": "invalid_mask" },
+      { "input": "AA5", "ok": false, "code": "invalid_mask" },
+      { "input": "ZZ", "ok": false, "code": "invalid_mask" },
+      { "input": "", "ok": false, "code": "invalid_mask" }
+    ]
+  },
+
+  "findCases": {
+    "$about": "find_exchange_response：dir 不等跳过；re is_match(text)；hex/mask 按行字节（优先原始 bytes，缺失回退 text UTF-8）查找；命中第一条满足行",
+    "cases": [
+      {
+        "name": "dir filter picks the tx line",
+        "match": { "dir": "tx" },
+        "lines": [
+          { "no": 1, "dir": "rx", "text": "ACK", "bytes": null, "epochMillis": 1 },
+          { "no": 2, "dir": "tx", "text": "ACK", "bytes": null, "epochMillis": 2 }
+        ],
+        "expectedNo": 2
+      },
+      {
+        "name": "re hits first matching rx line",
+        "match": { "re": "OK" },
+        "lines": [
+          { "no": 1, "dir": "rx", "text": "noise", "bytes": null, "epochMillis": 1 },
+          { "no": 2, "dir": "rx", "text": "OK=1", "bytes": null, "epochMillis": 2 }
+        ],
+        "expectedNo": 2
+      },
+      {
+        "name": "re no hit in prefix window",
+        "match": { "re": "OK" },
+        "lines": [
+          { "no": 1, "dir": "rx", "text": "noise", "bytes": null, "epochMillis": 1 }
+        ],
+        "expectedNo": null
+      },
+      {
+        "name": "hex matches raw bytes not lossy text",
+        "match": { "hex": "AA55" },
+        "lines": [
+          { "no": 3, "dir": "rx", "text": "\uFFFD\uFFFD", "bytes": [0, 170, 85], "epochMillis": 3 }
+        ],
+        "expectedNo": 3
+      },
+      {
+        "name": "mask wildcard hit",
+        "match": { "mask": "AA??55" },
+        "lines": [
+          { "no": 4, "dir": "rx", "text": "", "bytes": [170, 127, 85], "epochMillis": 4 }
+        ],
+        "expectedNo": 4
+      },
+      {
+        "name": "mask wildcard miss",
+        "match": { "mask": "AA??55" },
+        "lines": [
+          { "no": 5, "dir": "rx", "text": "", "bytes": [170, 127, 102], "epochMillis": 5 }
+        ],
+        "expectedNo": null
+      }
+    ]
+  }
+}

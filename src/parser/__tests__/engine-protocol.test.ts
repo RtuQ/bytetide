@@ -8,30 +8,34 @@ import { ParserEngine, staticHasParse, validateDecl, classifyTrial, ErrorRateWin
 import type { EngineBatchItem, EngineBatchResult, EngineHost } from '../engine'
 import { createScriptHost } from '../bootstrap'
 import { computeCrc } from '../crc'
+import plotFixture from '../../../testdata/protocol/plot-v1.json'
 import type { LogLine } from '../../types'
 import type { DecodedFrame } from '../../types/parser'
 
 // ---- fixtures ----
 
-/** 温控声明式脚本源码（无 parse，静态扫描不命中） */
-const DECL_SRC = `
-export default {
-  meta: { name: '温控协议', version: '1.0' },
-  framing: {
-    source: 'binary',
-    sync: 'AA 55',
-    length: { kind: 'field', at: 3, fmt: 'u8', add: 4 },
-    crc: { algo: 'crc16-modbus', at: 'tail:2' },
-    maxSize: 64,
-  },
-  type: { at: 2, fmt: 'u8', map: { 1: '状态上报', 2: '设置响应' } },
-  fields: [
-    { label: '温度', at: 4, fmt: 'i16', scale: 0.1, unit: '℃' },
-    { label: '模式', at: 6, fmt: 'u8', map: { 0: '待机', 1: '制冷' } },
-  ],
-  text: '温度 {温度}℃，模式{模式}',
+/** 共享黄金样本（testdata/protocol/plot-v1.json 的 declSample，Rust serde 消费时忽略本节） */
+interface DeclFixture {
+  declSample: {
+    decl: Record<string, unknown>
+    frames: {
+      goodHex: string
+      crcVector: { algo: string; inputHex: string; crcHex: string; wireOrder: string }
+    }
+  }
 }
-`
+const declFx = (plotFixture as unknown as DeclFixture).declSample
+
+function parseHexPairs(s: string): number[] {
+  const out: number[] = []
+  const re = /[0-9a-fA-F]{2}/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(s)) !== null) out.push(parseInt(m[0], 16))
+  return out
+}
+
+/** 声明式脚本源码（decl 来自共享 fixture；无 parse，静态扫描不命中） */
+const DECL_SRC = `export default ${JSON.stringify(declFx.decl)}`
 
 /** 含脚本层 parse 的源码（静态扫描命中） */
 const PARSE_SRC = `
@@ -59,24 +63,10 @@ export default {
 }
 `
 
-/** DECL_SRC 对应的纯数据 decl（fake importModule 的返回值；ESM 求值不在本测试范围） */
+/** DECL_SRC 对应的纯数据 decl（fake importModule 的返回值；ESM 求值不在本测试范围；
+ *  每次返回 fixture 的新副本，brokenDecl 的原地变异不串用例） */
 function tcDecl(): Record<string, unknown> {
-  return {
-    meta: { name: '温控协议', version: '1.0' },
-    framing: {
-      source: 'binary',
-      sync: 'AA 55',
-      length: { kind: 'field', at: 3, fmt: 'u8', add: 4 },
-      crc: { algo: 'crc16-modbus', at: 'tail:2' },
-      maxSize: 64,
-    },
-    type: { at: 2, fmt: 'u8', map: { 1: '状态上报', 2: '设置响应' } },
-    fields: [
-      { label: '温度', at: 4, fmt: 'i16', scale: 0.1, unit: '℃' },
-      { label: '模式', at: 6, fmt: 'u8', map: { 0: '待机', 1: '制冷' } },
-    ],
-    text: '温度 {温度}℃，模式{模式}',
-  }
+  return structuredClone(declFx.decl) as Record<string, unknown>
 }
 
 function pureDecl(): Record<string, unknown> {
@@ -117,8 +107,27 @@ function mkLine(text: string, dir: 'rx' | 'tx' = 'rx', bytesArr: number[] | null
   }
 }
 
-/** 温度=25℃、模式=制冷 的标准 RX 帧 */
-const GOOD_FRAME = (): number[] => mkTc(1, [0xfa, 0x00, 0x01])
+/** 温度=25℃、模式=制冷 的标准 RX 帧（字节来自共享 fixture goodHex；
+ *  与 mkTc 构造的一致性由下方 fixture 自检用例保证） */
+const GOOD_FRAME_BYTES = parseHexPairs(declFx.frames.goodHex)
+const GOOD_FRAME = (): number[] => [...GOOD_FRAME_BYTES]
+
+/** fixture 自检：黄金帧与本地 computeCrc 构造独立一致（两侧推导撞车即红） */
+describe('declSample fixture 自检', () => {
+  it('goodHex 与 computeCrc 现构帧一致', () => {
+    expect(hexOf(mkTc(1, [0xfa, 0x00, 0x01]))).toBe(declFx.frames.goodHex)
+  })
+  it('crcVector：crc16-modbus 结果按小端上线', () => {
+    const crc = computeCrc(
+      declFx.frames.crcVector.algo as BytetideParser.CrcAlgo,
+      new Uint8Array(parseHexPairs(declFx.frames.crcVector.inputHex)),
+    )
+    expect(crc).toBe(parseInt(declFx.frames.crcVector.crcHex, 16))
+    expect(hexOf([crc & 0xff, (crc >> 8) & 0xff])).toBe(
+      declFx.frames.crcVector.wireOrder.includes('little') ? 'C1 F2' : 'F2 C1',
+    )
+  })
+})
 
 // ---- fake host / engine 装配 ----
 

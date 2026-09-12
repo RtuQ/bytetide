@@ -2,6 +2,8 @@ import { reactive, watch } from 'vue'
 import { useSessionStore, registerParserOnClear } from '../stores/session'
 import { ParserEngine } from '../parser/engine'
 import { createScriptHost } from '../parser/bootstrap'
+import { makeCodec } from '../persistence/schema'
+import { loadStored, removeStored, saveStored } from '../persistence/storage'
 import type { LogLine } from '../types'
 import type { DecodedFrame, ParserBanner, ParserStats, TrialReport, ValidatedScript } from '../types/parser'
 
@@ -9,11 +11,22 @@ import type { DecodedFrame, ParserBanner, ParserStats, TrialReport, ValidatedScr
  * 解析引擎组合层（模块级单例）：加载/卸载/启停/localStorage 恢复/reset 挂载。
  * 引擎（ParserEngine）是纯 TS 编排；这里负责 Vue 响应式映射、store 落表节流与
  * 生命周期挂钩（onClear 注入 + order diff watch），App 各组件共享同一实例。
+ * 脚本持久化走 src/persistence（v1 信封；旧裸 {src,enabled} 自动迁移）。
  */
 
 const STORAGE_KEY = 'serialtool.parserScript'
 /** 解码落表节流：与拉取循环同节奏，批量 applyDecoded */
 const FLUSH_MS = 200
+
+const scriptCodec = makeCodec<{ src: string; enabled: boolean }>(
+  'parserScript',
+  (raw) => {
+    if (!raw || typeof raw !== 'object') throw new Error('invalid parser script')
+    const p = raw as { src?: unknown; enabled?: unknown }
+    if (typeof p.src !== 'string') throw new Error('invalid parser script src')
+    return { src: p.src, enabled: p.enabled === true }
+  },
+)
 
 export interface ParserUiState {
   loaded: boolean
@@ -151,12 +164,11 @@ function syncUi(e: ParserEngine) {
 // ---- localStorage 持久化（源码 + 启用态；meta 由加载时派生） ----
 
 function persist(src: string | null, enabled: boolean) {
-  try {
-    if (!src) localStorage.removeItem(STORAGE_KEY)
-    else localStorage.setItem(STORAGE_KEY, JSON.stringify({ src, enabled }))
-  } catch {
-    /* ignore */
+  if (!src) {
+    removeStored(STORAGE_KEY)
+    return
   }
+  saveStored(STORAGE_KEY, scriptCodec.schema, { src, enabled })
 }
 
 function sessionsSnapshot(store: ReturnType<typeof useSessionStore>) {
@@ -167,12 +179,11 @@ async function restore(store: ReturnType<typeof useSessionStore>) {
   if (restoring) return
   restoring = true
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return
-    const saved = JSON.parse(raw) as { src?: unknown; enabled?: unknown }
-    if (typeof saved.src !== 'string') return
-    const r = await engine!.load(saved.src)
-    if (!r.ok) {
+    const r = loadStored(STORAGE_KEY, scriptCodec, { src: '', enabled: false })
+    if (r.kind !== 'ok' && r.kind !== 'migrated') return
+    const saved = r.data
+    const res = await engine!.load(saved.src)
+    if (!res.ok) {
       persist(null, false)
       return
     }

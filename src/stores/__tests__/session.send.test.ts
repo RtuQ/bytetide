@@ -58,7 +58,15 @@ describe('快捷帧（sendPresets）', () => {
 
     store.removeSendPreset(p.id)
     expect(store.sendPresets).toHaveLength(0)
-    expect(localStorage.getItem('serialtool.sendPresets')).toBe('[]')
+    // Task 7 起 localStorage 值为 v1 信封（键名不变）：断言信封 data 为空数组
+    const env = JSON.parse(localStorage.getItem('serialtool.sendPresets')!) as {
+      schema: string
+      version: number
+      data: unknown
+    }
+    expect(env.schema).toBe('sendPresets')
+    expect(env.version).toBe(1)
+    expect(env.data).toEqual([])
   })
 
   it('空名拒绝；超出上限丢最旧', () => {

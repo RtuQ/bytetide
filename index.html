@@ -8,14 +8,23 @@
     <title>ByteTide · 字节潮</title>
     <script>
       // 在 CSS 加载前根据持久化主题设置 data-theme，避免首屏主题闪烁
-      // 默认浅色（白）；仅当显式存过 dark 才用深色
+      // 默认浅色（白）；仅当显式存过 dark 才用深色。
+      // 值两种形状（与 useTheme 的信封迁移一致）：v1 信封 {schema:'theme',version:1,data}
+      // 与旧版裸字符串 'dark'/'light'。
       (function () {
+        var mode = 'light';
         try {
           var t = localStorage.getItem('serialtool.theme');
-          document.documentElement.dataset.theme = t === 'dark' ? 'dark' : 'light';
-        } catch (e) {
-          document.documentElement.dataset.theme = 'light';
-        }
+          if (t === 'dark' || t === 'light') {
+            mode = t;
+          } else if (t && t.charAt(0) === '{') {
+            var v = JSON.parse(t);
+            if (v && v.schema === 'theme' && v.version === 1 && (v.data === 'dark' || v.data === 'light')) {
+              mode = v.data;
+            }
+          }
+        } catch (e) { /* 坏值回默认浅色 */ }
+        document.documentElement.dataset.theme = mode;
       })();
     </script>
     <style>

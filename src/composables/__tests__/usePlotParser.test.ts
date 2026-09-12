@@ -1,128 +1,112 @@
 import { describe, it, expect } from 'vitest'
 import { parseHexField, computeChecksum, parseValue, parseFrames, toHex } from '../usePlotParser'
-import type { Dir, LogLine, PlotConfig } from '../../types'
+import plotFixture from '../../../testdata/protocol/plot-v1.json'
+import type { Dir, LogLine, PlotBytes, PlotChecksum, PlotConfig, PlotEndian } from '../../types'
 
-function mkLine(no: number, dir: Dir, text: string, bytes: number[] | null, epochMillis: number): LogLine {
-  return { no, ts: '00:00:00.000', dir, text, bytes, epochMillis }
-}
+/**
+ * 绘图文法测试（消费共享黄金样本 testdata/protocol/plot-v1.json）：
+ * 向量与期望值以 fixture 为准（Rust parse_frames 侧同源消费），本测试断言
+ * TS 实现（usePlotParser）与样本一致——实现漂移即红，防跨语言语义漂移。
+ */
 
-function mkPlot(over: Partial<PlotConfig> = {}): PlotConfig {
-  return {
-    enabled: false,
-    source: 'binary',
-    frameHead: '',
-    frameTail: '',
-    checksum: 'none',
-    channels: 2,
-    bytesPerChannel: 2,
-    endian: 'big',
-    signed: false,
-    maxPoints: 2000,
-    ...over,
+interface PlotFixture {
+  hexFields: { valid: { raw: string; bytes: number[] }[]; noPairs: string[] }
+  checksumVectors: Record<'sum' | 'xor' | 'none', { bytes: number[]; expected: number }>
+  valueBoundaries: {
+    cases: {
+      bytes: number[]
+      offset: number
+      len: number
+      endian: string
+      signed: boolean
+      expected: number
+    }[]
+  }
+  plotCases: {
+    groups: {
+      name: string
+      config: Record<string, unknown>
+      cases: {
+        name: string
+        lines: { dir: string; text: string; bytes: number[] | null; epochMillis: number }[]
+        expected: {
+          frameCount: number
+          points: { values: number[]; rawHex: string; epochMillis: number }[]
+          lastError: string
+        }
+      }[]
+    }[]
   }
 }
 
-describe('parseHexField', () => {
-  it('extracts hex pairs ignoring separators', () => {
-    expect(parseHexField('01 00')).toEqual([0x01, 0x00])
-    expect(parseHexField('0100')).toEqual([0x01, 0x00])
-    expect(parseHexField('01,00')).toEqual([0x01, 0x00])
+const fx = plotFixture as unknown as PlotFixture
+
+let lineSeq = 0
+function mkLine(dir: Dir, text: string, bytes: number[] | null, epochMillis: number): LogLine {
+  lineSeq++
+  return { no: lineSeq, ts: '00:00:00.000', dir, text, bytes, epochMillis }
+}
+
+function feedLines(lines: PlotFixture['plotCases']['groups'][number]['cases'][number]['lines']): LogLine[] {
+  lineSeq = 0
+  return lines.map((l) => mkLine(l.dir as Dir, l.text, l.bytes, l.epochMillis))
+}
+
+describe('parseHexField（fixture: hexFields）', () => {
+  it('合法输入按对抽取、容忍分隔符', () => {
+    for (const c of fx.hexFields.valid) {
+      expect(parseHexField(c.raw)).toEqual(c.bytes)
+    }
   })
-  it('returns empty when no pairs match', () => {
-    expect(parseHexField('')).toEqual([])
-    expect(parseHexField('zz')).toEqual([])
+  it('无字节对输入返回空数组', () => {
+    for (const raw of fx.hexFields.noPairs) {
+      expect(parseHexField(raw)).toEqual([])
+    }
   })
 })
 
-describe('computeChecksum', () => {
-  it('sum takes the low 8 bits', () => {
-    expect(computeChecksum(new Uint8Array([0x01, 0x02, 0xff]), 'sum')).toBe(2) // 258 & 0xff
-  })
-  it('xor folds all bytes', () => {
-    expect(computeChecksum(new Uint8Array([0xaa, 0x55]), 'xor')).toBe(0xff)
-  })
-  it('none returns 0', () => {
-    expect(computeChecksum(new Uint8Array([0x01]), 'none')).toBe(0)
-  })
-})
-
-describe('parseValue', () => {
-  it('big/little endian 2 bytes', () => {
-    expect(parseValue(new Uint8Array([0x01, 0x00]), 0, 2, 'big', false)).toBe(256)
-    expect(parseValue(new Uint8Array([0x01, 0x00]), 0, 2, 'little', false)).toBe(1)
-  })
-  it('signed 1-byte boundary (-128 / 127)', () => {
-    expect(parseValue(new Uint8Array([0x80]), 0, 1, 'big', true)).toBe(-128)
-    expect(parseValue(new Uint8Array([0x7f]), 0, 1, 'big', true)).toBe(127)
-  })
-  it('signed 2-byte boundary (-32768)', () => {
-    expect(parseValue(new Uint8Array([0x80, 0x00]), 0, 2, 'big', true)).toBe(-32768)
-  })
-  it('4-byte without 32-bit truncation', () => {
-    expect(parseValue(new Uint8Array([0x00, 0x00, 0x01, 0x00]), 0, 4, 'big', false)).toBe(256)
-  })
-})
-
-describe('parseFrames', () => {
-  it('golden 1: binary head AA55, 2ch x 2B big unsigned -> [256,512]', () => {
-    const cfg = mkPlot({ frameHead: 'AA55', channels: 2, bytesPerChannel: 2, endian: 'big' })
-    const r = parseFrames(cfg, [mkLine(1, 'rx', '', [0xaa, 0x55, 0x01, 0x00, 0x02, 0x00], 1000)])
-    expect(r.frameCount).toBe(1)
-    expect(r.points[0].values).toEqual([256, 512])
-    expect(r.points[0].rawHex).toBe('AA 55 01 00 02 00')
-    expect(r.lastError).toBe('')
-  })
-
-  it('golden 2: binary head FF, 1ch x 1B signed + sum -> [-128]; bad cs -> 0 frames', () => {
-    const cfg = mkPlot({
-      frameHead: 'FF',
-      checksum: 'sum',
-      channels: 1,
-      bytesPerChannel: 1,
-      endian: 'big',
-      signed: true,
+describe('computeChecksum（fixture: checksumVectors）', () => {
+  for (const method of ['sum', 'xor', 'none'] as const) {
+    it(`${method} 向量`, () => {
+      const v = fx.checksumVectors[method]
+      expect(computeChecksum(new Uint8Array(v.bytes), method as PlotChecksum)).toBe(v.expected)
     })
-    const ok = parseFrames(cfg, [mkLine(1, 'rx', '', [0xff, 0x80, 0x80], 1000)])
-    expect(ok.frameCount).toBe(1)
-    expect(ok.points[0].values).toEqual([-128])
-    expect(ok.points[0].rawHex).toBe('FF 80 80')
-    // 坏校验：前端静默跳过（不像后端会记 lastError），结果 0 帧
-    const bad = parseFrames(cfg, [mkLine(2, 'rx', '', [0xff, 0x80, 0x00], 2000)])
-    expect(bad.frameCount).toBe(0)
-    expect(bad.points.length).toBe(0)
-  })
+  }
+})
 
-  it('golden 3: ascii-hex tail 0D, 2ch x 1B little -> [170,85],[187,102]', () => {
-    const cfg = mkPlot({
-      source: 'ascii-hex',
-      frameTail: '0D',
-      channels: 2,
-      bytesPerChannel: 1,
-      endian: 'little',
-    })
-    const r = parseFrames(cfg, [mkLine(7, 'rx', 'AA550DBB660D', null, 3000)])
-    expect(r.frameCount).toBe(2)
-    expect(r.points[0].values).toEqual([170, 85])
-    expect(r.points[0].rawHex).toBe('AA 55 0D')
-    expect(r.points[1].values).toEqual([187, 102])
-    expect(r.points[1].rawHex).toBe('BB 66 0D')
+describe('parseValue（fixture: valueBoundaries 大小端/有符号边界）', () => {
+  it('全部边界向量', () => {
+    for (const c of fx.valueBoundaries.cases) {
+      expect(
+        parseValue(
+          new Uint8Array(c.bytes),
+          c.offset,
+          c.len as PlotBytes,
+          c.endian as PlotEndian,
+          c.signed,
+        ),
+      ).toBe(c.expected)
+    }
   })
+})
 
-  it('head mismatch advances one byte', () => {
-    const cfg = mkPlot({ frameHead: 'AA55', channels: 2, bytesPerChannel: 2, endian: 'big' })
-    const r = parseFrames(cfg, [mkLine(1, 'rx', '', [0x00, 0xaa, 0x55, 0x01, 0x00, 0x02, 0x00], 1000)])
-    expect(r.frameCount).toBe(1)
-    expect(r.points[0].rawHex).toBe('AA 55 01 00 02 00')
-  })
-
-  it('maxPoints keeps the last N points (frameCount counts all)', () => {
-    const cfg = mkPlot({ frameHead: 'AA', channels: 1, bytesPerChannel: 1, endian: 'big', maxPoints: 2 })
-    const r = parseFrames(cfg, [mkLine(1, 'rx', '', [0xaa, 0x01, 0xaa, 0x02, 0xaa, 0x03], 0)])
-    expect(r.frameCount).toBe(3)
-    expect(r.points.length).toBe(2)
-    expect(r.points[0].values).toEqual([2])
-    expect(r.points[1].values).toEqual([3])
-  })
+describe('parseFrames（fixture: plotCases 黄金帧）', () => {
+  for (const group of fx.plotCases.groups) {
+    for (const tc of group.cases) {
+      it(`${group.name} / ${tc.name}`, () => {
+        const r = parseFrames(group.config as unknown as PlotConfig, feedLines(tc.lines))
+        expect(r.frameCount).toBe(tc.expected.frameCount)
+        expect(r.lastError).toBe(tc.expected.lastError)
+        expect(r.points).toHaveLength(tc.expected.points.length)
+        tc.expected.points.forEach((p, i) => {
+          const got = r.points[i]!
+          expect(got.values).toEqual(p.values)
+          expect(got.rawHex).toBe(p.rawHex)
+          expect(got.epochMillis).toBe(p.epochMillis)
+        })
+      })
+    }
+  }
 })
 
 describe('toHex', () => {

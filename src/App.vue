@@ -12,6 +12,10 @@ import {
   usePanelState,
   loadCenterSplit,
   saveCenterSplit,
+  loadSidebarPrefs,
+  saveSidebarPrefs,
+  SIDEBAR_MIN,
+  SIDEBAR_MAX,
   SPLIT_MIN,
   SPLIT_MAX,
 } from './composables/useLayoutPrefs'
@@ -138,43 +142,14 @@ function onSplitEnd() {
   if (splitMoved) saveCenterSplit(splitPct.value)
 }
 
-// ---- 侧栏：左缘手柄拖拽调宽；点击手柄上的按钮收起/展开；状态 localStorage 记忆 ----
-const SIDEBAR_KEY = 'serialtool.sidebar'
-const SIDEBAR_MIN = 240
-const SIDEBAR_MAX = 560
-const SIDEBAR_DEFAULT = 312
+// ---- 侧栏：左缘手柄拖拽调宽；点击手柄上的按钮收起/展开；状态持久化（useLayoutPrefs 信封装） ----
+const initialSidebar = loadSidebarPrefs()
 
-type SidebarState = { width: number; collapsed: boolean }
-
-function loadSidebar(): SidebarState {
-  try {
-    const raw = localStorage.getItem(SIDEBAR_KEY)
-    if (raw) {
-      const v = JSON.parse(raw) as Partial<SidebarState>
-      const w = Number(v.width)
-      return {
-        width: Number.isFinite(w) && w > 0 ? Math.min(w, SIDEBAR_MAX) : SIDEBAR_DEFAULT,
-        collapsed: v.collapsed === true,
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-  return { width: SIDEBAR_DEFAULT, collapsed: false } // 默认展开
-}
-
-const sidebarWidth = ref<number>(loadSidebar().width)
-const sidebarCollapsed = ref<boolean>(loadSidebar().collapsed)
+const sidebarWidth = ref<number>(initialSidebar.width)
+const sidebarCollapsed = ref<boolean>(initialSidebar.collapsed)
 
 function saveSidebar() {
-  try {
-    localStorage.setItem(
-      SIDEBAR_KEY,
-      JSON.stringify({ width: sidebarWidth.value, collapsed: sidebarCollapsed.value }),
-    )
-  } catch {
-    /* ignore */
-  }
+  saveSidebarPrefs({ width: sidebarWidth.value, collapsed: sidebarCollapsed.value })
 }
 
 function toggleSidebar() {

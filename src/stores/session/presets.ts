@@ -13,13 +13,16 @@ import {
   type SendSequence,
   type SeqStep,
 } from '../../types'
+import { makeCodec } from '../../persistence/schema'
+import { loadValue, saveStored } from '../../persistence/storage'
 import { newKeywordId, newRuleId } from './rules'
 import type { Session } from './model'
 
 /**
  * 预设/持久化域纯函数（Task 6）：连接配置预设、快捷帧、发送序列、配置预设库、
- * 搜索历史、日志配置——localStorage 读写与列表运算。列表运算返回新数组（或
- * null=拒绝），由门面写回 store 状态；本模块不持有响应式状态、不调 useSessionStore。
+ * 搜索历史、日志配置——localStorage 读写（src/persistence v1 信封，键名不变，
+ * 旧裸 JSON 首次成功读取时自动迁移回写信封）与列表运算。列表运算返回新数组
+ * （或 null=拒绝），由门面写回 store 状态；本模块不持有响应式状态、不调 useSessionStore。
  */
 
 // ===================== 序列运行（自动化域：步骤循环 + 可中断休眠） =====================
@@ -87,11 +90,11 @@ export async function runSequenceSteps(
 
 export const LOG_CONFIG_KEY = 'serialtool.logConfig'
 
-export function loadLogConfig(): LogConfig {
-  try {
-    const raw = localStorage.getItem(LOG_CONFIG_KEY)
-    if (!raw) return { ...DEFAULT_LOG_CONFIG }
-    const parsed = JSON.parse(raw) as Partial<LogConfig>
+const logConfigCodec = makeCodec<LogConfig>(
+  'logConfig',
+  (raw) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('invalid log cfg')
+    const parsed = raw as Partial<LogConfig>
     return {
       logPathTemplate: parsed.logPathTemplate ?? '',
       lineTsFormat: parsed.lineTsFormat || DEFAULT_LOG_CONFIG.lineTsFormat,
@@ -101,9 +104,11 @@ export function loadLogConfig(): LogConfig {
           : DEFAULT_LOG_CONFIG.viewBufCap,
       midnightRotate: parsed.midnightRotate === true,
     }
-  } catch {
-    return { ...DEFAULT_LOG_CONFIG }
-  }
+  },
+)
+
+export function loadLogConfig(): LogConfig {
+  return loadValue(LOG_CONFIG_KEY, logConfigCodec, { ...DEFAULT_LOG_CONFIG })
 }
 
 /** 合并补丁并钳制视图缓冲上限：防误设过小（裁剪风暴）或过大（内存失控） */
@@ -114,11 +119,7 @@ export function mergeLogConfig(current: LogConfig, patch: Partial<LogConfig>): L
 }
 
 export function saveLogConfig(cfg: LogConfig): void {
-  try {
-    localStorage.setItem(LOG_CONFIG_KEY, JSON.stringify(cfg))
-  } catch {
-    /* ignore */
-  }
+  saveStored(LOG_CONFIG_KEY, logConfigCodec.schema, cfg)
 }
 
 // ===================== 搜索历史（serialtool.searchHistory） =====================
@@ -126,15 +127,16 @@ export function saveLogConfig(cfg: LogConfig): void {
 const SEARCH_HISTORY_KEY = 'serialtool.searchHistory'
 const SEARCH_HISTORY_MAX = 20
 
+const searchHistoryCodec = makeCodec<string[]>(
+  'searchHistory',
+  (raw) => {
+    if (!Array.isArray(raw)) throw new Error('invalid search history')
+    return raw.filter((x): x is string => typeof x === 'string')
+  },
+)
+
 export function loadSearchHistory(): string[] {
-  try {
-    const raw = localStorage.getItem(SEARCH_HISTORY_KEY)
-    if (!raw) return []
-    const arr = JSON.parse(raw)
-    return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : []
-  } catch {
-    return []
-  }
+  return loadValue(SEARCH_HISTORY_KEY, searchHistoryCodec, [])
 }
 
 /** 追加搜索历史（去重、截断）；空串拒绝返回 null（调用方不动状态） */
@@ -149,11 +151,7 @@ export function removeSearchHistory(list: string[], pattern: string): string[] {
 }
 
 export function saveSearchHistory(list: string[]): void {
-  try {
-    localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(list))
-  } catch {
-    /* ignore */
-  }
+  saveStored(SEARCH_HISTORY_KEY, searchHistoryCodec.schema, list)
 }
 
 // ===================== 连接配置预设（serialtool.portPresets） =====================
@@ -167,29 +165,27 @@ export function newPresetId(prefix: string): string {
   return `${prefix}${Date.now().toString(36)}${presetSeq}`
 }
 
+const portPresetsCodec = makeCodec<PortPreset[]>(
+  'portPresets',
+  (raw) => {
+    if (!Array.isArray(raw)) throw new Error('invalid port presets')
+    return (raw as unknown[]).filter(
+      (x): x is { id: string; name: string; config: PortConfig } =>
+        !!x &&
+        typeof x === 'object' &&
+        typeof (x as { id?: unknown }).id === 'string' &&
+        typeof (x as { name?: unknown }).name === 'string' &&
+        !!(x as { config?: unknown }).config,
+    ).map((x) => ({ id: x.id, name: x.name, config: { ...x.config } }))
+  },
+)
+
 export function loadPresets(): PortPreset[] {
-  try {
-    const raw = localStorage.getItem(PRESETS_KEY)
-    if (!raw) return []
-    const arr = JSON.parse(raw)
-    if (!Array.isArray(arr)) return []
-    return arr
-      .filter(
-        (x): x is { id: string; name: string; config: PortConfig } =>
-          !!x && typeof x.id === 'string' && typeof x.name === 'string' && !!x.config,
-      )
-      .map((x) => ({ id: x.id, name: x.name, config: { ...x.config } }))
-  } catch {
-    return []
-  }
+  return loadValue(PRESETS_KEY, portPresetsCodec, [])
 }
 
 export function savePresets(list: PortPreset[]): void {
-  try {
-    localStorage.setItem(PRESETS_KEY, JSON.stringify(list))
-  } catch {
-    /* ignore */
-  }
+  saveStored(PRESETS_KEY, portPresetsCodec.schema, list)
 }
 
 /** 新增连接配置预设（拷贝 config 防外部引用串改）；空名拒绝返回 null */
@@ -218,23 +214,24 @@ export function removePortPreset(list: PortPreset[], id: string): PortPreset[] {
 const SEND_PRESETS_KEY = 'serialtool.sendPresets'
 export const SEND_PRESETS_CAP = 50
 
-export function loadSendPresets(): SendPreset[] {
-  try {
-    const raw = localStorage.getItem(SEND_PRESETS_KEY)
-    if (!raw) return []
-    const arr = JSON.parse(raw)
-    if (!Array.isArray(arr)) return []
-    return arr.filter(
+const sendPresetsCodec = makeCodec<SendPreset[]>(
+  'sendPresets',
+  (raw) => {
+    if (!Array.isArray(raw)) throw new Error('invalid send presets')
+    return (raw as unknown[]).filter(
       (x): x is SendPreset =>
         !!x &&
-        typeof x.id === 'string' &&
-        typeof x.name === 'string' &&
-        typeof x.payload === 'string' &&
-        (x.mode === 'ascii' || x.mode === 'hex'),
+        typeof x === 'object' &&
+        typeof (x as { id?: unknown }).id === 'string' &&
+        typeof (x as { name?: unknown }).name === 'string' &&
+        typeof (x as { payload?: unknown }).payload === 'string' &&
+        ((x as { mode?: unknown }).mode === 'ascii' || (x as { mode?: unknown }).mode === 'hex'),
     )
-  } catch {
-    return []
-  }
+  },
+)
+
+export function loadSendPresets(): SendPreset[] {
+  return loadValue(SEND_PRESETS_KEY, sendPresetsCodec, [])
 }
 
 /** 保存快捷帧：带 id 为改名/改内容，否则新增（超出上限丢最旧）；空名拒绝返回 null */
@@ -264,11 +261,7 @@ export function removeSendPresetById(list: SendPreset[], id: string): SendPreset
 }
 
 export function saveSendPresets(list: SendPreset[]): void {
-  try {
-    localStorage.setItem(SEND_PRESETS_KEY, JSON.stringify(list))
-  } catch {
-    /* ignore */
-  }
+  saveStored(SEND_PRESETS_KEY, sendPresetsCodec.schema, list)
 }
 
 /** 单步发送历史（会话级 sendHistory，去重置顶截断 20） */
@@ -294,27 +287,28 @@ export function isSeqStep(x: unknown): x is SeqStep {
   return false
 }
 
-export function loadSendSequences(): SendSequence[] {
-  try {
-    const raw = localStorage.getItem(SEND_SEQUENCES_KEY)
-    if (!raw) return []
-    const arr = JSON.parse(raw)
-    if (!Array.isArray(arr)) return []
-    return arr
+const sendSequencesCodec = makeCodec<SendSequence[]>(
+  'sendSequences',
+  (raw) => {
+    if (!Array.isArray(raw)) throw new Error('invalid send sequences')
+    return (raw as unknown[])
       .filter(
         (x): x is SendSequence =>
           !!x &&
-          typeof x.id === 'string' &&
-          typeof x.name === 'string' &&
-          Array.isArray(x.steps) &&
-          typeof x.loop === 'boolean' &&
-          typeof x.intervalMs === 'number' &&
-          Number.isFinite(x.intervalMs),
+          typeof x === 'object' &&
+          typeof (x as { id?: unknown }).id === 'string' &&
+          typeof (x as { name?: unknown }).name === 'string' &&
+          Array.isArray((x as { steps?: unknown }).steps) &&
+          typeof (x as { loop?: unknown }).loop === 'boolean' &&
+          typeof (x as { intervalMs?: unknown }).intervalMs === 'number' &&
+          Number.isFinite((x as { intervalMs?: unknown }).intervalMs),
       )
       .map((x) => ({ ...x, steps: x.steps.filter(isSeqStep) }))
-  } catch {
-    return []
-  }
+  },
+)
+
+export function loadSendSequences(): SendSequence[] {
+  return loadValue(SEND_SEQUENCES_KEY, sendSequencesCodec, [])
 }
 
 /** 保存序列（整体覆盖同 id；intervalMs 钳制 ≥50ms 防定时器风暴）；空名拒绝返回 null */
@@ -338,11 +332,7 @@ export function removeSendSequenceById(list: SendSequence[], id: string): SendSe
 }
 
 export function saveSendSequences(list: SendSequence[]): void {
-  try {
-    localStorage.setItem(SEND_SEQUENCES_KEY, JSON.stringify(list))
-  } catch {
-    /* ignore */
-  }
+  saveStored(SEND_SEQUENCES_KEY, sendSequencesCodec.schema, list)
 }
 
 // ===================== 配置预设库（serialtool.configPresets） =====================
@@ -352,32 +342,29 @@ const CONFIG_PRESET_CATEGORIES: PresetCategory[] = ['filters', 'keywords', 'auto
 /** 类别名→预设数量上限（防 localStorage 膨胀） */
 const CONFIG_PRESETS_CAP = 50
 
-export function loadConfigPresets(): ConfigPreset[] {
-  try {
-    const raw = localStorage.getItem(CONFIG_PRESETS_KEY)
-    if (!raw) return []
-    const arr = JSON.parse(raw)
-    if (!Array.isArray(arr)) return []
-    return arr.filter(
+const configPresetsCodec = makeCodec<ConfigPreset[]>(
+  'configPresets',
+  (raw) => {
+    if (!Array.isArray(raw)) throw new Error('invalid config presets')
+    return (raw as unknown[]).filter(
       (x): x is ConfigPreset =>
         !!x &&
-        typeof x.id === 'string' &&
-        typeof x.name === 'string' &&
-        typeof x.createdAt === 'number' &&
-        CONFIG_PRESET_CATEGORIES.includes(x.category as PresetCategory) &&
-        x.data != null,
+        typeof x === 'object' &&
+        typeof (x as { id?: unknown }).id === 'string' &&
+        typeof (x as { name?: unknown }).name === 'string' &&
+        typeof (x as { createdAt?: unknown }).createdAt === 'number' &&
+        CONFIG_PRESET_CATEGORIES.includes((x as { category?: unknown }).category as PresetCategory) &&
+        (x as { data?: unknown }).data != null,
     )
-  } catch {
-    return []
-  }
+  },
+)
+
+export function loadConfigPresets(): ConfigPreset[] {
+  return loadValue(CONFIG_PRESETS_KEY, configPresetsCodec, [])
 }
 
 export function saveConfigPresets(list: ConfigPreset[]): void {
-  try {
-    localStorage.setItem(CONFIG_PRESETS_KEY, JSON.stringify(list))
-  } catch {
-    /* ignore */
-  }
+  saveStored(CONFIG_PRESETS_KEY, configPresetsCodec.schema, list)
 }
 
 export function removeConfigPresetById(list: ConfigPreset[], pid: string): ConfigPreset[] {

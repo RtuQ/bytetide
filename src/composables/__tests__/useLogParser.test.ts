@@ -1,6 +1,18 @@
+import { readFileSync } from 'node:fs'
 import { describe, it, expect } from 'vitest'
 import { parseTsToMs, parseLogFile } from '../useLogParser'
 import type { RawLogLine } from '../../types'
+
+/**
+ * TSV 会话录制/现场捕获黄金样本（testdata/protocol/tsv-v1.log，Rust 离线读取
+ * 同源消费）：覆盖 # 注释头、CRLF/LF（仓库 eol=lf 规范化，CRLF 由消费方运行时
+ * 全文转换验证）、坏行、非法 dir 归一、tab 含于 text、ts 失败 epoch 回退、
+ * 二进制 lossy U+FFFD。
+ */
+const TSV_FIXTURE = readFileSync(
+  new URL('../../../testdata/protocol/tsv-v1.log', import.meta.url),
+  'utf8',
+)
 
 describe('parseTsToMs', () => {
   it('parses HH:MM:SS.mmm', () => {
@@ -77,5 +89,39 @@ describe('parseLogFile', () => {
     const r = parseLogFile(Array(50_001).fill(one).join('\n'))
     expect(r.total).toBe(50_001)
     expect(r.lines.length).toBe(50_000)
+  })
+
+  it('golden fixture tsv-v1.log：注释头/坏行/dir 归一/tab text/epoch 回退/lossy U+FFFD', () => {
+    const r = parseLogFile(TSV_FIXTURE)
+    expect(r.total).toBe(9)
+    expect(r.errors).toBe(1) // 仅无 tab 行
+    const [hello, csq, lower, padded, tabbed, garbageTs, lossy, crlf, lf] = r.lines
+    expect(hello).toEqual({
+      ts: '00:00:01.000',
+      dir: 'rx',
+      text: 'hello',
+      bytes: null,
+      epochMillis: 1000,
+    } satisfies RawLogLine)
+    expect(csq!.dir).toBe('tx')
+    expect(lower!.dir).toBe('rx') // 小写 rx 保持
+    expect(padded!.dir).toBe('tx') // ' TX ' 归一 tx
+    expect(tabbed!.text).toBe('text may contain\ta tab here') // 仅按前两个 tab 切
+    expect(garbageTs!.ts).toBe('garbage-ts')
+    expect(garbageTs!.epochMillis).toBe(5) // ts 解析失败 → 行序号回退
+    expect(lossy!.text).toBe('binary lossy: \uFFFD\uFFFD OK\uFFFD') // 二进制 lossy 占位
+    expect(lossy!.bytes).toBeNull() // 有损 TSV 不含原始字节
+    expect(crlf!.epochMillis).toBe(8000)
+    expect(lf!.epochMillis).toBe(8250)
+  })
+
+  it('golden fixture 全文 CRLF 变体与 LF 结果一致（.gitattributes 规范化 LF 后仍覆盖 CRLF 语义）', () => {
+    const asCrlf = TSV_FIXTURE.replace(/\n/g, '\r\n')
+    const crlf = parseLogFile(asCrlf)
+    const lf = parseLogFile(TSV_FIXTURE)
+    expect(crlf).toEqual(lf)
+    // ts 字段无残留 \r（若按裸 \n 切分，CRLF 行的 ts 会带 \r 且解析失败）
+    expect(crlf.lines.every((l) => !l.ts.endsWith('\r'))).toBe(true)
+    expect(crlf.lines[7]!.epochMillis).toBe(8000)
   })
 })

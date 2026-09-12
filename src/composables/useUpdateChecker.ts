@@ -1,6 +1,8 @@
 import { ref } from 'vue'
 import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { makeCodec } from '../persistence/schema'
+import { loadStored, saveStored } from '../persistence/storage'
 
 /** 更新检查的 GitHub 仓库；改动需同步 scripts/portable-README.txt 的主页链接 */
 const UPDATE_REPO = 'RtuQ/bytetide'
@@ -10,6 +12,19 @@ const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 const AUTO_CHECK_DELAY_MS = 5000
 const LAST_CHECK_KEY = 'serialtool.update.lastCheck'
 const DISMISSED_KEY = 'serialtool.update.dismissedVersion'
+
+// 信封 codecs：lastCheck 旧值为纯数字字符串（JSON.parse 后是 number）；dismissedVersion
+// 旧值为裸 tag 字符串（非 JSON，loadStored 按原文标量迁移）。
+const lastCheckCodec = makeCodec<number>('update.lastCheck', (raw) => {
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN
+  if (!Number.isFinite(n)) throw new Error('invalid lastCheck')
+  return n
+})
+
+const dismissedCodec = makeCodec<string>('update.dismissedVersion', (raw) => {
+  if (typeof raw !== 'string' || raw === '') throw new Error('invalid dismissed tag')
+  return raw
+})
 
 export type UpdateStatus =
   | 'idle' // 初始 / 已忽略
@@ -72,32 +87,17 @@ export function parseRelease(json: unknown): UpdateInfo | null {
 }
 
 function readLastCheck(): number | null {
-  try {
-    const raw = localStorage.getItem(LAST_CHECK_KEY)
-    if (raw === null) return null
-    const n = Number(raw)
-    return Number.isFinite(n) ? n : null
-  } catch {
-    /* ignore */
-  }
-  return null
+  const r = loadStored(LAST_CHECK_KEY, lastCheckCodec, 0)
+  return r.kind === 'ok' || r.kind === 'migrated' ? r.data : null
 }
 
 function writeLastCheck(now: number): void {
-  try {
-    localStorage.setItem(LAST_CHECK_KEY, String(now))
-  } catch {
-    /* ignore */
-  }
+  saveStored(LAST_CHECK_KEY, lastCheckCodec.schema, now)
 }
 
 function readDismissedTag(): string | null {
-  try {
-    return localStorage.getItem(DISMISSED_KEY)
-  } catch {
-    /* ignore */
-  }
-  return null
+  const r = loadStored(DISMISSED_KEY, dismissedCodec, '')
+  return r.kind === 'ok' || r.kind === 'migrated' ? r.data : null
 }
 
 /** 模块级单例状态（跨组件共享） */
@@ -167,11 +167,7 @@ function init(): void {
 function dismiss(): void {
   const info = updateInfo.value
   if (!info) return
-  try {
-    localStorage.setItem(DISMISSED_KEY, info.tagName)
-  } catch {
-    /* ignore */
-  }
+  saveStored(DISMISSED_KEY, dismissedCodec.schema, info.tagName)
   if (status.value === 'available') status.value = 'idle'
 }
 

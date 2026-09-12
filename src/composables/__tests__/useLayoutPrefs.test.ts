@@ -52,7 +52,12 @@ describe('面板开合持久化', () => {
     expect(p.isOpen('search')).toBe(false)
     p.setOpen('search', true)
     expect(p.isOpen('search')).toBe(true)
-    expect(JSON.parse(mem['serialtool.panels'])).toEqual({ search: true })
+    // Task 7 起值为 v1 信封（键名不变）：断言信封 data
+    expect(JSON.parse(mem['serialtool.panels'] as string)).toEqual({
+      schema: 'panels',
+      version: 1,
+      data: { search: true },
+    })
     p.setOpen('search', false)
     expect(p.isOpen('search')).toBe(false)
   })

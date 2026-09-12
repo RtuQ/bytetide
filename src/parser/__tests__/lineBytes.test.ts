@@ -1,39 +1,48 @@
 import { describe, it, expect } from 'vitest'
 import { lineBytes } from '../lineBytes'
-import type { LogLine } from '../../types'
+import plotFixture from '../../../testdata/protocol/plot-v1.json'
+import type { LogLine, PlotSource } from '../../types'
 
-function mkLine(text: string, bytes: number[] | null): LogLine {
-  return { no: 1, ts: '00:00:00.000', dir: 'rx', text, bytes, epochMillis: 0 }
+/**
+ * 行字节三态还原测试（消费共享黄金样本 plot-v1.json 的 lineBytesSamples）：
+ * 样本同时被 Rust 侧 line_bytes 的测试消费——两侧任一实现漂移即红。
+ */
+
+interface PlotFixture {
+  lineBytesSamples: {
+    cases: {
+      name: string
+      source: string
+      line: { text: string; bytes: number[] | null }
+      expectedBytes: number[]
+    }[]
+  }
 }
 
-describe('lineBytes 三态还原', () => {
-  it('ascii-hex：抽取文本中的十六进制字节对（忽略分隔与大小写）', () => {
-    const b = lineBytes(mkLine('AA 55 0d 0a', null), 'ascii-hex')
-    expect(Array.from(b)).toEqual([0xaa, 0x55, 0x0d, 0x0a])
-    expect(lineBytes(mkLine('AA550D', null), 'ascii-hex')).toEqual(new Uint8Array([0xaa, 0x55, 0x0d]))
-    expect(lineBytes(mkLine('01,02', null), 'ascii-hex')).toEqual(new Uint8Array([1, 2]))
+const fx = (plotFixture as unknown as PlotFixture).lineBytesSamples
+
+describe('lineBytes 三态还原（fixture: lineBytesSamples）', () => {
+  it('全部黄金样本', () => {
+    for (const c of fx.cases) {
+      const line: LogLine = {
+        no: 1,
+        ts: '00:00:00.000',
+        dir: 'rx',
+        text: c.line.text,
+        bytes: c.line.bytes,
+        epochMillis: 0,
+      }
+      expect(Array.from(lineBytes(line, c.source as PlotSource)), c.name).toEqual(c.expectedBytes)
+    }
   })
 
-  it('binary + 后端原始字节：直接使用（含 0x80+ 孤立字节）', () => {
+  it('返回副本：改写不影响原数组（防外部串改原始字节）', () => {
     const raw = [0x80, 0xc3, 0x28]
-    const b = lineBytes(mkLine('???', raw), 'binary')
-    expect(Array.from(b)).toEqual(raw)
-    // 返回副本：改写不影响原数组
+    const b = lineBytes(
+      { no: 1, ts: '', dir: 'rx', text: '???', bytes: raw, epochMillis: 0 },
+      'binary',
+    )
     b[0] = 0xff
     expect(raw[0]).toBe(0x80)
-  })
-
-  it('binary 无原始字节：TextEncoder 回退（UTF-8 多字节）', () => {
-    const b = lineBytes(mkLine('温25', null), 'binary')
-    expect(Array.from(b)).toEqual(Array.from(new TextEncoder().encode('温25')))
-  })
-
-  it('binary 空字节数组视为缺失，走 TextEncoder 回退', () => {
-    const b = lineBytes(mkLine('AB', []), 'binary')
-    expect(Array.from(b)).toEqual([0x41, 0x42])
-  })
-
-  it('ascii-hex 无 hex 内容返回空数组', () => {
-    expect(lineBytes(mkLine('hello', null), 'ascii-hex')).toEqual(new Uint8Array(0))
   })
 })

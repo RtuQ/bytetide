@@ -1,0 +1,263 @@
+{
+  "$about": "bytetide 协议黄金样本 v1（绘图文法 + 行字节还原 + 解析脚本样本）。共享防漂移：TypeScript 侧由 vitest 直接 import 消费，Rust 侧 include_str! + serde_json 白名单取键（未知键忽略）。两侧任一实现漂移，共享向量即红。改动本文件必须两侧测试同步。消费者：src/composables/__tests__/usePlotParser.test.ts、src/parser/__tests__/lineBytes.test.ts、src/parser/__tests__/engine-protocol.test.ts；Rust: src-tauri/src/bridge/routes/mod.rs parse_frames/line_bytes 的测试。",
+  "version": 1,
+
+  "hexFields": {
+    "$about": "parseHexField / parse_hex：宽松 hex 抽取（容忍空格/逗号分隔，按字符对跳过非法）",
+    "valid": [
+      { "raw": "01 00", "bytes": [1, 0] },
+      { "raw": "0100", "bytes": [1, 0] },
+      { "raw": "01,00", "bytes": [1, 0] },
+      { "raw": "AA55", "bytes": [170, 85] }
+    ],
+    "noPairs": ["", "zz"]
+  },
+
+  "checksumVectors": {
+    "$about": "绘图校验和（单字节）：sum=低 8 位、xor=逐字节异或、none 恒 0",
+    "sum": { "bytes": [1, 2, 255], "expected": 2 },
+    "xor": { "bytes": [170, 85], "expected": 255 },
+    "none": { "bytes": [1], "expected": 0 }
+  },
+
+  "valueBoundaries": {
+    "$about": "parseValue：端序拼装 + 有符号还原；4 字节须用乘法避免 JS 位运算 32 位截断",
+    "cases": [
+      { "bytes": [1, 0], "offset": 0, "len": 2, "endian": "big", "signed": false, "expected": 256 },
+      { "bytes": [1, 0], "offset": 0, "len": 2, "endian": "little", "signed": false, "expected": 1 },
+      { "bytes": [128], "offset": 0, "len": 1, "endian": "big", "signed": true, "expected": -128 },
+      { "bytes": [127], "offset": 0, "len": 1, "endian": "big", "signed": true, "expected": 127 },
+      { "bytes": [128, 0], "offset": 0, "len": 2, "endian": "big", "signed": true, "expected": -32768 },
+      { "bytes": [255, 255], "offset": 0, "len": 2, "endian": "little", "signed": true, "expected": -1 },
+      { "bytes": [0, 0, 1, 0], "offset": 0, "len": 4, "endian": "big", "signed": false, "expected": 256 }
+    ]
+  },
+
+  "plotCases": {
+    "$about": "parseFrames（TS）↔ parse_frames（Rust）黄金帧。帧布局 [HEAD][DATA(channels×bytesPerChannel)][CHECKSUM?(1B)][TAIL?]；RX 行字节拼接成流切帧；points 期望含 values/rawHex/epochMillis；坏校验静默跳帧（TS 0 帧；Rust 记 lastError 但同样不产出帧）",
+    "groups": [
+      {
+        "name": "binary-head-2ch-2B-big-unsigned",
+        "config": {
+          "enabled": false,
+          "source": "binary",
+          "frameHead": "AA55",
+          "frameTail": "",
+          "checksum": "none",
+          "channels": 2,
+          "bytesPerChannel": 2,
+          "endian": "big",
+          "signed": false,
+          "maxPoints": 2000
+        },
+        "cases": [
+          {
+            "name": "golden: 2ch big unsigned -> [256,512]",
+            "lines": [
+              { "dir": "rx", "text": "", "bytes": [170, 85, 1, 0, 2, 0], "epochMillis": 1000 }
+            ],
+            "expected": {
+              "frameCount": 1,
+              "points": [
+                { "values": [256, 512], "rawHex": "AA 55 01 00 02 00", "epochMillis": 1000 }
+              ],
+              "lastError": ""
+            }
+          },
+          {
+            "name": "head mismatch advances one byte",
+            "lines": [
+              { "dir": "rx", "text": "", "bytes": [0, 170, 85, 1, 0, 2, 0], "epochMillis": 1000 }
+            ],
+            "expected": {
+              "frameCount": 1,
+              "points": [
+                { "values": [256, 512], "rawHex": "AA 55 01 00 02 00", "epochMillis": 1000 }
+              ],
+              "lastError": ""
+            }
+          }
+        ]
+      },
+      {
+        "name": "binary-head-1ch-1B-big-signed-sum",
+        "config": {
+          "enabled": false,
+          "source": "binary",
+          "frameHead": "FF",
+          "frameTail": "",
+          "checksum": "sum",
+          "channels": 1,
+          "bytesPerChannel": 1,
+          "endian": "big",
+          "signed": true,
+          "maxPoints": 2000
+        },
+        "cases": [
+          {
+            "name": "signed sum ok: -128",
+            "lines": [
+              { "dir": "rx", "text": "", "bytes": [255, 128, 128], "epochMillis": 1000 }
+            ],
+            "expected": {
+              "frameCount": 1,
+              "points": [{ "values": [-128], "rawHex": "FF 80 80", "epochMillis": 1000 }],
+              "lastError": ""
+            }
+          },
+          {
+            "name": "bad sum checksum -> 0 frames",
+            "lines": [
+              { "dir": "rx", "text": "", "bytes": [255, 128, 0], "epochMillis": 2000 }
+            ],
+            "expected": {
+              "frameCount": 0,
+              "points": [],
+              "lastError": ""
+            }
+          }
+        ]
+      },
+      {
+        "name": "ascii-hex-tail-2ch-1B-little",
+        "config": {
+          "enabled": false,
+          "source": "ascii-hex",
+          "frameHead": "",
+          "frameTail": "0D",
+          "checksum": "none",
+          "channels": 2,
+          "bytesPerChannel": 1,
+          "endian": "little",
+          "signed": false,
+          "maxPoints": 2000
+        },
+        "cases": [
+          {
+            "name": "tail-anchored little endian two frames",
+            "lines": [
+              { "dir": "rx", "text": "AA550DBB660D", "bytes": null, "epochMillis": 3000 }
+            ],
+            "expected": {
+              "frameCount": 2,
+              "points": [
+                { "values": [170, 85], "rawHex": "AA 55 0D", "epochMillis": 3000 },
+                { "values": [187, 102], "rawHex": "BB 66 0D", "epochMillis": 3000 }
+              ],
+              "lastError": ""
+            }
+          }
+        ]
+      },
+      {
+        "name": "maxPoints-window",
+        "config": {
+          "enabled": false,
+          "source": "binary",
+          "frameHead": "AA",
+          "frameTail": "",
+          "checksum": "none",
+          "channels": 1,
+          "bytesPerChannel": 1,
+          "endian": "big",
+          "signed": false,
+          "maxPoints": 2
+        },
+        "cases": [
+          {
+            "name": "keeps last N points, frameCount counts all",
+            "lines": [
+              { "dir": "rx", "text": "", "bytes": [170, 1, 170, 2, 170, 3], "epochMillis": 0 }
+            ],
+            "expected": {
+              "frameCount": 3,
+              "points": [
+                { "values": [2], "rawHex": "AA 02", "epochMillis": 0 },
+                { "values": [3], "rawHex": "AA 03", "epochMillis": 0 }
+              ],
+              "lastError": ""
+            }
+          }
+        ]
+      }
+    ]
+  },
+
+  "lineBytesSamples": {
+    "$about": "行字节三态还原（TS lineBytes ↔ Rust line_bytes）：ascii-hex 从文本抽取字节对；binary 优先原始 bytes（含 0x80+ 孤立字节，lossy 文本的 U+FFFD 不得再编码）；无原始字节回退 text 的 UTF-8 编码；空 bytes 数组视同缺失",
+    "cases": [
+      {
+        "name": "ascii-hex extraction (case/space/comma insensitive)",
+        "source": "ascii-hex",
+        "line": { "text": "AA 55 0d 0a", "bytes": null },
+        "expectedBytes": [170, 85, 13, 10]
+      },
+      {
+        "name": "ascii-hex packed and comma separated",
+        "source": "ascii-hex",
+        "line": { "text": "AA550D", "bytes": null },
+        "expectedBytes": [170, 85, 13]
+      },
+      {
+        "name": "binary raw bytes win over lossy text (U+FFFD must not be re-encoded)",
+        "source": "binary",
+        "line": { "text": "\uFFFD\uFFFD\u0001\uFFFD", "bytes": [170, 85, 1, 164] },
+        "expectedBytes": [170, 85, 1, 164]
+      },
+      {
+        "name": "isolated high bytes preserved only via raw bytes",
+        "source": "binary",
+        "line": { "text": "???", "bytes": [128, 195, 40] },
+        "expectedBytes": [128, 195, 40]
+      },
+      {
+        "name": "binary without bytes falls back to text UTF-8",
+        "source": "binary",
+        "line": { "text": "温25", "bytes": null },
+        "expectedBytes": [230, 184, 169, 50, 53]
+      },
+      {
+        "name": "empty bytes array counts as missing, falls back to text",
+        "source": "binary",
+        "line": { "text": "AB", "bytes": [] },
+        "expectedBytes": [65, 66]
+      },
+      {
+        "name": "ascii-hex without hex content yields empty",
+        "source": "ascii-hex",
+        "line": { "text": "hello", "bytes": null },
+        "expectedBytes": []
+      }
+    ]
+  },
+
+  "declSample": {
+    "$about": "解析引擎声明式脚本黄金样本（TS-only：src/parser 引擎 + bootstrap Worker 沙箱）。frame = sync AA 55 + type@2 + len@3(payload+crc 计数) + payload + CRC16-MODBUS(小端)。Rust serde消费时忽略本节。",
+    "decl": {
+      "meta": { "name": "温控协议", "version": "1.0" },
+      "framing": {
+        "source": "binary",
+        "sync": "AA 55",
+        "length": { "kind": "field", "at": 3, "fmt": "u8", "add": 4 },
+        "crc": { "algo": "crc16-modbus", "at": "tail:2" },
+        "maxSize": 64
+      },
+      "type": { "at": 2, "fmt": "u8", "map": { "1": "状态上报", "2": "设置响应" } },
+      "fields": [
+        { "label": "温度", "at": 4, "fmt": "i16", "scale": 0.1, "unit": "℃" },
+        { "label": "模式", "at": 6, "fmt": "u8", "map": { "0": "待机", "1": "制冷" } }
+      ],
+      "text": "温度 {温度}℃，模式{模式}"
+    },
+    "frames": {
+      "$about": "goodHex: type=1 状态上报，温度 i16 LE @4 = 0x00FA -> 25.0℃，模式 u8 @6 = 1 制冷；CRC16-MODBUS=0xF2C1 按小端 C1 F2 上线",
+      "goodHex": "AA 55 01 05 FA 00 01 C1 F2",
+      "crcVector": {
+        "algo": "crc16-modbus",
+        "inputHex": "AA 55 01 05 FA 00 01",
+        "crcHex": "F2C1",
+        "wireOrder": "little-endian (C1 F2)"
+      }
+    }
+  }
+}

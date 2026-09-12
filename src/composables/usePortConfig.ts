@@ -2,10 +2,13 @@ import { ref } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useSessionStore } from '../stores/session'
 import { feedParser } from './useParserEngine'
+import { makeCodec } from '../persistence/schema'
+import { loadValue, saveStored } from '../persistence/storage'
 import type { PortConfig } from '../types'
 
 /** PortBar 退役后的共享挂点（布局重构 V1）：上次连接参数记忆 + 打开离线日志。
- *  模块级单例——TitleBar（设置弹层）与 TabBar（新建连接/打开日志）共用同一份 cfg。 */
+ *  模块级单例——TitleBar（设置弹层）与 TabBar（新建连接/打开日志）共用同一份 cfg。
+ *  持久化走 src/persistence（v1 信封 + 旧裸 JSON 自动迁移回填网络源字段）。 */
 
 const DEFAULT_CFG: PortConfig = {
   name: '',
@@ -17,43 +20,29 @@ const DEFAULT_CFG: PortConfig = {
 }
 const STORAGE_KEY = 'serialtool.lastPortConfig'
 
-function loadCfg(): PortConfig {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) return { ...DEFAULT_CFG, ...(JSON.parse(raw) as Partial<PortConfig>) }
-  } catch {
-    /* ignore */
-  }
-  return { ...DEFAULT_CFG }
-}
+const cfgCodec = makeCodec<PortConfig>(
+  'lastPortConfig',
+  (raw) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('invalid port cfg')
+    // 旧存档缺网络源字段：合并默认后补齐（transport/tcpHost/tcpPort/udpLocalPort）
+    const c = { ...DEFAULT_CFG, ...(raw as Partial<PortConfig>) }
+    return {
+      ...c,
+      transport: (c.transport as PortConfig['transport']) ?? 'serial',
+      tcpHost: c.tcpHost ?? '',
+      tcpPort: c.tcpPort ?? null,
+      udpLocalPort: c.udpLocalPort ?? null,
+    }
+  },
+)
 
-function persistCfg(c: PortConfig) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(c))
-  } catch {
-    /* ignore */
-  }
-}
-
-/** 载入并补齐网络源字段（旧存档无这些键） */
-function normalizedCfg(): PortConfig {
-  const c = loadCfg()
-  return {
-    ...c,
-    transport: (c.transport as PortConfig['transport']) ?? 'serial',
-    tcpHost: c.tcpHost ?? '',
-    tcpPort: c.tcpPort ?? null,
-    udpLocalPort: c.udpLocalPort ?? null,
-  }
-}
-
-const cfg = ref<PortConfig>(normalizedCfg())
+const cfg = ref<PortConfig>(loadValue(STORAGE_KEY, cfgCodec, { ...DEFAULT_CFG }))
 
 export function usePortCfg() {
   return {
     cfg,
     /** 连接成功后记忆当前参数 */
-    saveCfg: () => persistCfg(cfg.value),
+    saveCfg: () => saveStored(STORAGE_KEY, cfgCodec.schema, cfg.value),
     /** 从预设回填到待连接表单 */
     applyPreset: (c: PortConfig) => {
       cfg.value = { ...c }
