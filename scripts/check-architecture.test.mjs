@@ -171,10 +171,10 @@ test('覆盖表里的文件按各自阈值判（阈值内通过、超限拒绝�
     'crates/bytetide-core/src/lib.rs': CLEAN_CORE_RS,
   }
   // manager.rs 在覆盖阈值内（当前 2250）、默认 1200 会误报 → 覆盖表生效
-  const within = fixture({ ...base, 'crates/bytetide-core/src/serial/manager.rs': lines(2250) })
+  const within = fixture({ ...base, 'crates/bytetide-core/src/serial/manager.rs': lines(1000) })
   assert.doesNotThrow(() => checkArchitecture('/fixture', within))
-  const over = fixture({ ...base, 'crates/bytetide-core/src/serial/manager.rs': lines(2251) })
-  assert.throws(() => checkArchitecture('/fixture', over), /2251/)
+  const over = fixture({ ...base, 'crates/bytetide-core/src/serial/manager.rs': lines(1001) })
+  assert.throws(() => checkArchitecture('/fixture', over), /1001/)
 })
 
 test('tests 目录与 *.test.ts 不参与行数限额', () => {
