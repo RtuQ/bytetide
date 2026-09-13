@@ -2,6 +2,7 @@
 //! 零 Tauri 依赖——桌面端（src-tauri）与 bytetide-cli 共用；宿主经 [`sink::EventSink`]
 //! 接收状态/错误/告警事件（GUI 实现转发为 Tauri emit，CLI 实现写 stderr/日志）。
 
+pub mod automation;
 pub mod logfmt;
 pub mod offline;
 pub mod serial;

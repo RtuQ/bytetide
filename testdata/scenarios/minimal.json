@@ -1,0 +1,12 @@
+{
+  "schema": "bytetide.scenario",
+  "version": 1,
+  "name": "minimal",
+  "variables": {
+    "greeting": "hello"
+  },
+  "steps": [
+    { "kind": "send", "mode": "ascii", "text": "${greeting}", "appendNewline": true },
+    { "kind": "wait", "matcher": { "dir": "rx", "literal": "OK" }, "timeoutMs": 5000 }
+  ]
+}

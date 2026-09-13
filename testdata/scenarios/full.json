@@ -1,0 +1,47 @@
+{
+  "schema": "bytetide.scenario",
+  "version": 1,
+  "name": "full-coverage",
+  "variables": {
+    "cmd": "PING",
+    "token": "7f"
+  },
+  "steps": [
+    { "kind": "signal", "pin": "dtr", "level": true },
+    { "kind": "send", "mode": "ascii", "text": "${cmd}", "appendNewline": true },
+    {
+      "kind": "wait",
+      "matcher": { "dir": "rx", "regex": "^PONG ([0-9A-Fa-f]{2})" },
+      "timeoutMs": 2000,
+      "save": { "variable": "value", "group": 1 }
+    },
+    {
+      "kind": "assert",
+      "matcher": { "hex": "50 4f 4e 47" },
+      "withinLast": 10,
+      "message": "expected PONG bytes, captured ${value}"
+    },
+    { "kind": "wait", "matcher": { "dir": "tx", "mask": "5a ?? 4f" }, "timeoutMs": 1000 },
+    { "kind": "delay", "ms": 250 },
+    {
+      "kind": "repeat",
+      "times": 2,
+      "steps": [
+        { "kind": "signal", "pin": "rts", "level": false },
+        { "kind": "send", "mode": "hex", "text": "aa ${token}", "appendNewline": false },
+        {
+          "kind": "wait",
+          "matcher": { "literal": "ACK" },
+          "timeoutMs": 500,
+          "save": { "variable": "ack_seen", "group": 0 }
+        },
+        {
+          "kind": "assert",
+          "matcher": { "dir": "rx", "regex": "ACK" },
+          "withinLast": 5,
+          "message": "ack seen=${ack_seen} value=${value}"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "schema": "bytetide.scenario",
+  "version": 2,
+  "name": "future-version",
+  "steps": [
+    { "kind": "delay", "ms": 100 }
+  ]
+}
