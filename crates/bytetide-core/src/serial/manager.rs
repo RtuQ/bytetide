@@ -4,7 +4,7 @@
 //! （runtime.rs 的 session_thread/stream_loop/ingest）。
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
@@ -18,6 +18,7 @@ use super::runtime::{session_thread, IngestOrigin};
 use super::transport::host_of;
 use crate::logfmt;
 use crate::offline::{open_offline, OfflineIndex, OfflineReader};
+use crate::replay::{spawn_replay, ReplayCmd, ReplayConfig, ReplayState};
 use crate::sink::EventSink;
 // ring/runtime/transport/共享 DTO 自本文件迁出（Stage 2 Task 2/3）：
 // 旧公开路径经再导出保持一个发布周期
@@ -32,10 +33,13 @@ pub use super::{
 /// 桌面端 crate（src-tauri）未直接依赖 anyhow，桥服务 trait 沿用同签名时经此路径引用。
 pub use anyhow;
 
-/// 会话类型：实时串口 / 离线加载的日志文件。
+/// 会话类型：实时串口 / 离线加载的日志文件 / 时序回放（离线日志按原时间差重放）。
 enum SessionKind {
     Live,
     Offline,
+    /// 时序回放：ring 实时灌入（ingest Replay origin），无链路、无落盘、
+    /// 断开语义对齐 Offline（send/信号线/落盘拒绝，见各方法守卫）。
+    Replay,
 }
 
 struct SessionHandle {
@@ -64,6 +68,9 @@ struct SessionHandle {
     /// 离线分页读取器（`load_offline_indexed` 会话独有）：查询按页直读源文件
     /// （虚拟 ring，ring 恒空）。live 会话与旧全量 `load_offline` 会话为 None。
     offline: Option<Arc<Mutex<OfflineReader>>>,
+    /// 回放控制通道（仅 Replay 会话；disconnect 显式发 Stop——调用方仍持
+    /// start_replay 返回的 sender 克隆，仅 drop 不保证关通道）。
+    replay_tx: Option<mpsc::Sender<ReplayCmd>>,
 }
 
 pub struct PortManager {
@@ -181,6 +188,7 @@ impl PortManager {
                 alerts: alerts_mirror.clone(),
                 annotations: Arc::new(RwLock::new(Vec::new())),
                 offline: None,
+                replay_tx: None,
             },
         );
         Ok(id)
@@ -221,6 +229,7 @@ impl PortManager {
                 alerts: Arc::new(RwLock::new(Vec::new())),
                 annotations: Arc::new(RwLock::new(Vec::new())),
                 offline: None,
+                replay_tx: None,
             },
         );
         id
@@ -265,9 +274,71 @@ impl PortManager {
                 alerts: Arc::new(RwLock::new(Vec::new())),
                 annotations: Arc::new(RwLock::new(Vec::new())),
                 offline: Some(Arc::new(Mutex::new(reader))),
+                replay_tx: None,
             },
         );
         Ok((id, index))
+    }
+
+    /// 创建回放会话（id 前缀 `r`）：open_offline 建稀疏索引 → spawn_replay 按相邻行
+    /// 原始时间差重放进 ring（IngestOrigin::Replay：告警评估、零自动回复零捕获）。
+    /// 无链路无落盘：write_tx=断开通道占位（断开语义对齐 Offline），`sessions_dir`
+    /// 预留；log_path/log_base=源文件。速度非法在执行前报错。守卫面：send/信号线/
+    /// 落盘报「回放会话不支持…」，set_live_rules/clear_log 允许（见各方法）。
+    pub fn start_replay(
+        &self,
+        path: &Path,
+        replay_config: ReplayConfig,
+        sink: Arc<dyn EventSink>,
+        _sessions_dir: PathBuf,
+    ) -> anyhow::Result<(String, mpsc::Sender<ReplayCmd>)> {
+        // 非法速度执行前失败（不建会话、不 spawn 线程）
+        replay_config
+            .validate()
+            .map_err(|e| anyhow::anyhow!("回放配置非法: {e}"))?;
+        let (_, reader) = open_offline(path)?;
+        let id = format!("r{}", self.next_id.fetch_add(1, Ordering::Relaxed));
+        let runtime = Arc::new(SessionRuntime::new());
+        // 回放线程起跑即置 Running/connected；Ready 只覆盖 spawn 前的瞬态
+        *runtime.replay_state.write() = Some(ReplayState::Ready);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<ReplayCmd>();
+        // rx 立即 drop -> 写通道天然断开（断开语义对齐 Offline：send 早退守卫在前）
+        let (write_tx, _rx) = mpsc::channel::<super::PortCmd>();
+        let join = spawn_replay(
+            reader,
+            runtime.clone(),
+            replay_config,
+            cmd_rx,
+            sink,
+            id.clone(),
+        );
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.sessions.write().insert(
+            id.clone(),
+            SessionHandle {
+                config: PortConfig {
+                    name,
+                    ..PortConfig::default()
+                },
+                kind: SessionKind::Replay,
+                stop: Arc::new(AtomicBool::new(false)),
+                write_tx,
+                log_path: Arc::new(RwLock::new(path.to_path_buf())),
+                log_base: path.to_path_buf(),
+                join: Some(join),
+                runtime,
+                plot: Arc::new(RwLock::new(PlotConfig::default())),
+                bookmarks: Arc::new(RwLock::new(Vec::new())),
+                alerts: Arc::new(RwLock::new(Vec::new())),
+                annotations: Arc::new(RwLock::new(Vec::new())),
+                offline: None,
+                replay_tx: Some(cmd_tx.clone()),
+            },
+        );
+        Ok((id, cmd_tx))
     }
 
     pub fn disconnect(&self, id: &str) -> anyhow::Result<()> {
@@ -277,6 +348,11 @@ impl PortManager {
             .remove(id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
         handle.stop.store(true, Ordering::Relaxed);
+        // 回放会话：显式 Stop（start_replay 返回的 sender 克隆仍在调用方手里，
+        // 仅 drop 不保证关通道）；线程已退出时发送失败静默忽略
+        if let Some(tx) = handle.replay_tx.take() {
+            let _ = tx.send(ReplayCmd::Stop);
+        }
         if let Some(join) = handle.join.take() {
             let _ = join.join();
         }
@@ -290,6 +366,9 @@ impl PortManager {
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
         if matches!(h.kind, SessionKind::Offline) {
             return Err(anyhow::anyhow!("离线会话不可发送"));
+        }
+        if matches!(h.kind, SessionKind::Replay) {
+            return Err(anyhow::anyhow!("回放会话不支持发送"));
         }
         h.write_tx
             .send(super::PortCmd::Send(req))
@@ -307,6 +386,9 @@ impl PortManager {
         if matches!(h.kind, SessionKind::Offline) {
             return Err(anyhow::anyhow!("离线会话不可控制信号线"));
         }
+        if matches!(h.kind, SessionKind::Replay) {
+            return Err(anyhow::anyhow!("回放会话不支持信号线"));
+        }
         h.write_tx
             .send(super::PortCmd::Signal { pin, level })
             .map_err(|_| anyhow::anyhow!("通道已关闭"))?;
@@ -318,11 +400,14 @@ impl PortManager {
         let h = sessions
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
-        if matches!(h.kind, SessionKind::Offline) {
+        // 离线（镜像遗忘 / ring 清屏）与回放（ring 清屏、seq 不回退、源文件与
+        // 回放游标不动）：都不经 PortCmd——写通道是断开占位
+        if matches!(h.kind, SessionKind::Offline | SessionKind::Replay) {
             match &h.offline {
                 // 分页离线会话：虚拟 ring 清屏=后端镜像遗忘（后续查询全空，
                 // no 游标语义/计数器与 RingBuf::clear 一致；源文件不动）
                 Some(r) => r.lock().clear(),
+                // 离线全量 / 回放会话：ring 清屏（seq 不回退，回放游标不动）
                 None => h.runtime.ring.clear(),
             }
             return Ok(());
@@ -454,6 +539,16 @@ impl PortManager {
         Ok(p)
     }
 
+    /// 回放会话的细粒度回放状态（Ready/Running/Paused/Finished/Stopped/Error；
+    /// 非回放会话或会话不存在返回 None）。
+    pub fn replay_state(&self, id: &str) -> Option<ReplayState> {
+        let sessions = self.sessions.read();
+        let h = sessions.get(id)?;
+        // 先落守卫再解引用：读守卫的临时值不能活到表达式尾（同 session_log_path）
+        let state = h.runtime.replay_state.read();
+        *state
+    }
+
     /// 日志分段（「分段」按钮）：关闭当前日志文件，从当前时刻另起带时间戳的
     /// 新文件继续落盘，旧文件保留；录制暂停中调用会顺带恢复录制。
     /// 返回新文件完整路径。
@@ -464,6 +559,9 @@ impl PortManager {
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
         if matches!(h.kind, SessionKind::Offline) {
             return Err(anyhow::anyhow!("离线会话不落盘"));
+        }
+        if matches!(h.kind, SessionKind::Replay) {
+            return Err(anyhow::anyhow!("回放会话不支持落盘"));
         }
         if h.log_base.as_os_str().is_empty() {
             return Err(anyhow::anyhow!("该会话未启用日志落盘"));
@@ -490,6 +588,9 @@ impl PortManager {
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
         if matches!(h.kind, SessionKind::Offline) {
             return Err(anyhow::anyhow!("离线会话不落盘"));
+        }
+        if matches!(h.kind, SessionKind::Replay) {
+            return Err(anyhow::anyhow!("回放会话不支持落盘"));
         }
         h.write_tx
             .send(super::PortCmd::RecOff)
@@ -659,6 +760,9 @@ impl PortManager {
         let handles: Vec<(String, SessionHandle)> = self.sessions.write().drain().collect();
         for (_, mut h) in handles {
             h.stop.store(true, Ordering::Relaxed);
+            if let Some(tx) = h.replay_tx.take() {
+                let _ = tx.send(ReplayCmd::Stop);
+            }
             if let Some(join) = h.join.take() {
                 let _ = join.join();
             }
@@ -668,10 +772,9 @@ impl PortManager {
 
 #[cfg(test)]
 mod tests {
-    //! manager 侧单测：编排访问器（perf/桥镜像/游标）与假传输（loopback TCP）集成。
-    //! （状态机/ingest 单测在 serial/runtime.rs，录制/捕获/传输契约测试在各自模块。）
-    use std::time::{Duration, Instant};
-
+    //! manager 侧单测：编排访问器（perf/桥镜像/游标）与会话状态串。
+    //! （状态机/ingest 单测与读循环 loopback TCP 集成在 serial/runtime.rs，
+    //! 录制/捕获/传输契约测试在各自模块。）
     use super::*;
 
     fn mk_log(
@@ -716,6 +819,7 @@ mod tests {
                 alerts: Arc::new(RwLock::new(Vec::new())),
                 annotations: Arc::new(RwLock::new(Vec::new())),
                 offline: None,
+                replay_tx: None,
             }
         };
         m.sessions.write().insert("s1".into(), mk_handle(false));
@@ -789,159 +893,6 @@ mod tests {
         assert_eq!(m.bridge_last_no(&id), Some(2));
     }
 
-    // ============ 集成：假传输（本机 loopback TCP，不开硬件、不固定 sleep 轮询）============
-
-    use crate::sink::VecSink;
-
-    /// tcp-client 配置指向本机端口。
-    fn tcp_client_cfg(port: u16) -> PortConfig {
-        PortConfig {
-            name: format!("tcp-{port}"),
-            transport: Some("tcp-client".into()),
-            tcp_host: Some("127.0.0.1".into()),
-            tcp_port: Some(port),
-            ..PortConfig::default()
-        }
-    }
-
-    /// 轮询直到 bridge_list 状态到达期望值且 VecSink 已收到对应事件
-    ///（实现保证先写状态后发事件，两者都到齐才算稳定）；带总超时上限。
-    fn wait_for_status(m: &PortManager, sink: &VecSink, id: &str, want: &str) -> SessionSnap {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let want_ev = format!("status {id} {want}");
-        loop {
-            let snap = m
-                .bridge_list()
-                .into_iter()
-                .find(|s| s.id == id)
-                .unwrap_or_else(|| panic!("会话 {id} 不在 bridge_list"));
-            let has_event = sink.0.lock().contains(&want_ev);
-            if snap.status == want && has_event {
-                return snap;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "等待状态 {want} 超时：status={:?} 事件={:?}",
-                snap.status,
-                sink.0.lock().clone()
-            );
-            thread::sleep(Duration::from_millis(10));
-        }
-    }
-
-    /// 一致性断言（plan 明确要求）：bridge_list 的 status/lastError 与 sink 最近一次事件一致。
-    fn assert_snap_matches_sink(snap: &SessionSnap, sink: &VecSink, id: &str) {
-        let events = sink.0.lock().clone();
-        let status_prefix = format!("status {id} ");
-        let error_prefix = format!("error {id} ");
-        let last_status = events.iter().rev().find(|e| e.starts_with(&status_prefix));
-        assert_eq!(
-            last_status.map(|e| &e[status_prefix.len()..]),
-            Some(snap.status.as_str()),
-            "REST status 应与 sink 最近一次 status 事件一致"
-        );
-        let last_error = events.iter().rev().find(|e| e.starts_with(&error_prefix));
-        assert_eq!(
-            last_error.map(|e| e[error_prefix.len()..].to_string()),
-            snap.last_error,
-            "REST lastError 应与 sink 最近一次 error 事件一致"
-        );
-    }
-
-    #[test]
-    fn session_state_tcp_client_connecting_then_connected() {
-        let m = PortManager::new();
-        let sink = Arc::new(VecSink::default());
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-        let port = listener.local_addr().unwrap().port();
-        let sink_handle: Arc<dyn EventSink> = sink.clone();
-        let id = m
-            .connect(
-                tcp_client_cfg(port),
-                logfmt::LogConfig::default(),
-                sink_handle,
-                PathBuf::new(),
-            )
-            .expect("connect");
-        let snap = wait_for_status(&m, &sink, &id, "connected");
-        assert_eq!(snap.last_error, None);
-        // sink 事件序：connecting 先于 connected
-        let events = sink.0.lock().clone();
-        let ci = events
-            .iter()
-            .position(|e| *e == format!("status {id} connecting"))
-            .expect("connecting 事件");
-        let cn = events
-            .iter()
-            .position(|e| *e == format!("status {id} connected"))
-            .expect("connected 事件");
-        assert!(ci < cn);
-        assert_snap_matches_sink(&snap, &sink, &id);
-        let _ = m.disconnect(&id);
-    }
-
-    #[test]
-    fn session_state_tcp_client_connect_failure_sets_error() {
-        let m = PortManager::new();
-        let sink = Arc::new(VecSink::default());
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-        let port = listener.local_addr().unwrap().port();
-        drop(listener); // 无人监听：建链必失败
-        let sink_handle: Arc<dyn EventSink> = sink.clone();
-        let id = m
-            .connect(
-                tcp_client_cfg(port),
-                logfmt::LogConfig::default(),
-                sink_handle,
-                PathBuf::new(),
-            )
-            .expect("connect");
-        let snap = wait_for_status(&m, &sink, &id, "error");
-        let err = snap.last_error.as_deref().expect("应记录 last_error");
-        assert!(err.contains("建立"), "错误消息应说明建链失败: {err}");
-        assert_snap_matches_sink(&snap, &sink, &id);
-        let _ = m.disconnect(&id);
-    }
-
-    #[test]
-    fn session_state_tcp_client_eof_goes_disconnected() {
-        let m = PortManager::new();
-        let sink = Arc::new(VecSink::default());
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-        let port = listener.local_addr().unwrap().port();
-        let sink_handle: Arc<dyn EventSink> = sink.clone();
-        let id = m
-            .connect(
-                tcp_client_cfg(port),
-                logfmt::LogConfig::default(),
-                sink_handle,
-                PathBuf::new(),
-            )
-            .expect("connect");
-        wait_for_status(&m, &sink, &id, "connected");
-        // 服务端接受连接后主动关闭：客户端 read 得 Ok(0)（EOF）→ 正常断开路径
-        let (accepted, _) = listener.accept().expect("客户端已连入");
-        drop(accepted);
-        let snap = wait_for_status(&m, &sink, &id, "disconnected");
-        // EOF 记 last_error（供 REST 观测）但状态走正常断开而非 error
-        assert_eq!(snap.last_error.as_deref(), Some("网络连接已断开"));
-        let events = sink.0.lock().clone();
-        assert!(
-            events
-                .iter()
-                .any(|e| *e == format!("error {id} 网络连接已断开")),
-            "EOF 应有 error 事件: {events:?}"
-        );
-        assert!(
-            events
-                .iter()
-                .any(|e| *e == format!("status {id} disconnected")),
-            "EOF 应有 disconnected 事件: {events:?}"
-        );
-        assert_snap_matches_sink(&snap, &sink, &id);
-        let _ = m.disconnect(&id);
-    }
-
     #[test]
     fn session_state_offline_remains_offline() {
         let m = PortManager::new();
@@ -955,7 +906,8 @@ mod tests {
         assert_eq!(snap.last_error, None);
     }
 
-    // 离线分页会话（load_offline_indexed）的虚拟 ring 查询路由端到端用例
-    // 在 offline 模块单测（crate::offline::tests）与 src-tauri/tests/offline_pages.rs：
-    // 本文件只保留编排面，行数受架构检查器 1000 行限额约束。
+    // 读循环端到端集成（本机 loopback TCP 跑 session_thread/stream_loop）在
+    // serial/runtime.rs 测试——被测主循环在该文件；离线分页会话（load_offline_indexed）
+    // 的虚拟 ring 查询路由端到端用例在 offline 模块单测与 src-tauri/tests/offline_pages.rs。
+    // 本文件只保留编排面，行数受架构检查器 1000 行限额约束（scripts/check-architecture.mjs）。
 }

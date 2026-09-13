@@ -29,6 +29,7 @@ use super::rules::{
 use super::transport::{describe_transport, is_net_transport, open_transport, Transport};
 use super::{now_ms, BridgeAlert, PortCmd, SendMode, SendRequest};
 use crate::logfmt;
+use crate::replay::ReplayState;
 use crate::sink::EventSink;
 
 /// 会话运行状态：REST 快照（bridge_list）与 sink 事件的共同事实源（serde 小写，
@@ -122,6 +123,9 @@ pub struct SessionRuntime {
     pub alerts: Arc<RwLock<AlertCfg>>,
     /// 触发式现场捕获配置（前端推送；读线程内逐行评估触发）
     pub capture: Arc<RwLock<CaptureCfg>>,
+    /// 细粒度回放状态（仅回放会话：replay runner 写、manager 查询面读；
+    /// 非回放会话恒 None，见 crate::replay::ReplayState）
+    pub replay_state: Arc<RwLock<Option<ReplayState>>>,
     /// 告警窗口/冷却状态（每会话独占；原 stream_loop 栈上状态迁入——随会话生灭）
     alert_states: Mutex<HashMap<String, AlertWinState>>,
 }
@@ -140,6 +144,7 @@ impl SessionRuntime {
             auto_reply: Arc::new(RwLock::new(AutoReplyCfg::default())),
             alerts: Arc::new(RwLock::new(AlertCfg::default())),
             capture: Arc::new(RwLock::new(CaptureCfg::default())),
+            replay_state: Arc::new(RwLock::new(None)),
             alert_states: Mutex::new(HashMap::new()),
         }
     }
@@ -953,5 +958,163 @@ mod tests {
             sink.0.lock().clone(),
             vec!["status s1 connecting".to_string()]
         );
+    }
+
+    // ===== 集成：假传输（本机 loopback TCP，不开硬件、不固定 sleep 轮询）端到端跑 =====
+    // session_thread/stream_loop 读循环（自 manager.rs 测试迁入：被测主循环在本文件，
+    // manager 只提供编排；manager.rs 行数受架构检查器 1000 行限额约束）。
+    // 事件序/状态串断言与迁移前逐点一致。
+
+    use std::time::{Duration, Instant};
+
+    use super::super::{PortManager, SessionSnap};
+
+    /// tcp-client 配置指向本机端口。
+    fn tcp_client_cfg(port: u16) -> PortConfig {
+        PortConfig {
+            name: format!("tcp-{port}"),
+            transport: Some("tcp-client".into()),
+            tcp_host: Some("127.0.0.1".into()),
+            tcp_port: Some(port),
+            ..PortConfig::default()
+        }
+    }
+
+    /// 轮询直到 bridge_list 状态到达期望值且 VecSink 已收到对应事件
+    ///（实现保证先写状态后发事件，两者都到齐才算稳定）；带总超时上限。
+    fn wait_for_status(m: &PortManager, sink: &VecSink, id: &str, want: &str) -> SessionSnap {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let want_ev = format!("status {id} {want}");
+        loop {
+            let snap = m
+                .bridge_list()
+                .into_iter()
+                .find(|s| s.id == id)
+                .unwrap_or_else(|| panic!("会话 {id} 不在 bridge_list"));
+            let has_event = sink.0.lock().contains(&want_ev);
+            if snap.status == want && has_event {
+                return snap;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "等待状态 {want} 超时：status={:?} 事件={:?}",
+                snap.status,
+                sink.0.lock().clone()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// 一致性断言（plan 明确要求）：bridge_list 的 status/lastError 与 sink 最近一次事件一致。
+    fn assert_snap_matches_sink(snap: &SessionSnap, sink: &VecSink, id: &str) {
+        let events = sink.0.lock().clone();
+        let status_prefix = format!("status {id} ");
+        let error_prefix = format!("error {id} ");
+        let last_status = events.iter().rev().find(|e| e.starts_with(&status_prefix));
+        assert_eq!(
+            last_status.map(|e| &e[status_prefix.len()..]),
+            Some(snap.status.as_str()),
+            "REST status 应与 sink 最近一次 status 事件一致"
+        );
+        let last_error = events.iter().rev().find(|e| e.starts_with(&error_prefix));
+        assert_eq!(
+            last_error.map(|e| e[error_prefix.len()..].to_string()),
+            snap.last_error,
+            "REST lastError 应与 sink 最近一次 error 事件一致"
+        );
+    }
+
+    #[test]
+    fn session_state_tcp_client_connecting_then_connected() {
+        let m = PortManager::new();
+        let sink = Arc::new(VecSink::default());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        let sink_handle: Arc<dyn EventSink> = sink.clone();
+        let id = m
+            .connect(
+                tcp_client_cfg(port),
+                logfmt::LogConfig::default(),
+                sink_handle,
+                PathBuf::new(),
+            )
+            .expect("connect");
+        let snap = wait_for_status(&m, &sink, &id, "connected");
+        assert_eq!(snap.last_error, None);
+        // sink 事件序：connecting 先于 connected
+        let events = sink.0.lock().clone();
+        let ci = events
+            .iter()
+            .position(|e| *e == format!("status {id} connecting"))
+            .expect("connecting 事件");
+        let cn = events
+            .iter()
+            .position(|e| *e == format!("status {id} connected"))
+            .expect("connected 事件");
+        assert!(ci < cn);
+        assert_snap_matches_sink(&snap, &sink, &id);
+        let _ = m.disconnect(&id);
+    }
+
+    #[test]
+    fn session_state_tcp_client_connect_failure_sets_error() {
+        let m = PortManager::new();
+        let sink = Arc::new(VecSink::default());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        drop(listener); // 无人监听：建链必失败
+        let sink_handle: Arc<dyn EventSink> = sink.clone();
+        let id = m
+            .connect(
+                tcp_client_cfg(port),
+                logfmt::LogConfig::default(),
+                sink_handle,
+                PathBuf::new(),
+            )
+            .expect("connect");
+        let snap = wait_for_status(&m, &sink, &id, "error");
+        let err = snap.last_error.as_deref().expect("应记录 last_error");
+        assert!(err.contains("建立"), "错误消息应说明建链失败: {err}");
+        assert_snap_matches_sink(&snap, &sink, &id);
+        let _ = m.disconnect(&id);
+    }
+
+    #[test]
+    fn session_state_tcp_client_eof_goes_disconnected() {
+        let m = PortManager::new();
+        let sink = Arc::new(VecSink::default());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        let sink_handle: Arc<dyn EventSink> = sink.clone();
+        let id = m
+            .connect(
+                tcp_client_cfg(port),
+                logfmt::LogConfig::default(),
+                sink_handle,
+                PathBuf::new(),
+            )
+            .expect("connect");
+        wait_for_status(&m, &sink, &id, "connected");
+        // 服务端接受连接后主动关闭：客户端 read 得 Ok(0)（EOF）→ 正常断开路径
+        let (accepted, _) = listener.accept().expect("客户端已连入");
+        drop(accepted);
+        let snap = wait_for_status(&m, &sink, &id, "disconnected");
+        // EOF 记 last_error（供 REST 观测）但状态走正常断开而非 error
+        assert_eq!(snap.last_error.as_deref(), Some("网络连接已断开"));
+        let events = sink.0.lock().clone();
+        assert!(
+            events
+                .iter()
+                .any(|e| *e == format!("error {id} 网络连接已断开")),
+            "EOF 应有 error 事件: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| *e == format!("status {id} disconnected")),
+            "EOF 应有 disconnected 事件: {events:?}"
+        );
+        assert_snap_matches_sink(&snap, &sink, &id);
+        let _ = m.disconnect(&id);
     }
 }

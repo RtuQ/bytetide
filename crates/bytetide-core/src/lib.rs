@@ -5,6 +5,7 @@
 pub mod automation;
 pub mod logfmt;
 pub mod offline;
+pub mod replay;
 pub mod serial;
 pub mod session;
 pub mod sink;
