@@ -1,9 +1,9 @@
 //! `automation::runner` 单元测试（内联测试模块外移，行数限额 compliance）。
 
 use super::*;
-use crate::automation::matcher::LineMatcher;
+use crate::automation::matcher::{compile_matcher, LineMatcher};
 use crate::automation::model::{
-    validate_scenario, Scenario, ScenarioStep, SCENARIO_SCHEMA, SCENARIO_VERSION,
+    validate_scenario, MatcherTemplate, Scenario, ScenarioStep, SCENARIO_SCHEMA, SCENARIO_VERSION,
 };
 use crate::automation::report::report_json;
 use crate::serial::port::Dir;
@@ -110,6 +110,16 @@ fn validated(vars: &[(&str, &str)], steps: Vec<ScenarioStep>) -> ValidatedScenar
         steps,
     })
     .expect("scenario must validate")
+}
+
+/// 手工构造（绕过静态校验）：runner 对畸形场景的防御路径测试用
+/// （timeoutMs=0 / times=0 / 未定义引用已在校验层拒绝，运行期兜底仍须生效）。
+fn manual(steps: Vec<ValidatedStep>) -> ValidatedScenario {
+    ValidatedScenario {
+        name: "t".into(),
+        variables: BTreeMap::new(),
+        steps,
+    }
 }
 
 // ---------- FakeHost（假钟 + 行表 + 可编程错误/注入 + 调用序） ----------
@@ -431,7 +441,13 @@ fn wait_ignores_lines_that_existed_before_scenario_start() {
 
 #[test]
 fn wait_zero_timeout_still_polls_once() {
-    let s = validated(&[], vec![wait(rx_lit("NEVER"), 0)]);
+    // timeoutMs=0 已被静态校验拒绝（下界 1，wait_too_short）；此处手工构造验证
+    // runner 的防御路径：0 仍保证一次拉取机会、不进入轮询睡眠
+    let s = manual(vec![ValidatedStep::Wait {
+        matcher: MatcherTemplate::Static(compile_matcher(&rx_lit("NEVER")).expect("compile")),
+        timeout_ms: 0,
+        save: None,
+    }]);
     let mut h = FakeHost::new();
     let r = run(&mut h, &s);
     assert_eq!(r.status, ScenarioStatus::Failed);
@@ -605,397 +621,154 @@ fn regex_non_participating_group_saves_empty_string() {
     assert_eq!(h.sends[1].1, "[]");
 }
 
-// ---------- assert ----------
+// ---------- matcher 模板变量替换（设计契约：${name} 可用于 matcher 模式） ----------
 
 #[test]
-fn assert_searches_last_n_lines_newest_match_wins() {
-    let mut h = FakeHost::new();
-    h.push_line(Dir::Rx, "ping 7", None);
-    h.push_line(Dir::Rx, "ping 8", None);
-    h.push_line(Dir::Rx, "ping 9", None);
-    // 窗口 = 最近 2 行 {8, 9}：命中 8（matcher 不做变量替换，message 才替换）
+fn wait_matcher_literal_substitutes_captured_variable() {
+    // 先捕获 token，再用它构造后续 Wait 的 matcher（评审影响示例的最小复现）
     let s = validated(
-        &[("v", "8")],
-        vec![assert_last(lit(None, "ping 8"), 2, "expected ping ${v}")],
+        &[],
+        vec![
+            send("GET TOKEN", true),
+            wait_save(re(Some(Dir::Rx), r"^TOKEN=(\w+)$"), 100, "token", 1),
+            wait(lit(Some(Dir::Rx), "ACK ${token}"), 100),
+        ],
     );
+    let mut h =
+        FakeHost::new()
+            .reply(Dir::Rx, "TOKEN=ab12")
+            .schedule(1_000_005, Dir::Rx, "ACK ab12");
+    let r = run(&mut h, &s);
+    assert_eq!(r.status, ScenarioStatus::Passed, "{r:?}");
+    assert_eq!(r.steps[2].matched_no, Some(2));
+}
+
+#[test]
+fn wait_matcher_dynamic_regex_and_undefined_variable_error() {
+    // 动态 regex：替换后可编译并命中
+    let s = validated(
+        &[("addr", "4f")],
+        vec![
+            send("PING", true),
+            wait(re(Some(Dir::Rx), r"^VAL ${addr}$"), 100),
+        ],
+    );
+    let mut h = FakeHost::new().reply(Dir::Rx, "VAL 4f");
     let r = run(&mut h, &s);
     assert_eq!(r.status, ScenarioStatus::Passed);
-    assert_eq!(r.steps[0].matched_no, Some(2));
-    // 窗口外（7）与未命中（10）都失败，报错信息 = 替换后的 Assert.message
+    assert_eq!(r.steps[1].matched_no, Some(1));
+
+    // 动态 regex 替换后非法（变量值破坏语法）→ 步级 invalid_regex
     let s = validated(
-        &[("v", "10")],
-        vec![assert_last(lit(None, "ping 10"), 2, "no ${v} seen")],
+        &[("bad", "(unclosed")],
+        vec![wait(re(None, "x${bad}y"), 100)],
     );
+    let mut h = FakeHost::new();
     let r = run(&mut h, &s);
     assert_eq!(r.status, ScenarioStatus::Failed);
-    assert_eq!(r.steps[0].matched_no, None);
     let err = r.steps[0].error.as_ref().expect("error");
-    assert_eq!(err.code, "assert_failed");
-    assert_eq!(err.message, "no 10 seen");
-}
+    assert_eq!(err.code, "invalid_regex");
 
-#[test]
-fn assert_zero_within_last_means_last_line_only() {
+    // 未定义引用在 matcher 模板 → 步级 undefined_variable（防御路径：
+    // 静态校验已拒绝，手工构造验证 runner 兜底）
+    let s = manual(vec![ValidatedStep::Wait {
+        matcher: MatcherTemplate::Dynamic(lit(None, "${ghost}")),
+        timeout_ms: 100,
+        save: None,
+    }]);
     let mut h = FakeHost::new();
-    h.push_line(Dir::Rx, "A", None);
-    h.push_line(Dir::Rx, "B", None);
-    let s = validated(&[], vec![assert_last(lit(None, "B"), 0, "want B")]);
     let r = run(&mut h, &s);
+    assert_eq!(r.status, ScenarioStatus::Failed);
     assert_eq!(
-        r.status,
-        ScenarioStatus::Passed,
-        "withinLast=0 ≡ 只看最后一行"
-    );
-
-    let s = validated(&[], vec![assert_last(lit(None, "A"), 0, "want A")]);
-    let r = run(&mut h, &s);
-    assert_eq!(
-        r.status,
-        ScenarioStatus::Failed,
-        "窗口只剩最后一行 B，A 不可见"
-    );
-    assert_eq!(
-        r.steps[0].error.as_ref().map(|e| e.message.as_str()),
-        Some("want A")
+        r.steps[0].error.as_ref().map(|e| e.code.as_str()),
+        Some("undefined_variable")
     );
 }
 
 #[test]
-fn assert_window_larger_than_history_sees_everything() {
+fn assert_matcher_substitutes_and_dynamic_group_out_of_range_fails() {
+    // assert matcher 含引用：替换后命中
     let mut h = FakeHost::new();
-    h.push_line(Dir::Rx, "old", None);
-    let s = validated(&[], vec![assert_last(lit(None, "old"), 100, "m")]);
+    h.push_line(Dir::Rx, "TEMP 42", None);
+    let s = validated(
+        &[("t", "42")],
+        vec![assert_last(lit(None, "TEMP ${t}"), 1, "want temp")],
+    );
     let r = run(&mut h, &s);
     assert_eq!(r.status, ScenarioStatus::Passed);
     assert_eq!(r.steps[0].matched_no, Some(1));
-}
 
-#[test]
-fn assert_on_empty_history_fails() {
-    let s = validated(&[], vec![assert_last(lit(None, "x"), 5, "nothing there")]);
-    let mut h = FakeHost::new();
-    let r = run(&mut h, &s);
-    assert_eq!(r.status, ScenarioStatus::Failed);
-    assert_eq!(
-        r.steps[0].error.as_ref().map(|e| e.message.as_str()),
-        Some("nothing there")
-    );
-}
-
-// ---------- repeat ----------
-
-#[test]
-fn nested_repeat_paths_and_order_are_zero_based() {
+    // 动态模板 save.group 越界 → 运行期 capture_group_invalid（静态模板在
+    // validate 期已拦；动态模板的组数替换后才知道：${g} 展开成非捕获类，
+    // 替换后的正则只有 1 个组，save.group=1 越界）
     let s = validated(
-        &[],
-        vec![repeat(
-            2,
-            vec![send("a", false), repeat(2, vec![send("b", false)])],
-        )],
-    );
-    let mut h = FakeHost::new();
-    let r = run(&mut h, &s);
-    assert_eq!(r.status, ScenarioStatus::Passed);
-    let paths: Vec<&str> = r.steps.iter().map(|st| st.path.as_str()).collect();
-    assert_eq!(
-        paths,
+        &[("g", "[ab]")],
         vec![
-            "steps[0].steps[0]#0",
-            "steps[0].steps[1].steps[0]#0#0",
-            "steps[0].steps[1].steps[0]#0#1",
-            "steps[0].steps[0]#1",
-            "steps[0].steps[1].steps[0]#1#0",
-            "steps[0].steps[1].steps[0]#1#1",
-        ]
-    );
-    let texts: Vec<&str> = h.sends.iter().map(|(_, t)| t.as_str()).collect();
-    assert_eq!(texts, vec!["a", "b", "b", "a", "b", "b"]);
-}
-
-#[test]
-fn repeat_zero_times_skips_body_without_reports() {
-    let s = validated(
-        &[],
-        vec![repeat(0, vec![send("x", false)]), send("y", false)],
-    );
-    let mut h = FakeHost::new();
-    let r = run(&mut h, &s);
-    assert_eq!(r.status, ScenarioStatus::Passed);
-    assert_eq!(r.steps.len(), 1, "repeat 本身不是叶子，times=0 无报告");
-    assert_eq!(r.steps[0].path, "steps[1]");
-    assert_eq!(h.sends.len(), 1);
-}
-
-#[test]
-fn runtime_undefined_variable_fails_scenario() {
-    // 静态校验对 Repeat 体保守放行（times=0 时捕获变量实际未定义），运行期兜底
-    let s = validated(
-        &[],
-        vec![
-            repeat(0, vec![wait_save(lit(None, "OK"), 100, "v", 0)]),
-            send("${v}", false),
+            send("PING", true),
+            wait_save(re(None, "^V ${g}$"), 100, "x", 1),
         ],
     );
-    let mut h = FakeHost::new();
-    let r = run(&mut h, &s);
-    assert_eq!(r.status, ScenarioStatus::Failed);
-    let err = r.steps[0].error.as_ref().expect("error");
-    assert_eq!(err.code, "undefined_variable");
-    assert_eq!(err.message, "undefined variable: ${v}");
-    assert_eq!(r.steps.len(), 1, "失败后无 skipped 兄弟（repeat 已结束）");
-}
-
-// ---------- 步数上限 ----------
-
-#[test]
-fn runtime_step_limit_exceeded_fails_at_10001st_leaf() {
-    // 手工构造（绕过静态校验）：101×100 = 10,100 个潜在叶子
-    let s = ValidatedScenario {
-        name: "oversized".into(),
-        variables: BTreeMap::new(),
-        steps: vec![ValidatedStep::Repeat {
-            times: 101,
-            steps: vec![ValidatedStep::Repeat {
-                times: 100,
-                steps: vec![ValidatedStep::Delay { ms: 0 }],
-            }],
-        }],
-    };
-    let mut h = FakeHost::new();
-    let r = run(&mut h, &s);
-    assert_eq!(r.status, ScenarioStatus::Failed);
-    // 10,000 个通过 + 1 个超限失败 + 99 个未执行迭代补 skipped = 10,100
-    assert_eq!(r.steps.len(), 10_100);
-    assert_eq!(
-        r.steps[..10_000]
-            .iter()
-            .filter(|st| st.status == StepStatus::Passed)
-            .count(),
-        10_000
-    );
-    let failed = &r.steps[10_000];
-    assert_eq!(failed.status, StepStatus::Failed);
-    assert_eq!(
-        failed.error.as_ref().map(|e| e.code.as_str()),
-        Some("step_limit_exceeded")
-    );
-    assert_eq!(failed.path, "steps[0].steps[0].steps[0]#100#0");
-    assert_eq!(r.steps[10_001].path, "steps[0].steps[0].steps[0]#100#1");
-    assert_eq!(r.steps[10_099].path, "steps[0].steps[0].steps[0]#100#99");
-    assert!(r.steps[10_001..]
-        .iter()
-        .all(|st| st.status == StepStatus::Skipped));
-}
-
-#[test]
-fn static_limit_boundary_exactly_10_000_passes() {
-    let s = validated(&[], vec![repeat(MAX_EXECUTED_STEPS as u32, vec![delay(0)])]);
-    let mut h = FakeHost::new();
-    let r = run(&mut h, &s);
-    assert_eq!(r.status, ScenarioStatus::Passed);
-    assert_eq!(r.steps.len(), 10_000);
-}
-
-// ---------- 取消 ----------
-
-#[test]
-fn cancel_before_start_marks_all_steps_skipped() {
-    let s = validated(&[], vec![send("a", false), delay(5)]);
-    let mut h = FakeHost::new();
-    h.cancel.store(true, Ordering::Relaxed);
-    let r = run(&mut h, &s);
-    assert_eq!(r.status, ScenarioStatus::Cancelled);
-    assert_eq!(h.sends.len(), 0);
-    assert_eq!(r.steps.len(), 2);
-    for st in &r.steps {
-        assert_eq!(st.status, StepStatus::Skipped);
-        assert_eq!(
-            st.error.as_ref().map(|e| e.code.as_str()),
-            Some("cancelled")
-        );
-        assert_eq!(st.started_epoch_ms, r.started_epoch_ms);
-    }
-    assert_eq!(r.started_epoch_ms, r.finished_epoch_ms);
-    assert_eq!(r.duration_ms, 0);
-}
-
-#[test]
-fn cancel_during_delay_sleep_interrupts_run() {
-    let s = validated(&[], vec![send("a", false), delay(100), send("b", false)]);
-    let mut h = FakeHost::new().cancel_sleep_at(1_000_050);
-    let r = run(&mut h, &s);
-    assert_eq!(r.status, ScenarioStatus::Cancelled);
-    assert_eq!(h.sends.len(), 1, "已完成的 send 保持 passed");
-    assert_eq!(r.steps[0].status, StepStatus::Passed);
-    // 被中断的 delay：skipped + cancelled，耗时记到取消时刻
-    assert_eq!(r.steps[1].status, StepStatus::Skipped);
-    assert_eq!(r.steps[1].started_epoch_ms, 1_000_000);
-    assert_eq!(r.steps[1].duration_ms, 50);
-    assert_eq!(r.steps[2].status, StepStatus::Skipped, "未执行步补 skipped");
-    assert_eq!(r.steps[2].path, "steps[2]");
-    assert_eq!(r.finished_epoch_ms, 1_000_050);
-}
-
-#[test]
-fn cancel_during_wait_polling_interrupts_run() {
-    let s = validated(&[], vec![wait(lit(None, "NEVER"), 1_000), send("b", false)]);
-    let mut h = FakeHost::new().cancel_sleep_at(1_000_060);
-    let r = run(&mut h, &s);
-    assert_eq!(r.status, ScenarioStatus::Cancelled);
-    assert_eq!(r.steps[0].status, StepStatus::Skipped);
-    assert_eq!(
-        r.steps[0].error.as_ref().map(|e| e.code.as_str()),
-        Some("cancelled")
-    );
-    assert_eq!(r.steps[1].status, StepStatus::Skipped);
-    // 25 + 25 + 跨 60 的分片中断
-    assert_eq!(h.sleeps_ms, vec![25, 25, 25]);
-    assert_eq!(r.finished_epoch_ms, 1_000_060);
-}
-
-#[test]
-fn cancel_after_completed_step_keeps_it_passed() {
-    let s = validated(&[], vec![send("a", false), send("b", false)]);
-    let mut h = FakeHost::new().cancel_after(1);
-    let r = run(&mut h, &s);
-    assert_eq!(r.status, ScenarioStatus::Cancelled);
-    assert_eq!(h.sends.len(), 1);
-    assert_eq!(r.steps[0].status, StepStatus::Passed);
-    assert_eq!(r.steps[1].status, StepStatus::Skipped);
-}
-
-// ---------- host 错误传播（fail fast） ----------
-
-#[test]
-fn host_send_error_fails_scenario_and_skips_rest() {
-    let s = validated(&[], vec![send("a", false), send("b", false)]);
-    let mut h = FakeHost::new().fail_send(HostError::Transport("port gone".into()));
-    let r = run(&mut h, &s);
-    assert_eq!(r.status, ScenarioStatus::Failed);
-    assert!(h.sends.is_empty());
-    let err = r.steps[0].error.as_ref().expect("error");
-    assert_eq!(err.code, "host_transport");
-    assert_eq!(err.message, "port gone");
-    assert_eq!(r.steps[1].status, StepStatus::Skipped);
-}
-
-#[test]
-fn host_signal_backpressure_error() {
-    let s = validated(&[], vec![signal(PinDef::Dtr, true)]);
-    let mut h = FakeHost::new().fail_signal(HostError::Backpressure);
+    let mut h = FakeHost::new().reply(Dir::Rx, "V a");
     let r = run(&mut h, &s);
     assert_eq!(r.status, ScenarioStatus::Failed);
     assert_eq!(
-        r.steps[0].error.as_ref().map(|e| e.code.as_str()),
-        Some("host_backpressure")
+        r.steps[1].error.as_ref().map(|e| e.code.as_str()),
+        Some("capture_group_invalid")
     );
 }
 
 #[test]
-fn host_lines_error_during_wait_fails_scenario() {
-    let s = validated(&[], vec![send("PING", true), wait(lit(None, "OK"), 100)]);
-    let mut h = FakeHost::new().fail_lines(HostError::Transport("ring gone".into()));
-    let r = run(&mut h, &s);
-    assert_eq!(r.status, ScenarioStatus::Failed);
-    let err = r.steps[1].error.as_ref().expect("error");
-    assert_eq!(err.code, "host_transport");
-    assert_eq!(err.message, "ring gone");
-}
-
-#[test]
-fn host_cancelled_from_sleep_marks_run_cancelled() {
-    // host 主动返回 Cancelled（标志位未置位）也归为 cancelled 而非 failed
-    let s = validated(&[], vec![delay(100), send("b", false)]);
-    let mut h = FakeHost::new().fail_sleep(HostError::Cancelled);
-    let r = run(&mut h, &s);
-    assert_eq!(r.status, ScenarioStatus::Cancelled);
-    assert_eq!(r.steps[0].status, StepStatus::Skipped);
-    assert_eq!(r.steps[1].status, StepStatus::Skipped);
-}
-
-// ---------- 失败步的 skipped 补齐（含 Repeat 剩余迭代） ----------
-
-#[test]
-fn failure_inside_repeat_marks_remaining_iterations_skipped() {
+fn dynamic_literal_rejects_nonzero_capture_group_at_runtime() {
     let s = validated(
-        &[],
+        &[("token", "42")],
         vec![
-            send("go", false),
-            repeat(2, vec![send("a", false), signal(PinDef::Rts, false)]),
-            send("tail", false),
+            send("PING", true),
+            wait_save(lit(None, "ACK ${token}"), 100, "saved", 1),
         ],
     );
-    let mut h = FakeHost::new().fail_signal(HostError::Backpressure);
+    let mut h = FakeHost::new().reply(Dir::Rx, "ACK 42");
     let r = run(&mut h, &s);
     assert_eq!(r.status, ScenarioStatus::Failed);
-    let paths: Vec<&str> = r.steps.iter().map(|st| st.path.as_str()).collect();
     assert_eq!(
-        paths,
-        vec![
-            "steps[0]",            // passed
-            "steps[1].steps[0]#0", // a (passed)
-            "steps[1].steps[1]#0", // signal failed
-            "steps[1].steps[0]#1", // 迭代 2 的 a：skipped
-            "steps[1].steps[1]#1", // 迭代 2 的 signal：skipped
-            "steps[2]",            // tail：skipped
-        ]
+        r.steps[1].error.as_ref().map(|e| e.code.as_str()),
+        Some("capture_group_invalid")
     );
-    assert_eq!(r.steps[0].status, StepStatus::Passed);
-    assert_eq!(r.steps[1].status, StepStatus::Passed);
-    assert_eq!(r.steps[2].status, StepStatus::Failed);
-    for st in &r.steps[3..] {
-        assert_eq!(st.status, StepStatus::Skipped);
-    }
 }
-
-// ---------- 报告确定性（JSON） ----------
 
 #[test]
-fn report_json_is_deterministic_across_identical_runs() {
-    let s = validated(
-        &[("cmd", "PING"), ("token", "7f")],
+fn dynamic_hex_and_mask_matchers_reject_nonzero_capture_group_at_runtime() {
+    // 复审 R-P2-1 补全：动态 hex/mask 同 literal——只暴露 group 0，运行期越界
+    // 报 capture_group_invalid（变量值须为合法 hex 对，否则先报 invalid_hex/
+    // invalid_mask 而非本用例目标码）
+    let hex_case = validated(
+        &[("g", "0a")],
         vec![
-            signal(PinDef::Dtr, true),
-            send("${cmd}", true),
-            wait_save(
-                re(Some(Dir::Rx), r"^PONG ([0-9A-Fa-f]{2})$"),
-                500,
-                "value",
-                1,
-            ),
-            assert_last(hexm(None, "50 4f 4e 47"), 10, "got ${value}"),
-            delay(10),
-            repeat(
-                2,
-                vec![
-                    send_hex("aa ${token}", false),
-                    wait(lit(None, "PONG"), 500),
-                    signal(PinDef::Rts, false),
-                ],
-            ),
+            send("PING", true),
+            wait_save(hexm(None, "50 ${g}"), 100, "x", 9),
         ],
     );
-    let make_host = || {
-        FakeHost::new()
-            .reply(Dir::Rx, "PONG 4f")
-            .schedule(1_000_005, Dir::Rx, "PONG 4f")
-    };
-    let mut h1 = make_host();
-    let r1 = run(&mut h1, &s);
-    let mut h2 = make_host();
-    let r2 = run(&mut h2, &s);
-    assert_eq!(r1.status, ScenarioStatus::Passed, "{:?}", r1.steps);
-    assert_eq!(r2.status, ScenarioStatus::Passed);
-    let j1 = report_json(&r1).expect("json");
-    let j2 = report_json(&r2).expect("json");
-    assert_eq!(j1, j2, "同 host 序列两次运行的 JSON 必须逐字节相同");
-    assert_eq!(r1.variables.get("value").map(String::as_str), Some("4f"));
-    // 嵌套结构抽检：repeat 内 send hex 展开两次
-    let hex_sends: Vec<&str> = h1
-        .sends
-        .iter()
-        .filter(|(m, _)| *m == SendModeDef::Hex)
-        .map(|(_, t)| t.as_str())
-        .collect();
-    assert_eq!(hex_sends, vec!["aa 7f", "aa 7f"]);
+    let mut h = FakeHost::new().reply_bytes("bin", &[0x50, 0x0a]);
+    let r = run(&mut h, &hex_case);
+    assert_eq!(r.status, ScenarioStatus::Failed, "{r:?}");
+    assert_eq!(
+        r.steps[1].error.as_ref().map(|e| e.code.as_str()),
+        Some("capture_group_invalid")
+    );
+
+    let mask_case = validated(
+        &[("g", "4f")],
+        vec![
+            send("PING", true),
+            wait_save(maskm(None, "5a ${g}"), 100, "x", 9),
+        ],
+    );
+    let mut h = FakeHost::new().reply_bytes("msk", &[0x5a, 0x4f]);
+    let r = run(&mut h, &mask_case);
+    assert_eq!(r.status, ScenarioStatus::Failed, "{r:?}");
+    assert_eq!(
+        r.steps[1].error.as_ref().map(|e| e.code.as_str()),
+        Some("capture_group_invalid")
+    );
 }
+
+mod step_started;

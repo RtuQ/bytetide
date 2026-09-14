@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { commands } from '../../ipc/commands'
 import { ipcErrorDetail } from '../../ipc/errors'
 import { toast } from '../../composables/useToast'
+import { drainSessionTail } from '../../composables/useTauriEvents'
 import { openPath } from '@tauri-apps/plugin-opener'
 import type { DecodedFrame } from '../../types/parser'
 import type {
@@ -313,6 +314,8 @@ export const useSessionStore = defineStore('session', {
       } catch {
         /* ignore */
       }
+      // 关闭=彻底丢弃：无需补拉尾批，直接释放停止墓碑（未留墓碑时幂等 no-op）
+      commands.releaseSession(id).catch(() => {})
       removeSession(this as unknown as RegistryState, id)
       // 对比依赖 ≥2 会话：关到只剩一个时自动退出对比态，别把用户困在死界面里
       autoExitCompareAfterClose(this as unknown as LayoutState, this.order.length)
@@ -327,6 +330,11 @@ export const useSessionStore = defineStore('session', {
       } catch {
         /* ignore */
       }
+      // 两阶段关闭（评审 P1-2 丢尾批修复）：后端已留只读墓碑 ring——先无视状态
+      // 守卫拉空最后一批（常规拉取停在状态切换前，尾批会永远丢失），再显式
+      // 释放墓碑。事件侧 drainSessionTail 与此收敛（draining 互斥 + 拉空即停）
+      await drainSessionTail(id)
+      commands.releaseSession(id).catch(() => {})
       s.status = 'disconnected'
       s.error = ''
       // 回放会话：后端线程已 Stop+join 并移除会话——控制面定格 stopped

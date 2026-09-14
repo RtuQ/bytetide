@@ -15,9 +15,10 @@ pub use matcher::{
     VariableError,
 };
 pub use model::{
-    validate_scenario, CaptureSpec, PinDef, Scenario, ScenarioErrorCode, ScenarioStep,
-    ScenarioValidationError, SendModeDef, ValidatedScenario, ValidatedStep, MAX_DELAY_WAIT_MS,
-    MAX_EXECUTED_STEPS, MAX_NESTING_DEPTH, MAX_REPEAT_TIMES, SCENARIO_SCHEMA, SCENARIO_VERSION,
+    count_executed_leaves, validate_scenario, CaptureSpec, MatcherInstantiateError,
+    MatcherTemplate, PinDef, Scenario, ScenarioErrorCode, ScenarioStep, ScenarioValidationError,
+    SendModeDef, ValidatedScenario, ValidatedStep, MAX_DELAY_WAIT_MS, MAX_EXECUTED_STEPS,
+    MAX_NESTING_DEPTH, MAX_REPEAT_TIMES, SCENARIO_SCHEMA, SCENARIO_VERSION,
 };
 pub use report::{
     report_json, report_junit, ScenarioReport, ScenarioStatus, StepErrorInfo, StepReport,

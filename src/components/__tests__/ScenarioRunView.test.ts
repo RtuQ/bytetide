@@ -83,6 +83,7 @@ describe('ScenarioRunView（运行视图）', () => {
       currentStep: 3,
       totalSteps: 5,
       kind: 'send',
+      path: 'steps[2]',
     })
     await w.vm.$nextTick()
     expect(w.find('.sc-progress').text()).toContain('3 / 5')

@@ -7,7 +7,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use super::reader::OfflineReader;
-use super::{classify_line, OfflineError, RawRow, PAGE_LINES};
+use super::{classify_line, Anchor, DayWrap, OfflineError, RawRow, PAGE_LINES};
 use crate::serial::port::{Dir, LogLine};
 
 /// 离线日志摘要（`open_offline` / `PortManager::load_offline_indexed` 返回）。
@@ -15,26 +15,29 @@ use crate::serial::port::{Dir, LogLine};
 pub struct OfflineIndex {
     /// 数据行数（跳过空行/`#`注释/坏行后按行序连续编号的总数）。
     pub line_count: u64,
-    /// 首个数据行 epoch_millis（当日毫秒或行序回退；空文件为 0）。
+    /// 首个数据行 epoch_millis（当日毫秒 + 跨午夜回卷补偿，单调；空文件为 0）。
     pub first_epoch: u64,
-    /// 末个数据行 epoch_millis（空文件为 0）。
+    /// 末个数据行 epoch_millis（同上回卷补偿口径；空文件为 0）。
     pub last_epoch: u64,
 }
 
 /// 流式打开离线日志：一次顺序扫描建稀疏索引（每 [`PAGE_LINES`] 个数据行记
-/// 一个文件字节偏移锚点）并累计行数/首末 epoch/方向计数。返回索引摘要与
-/// 可分页读取的 [`OfflineReader`]。文件假定静态（打开后增长不可见、截断读出
-/// 不足页）；索引期 IO 错误直接失败。
+/// 一个文件字节偏移锚点 + 回卷状态快照）并累计行数/首末 epoch/方向计数。
+/// 返回索引摘要与可分页读取的 [`OfflineReader`]。文件假定静态（打开后增长
+/// 不可见、截断读出不足页）；索引期 IO 错误直接失败。
 pub fn open_offline(path: &Path) -> Result<(OfflineIndex, OfflineReader), OfflineError> {
     let file = std::fs::File::open(path)?;
     let mut reader = BufReader::with_capacity(64 * 1024, file);
     // 锚点：anchors[k] = 数据行 no=k*PAGE_LINES+1 的字节偏移。在读到「将成为
     // 第 k*4096+1 个数据行」的那一行时记录其起始偏移（跳过行不推进 data_no，
     // 不会误记）；len = ceil(line_count/PAGE_LINES)，空文件为 0（页读不会用到）。
-    let mut anchors: Vec<u64> = Vec::new();
+    let mut anchors: Vec<Anchor> = Vec::new();
     let mut off: u64 = 0;
     let mut data_no: u64 = 0;
     let mut bad_rows: u64 = 0;
+    // 跨午夜回卷补偿（评审 P3）：内部 epoch = 当日毫秒 + 日期偏移，保持单调——
+    // 回放相邻行间隔与 durationMs 在 23:59:59→00:00:00 边界不再塌缩为 0
+    let mut wrap = DayWrap::new();
     let mut first_epoch: u64 = 0;
     let mut last_epoch: u64 = 0;
     let mut first_ts = String::new();
@@ -61,15 +64,24 @@ pub fn open_offline(path: &Path) -> Result<(OfflineIndex, OfflineReader), Offlin
                 epoch_millis,
             }) => {
                 // off 仍指向本行起始（尚未累加 n）：本行若成为第 k*4096+1 个
-                // 数据行，其起始偏移即第 k 块的锚点
+                // 数据行，其起始偏移即第 k 块的锚点；同时快照回卷状态供页读续接
                 if data_no.is_multiple_of(PAGE_LINES) {
-                    anchors.push(off);
+                    let (day_off, prev_raw) = wrap.snapshot();
+                    anchors.push(Anchor {
+                        off,
+                        day_off,
+                        prev_raw,
+                    });
                 }
+                // epoch==seq = ts 非法的行序回退行，不参与回卷检测
+                let is_valid_ts = epoch_millis != data_no;
+                let day_off = wrap.feed(epoch_millis, is_valid_ts);
+                let adjusted = epoch_millis.saturating_add(day_off);
                 if data_no == 0 {
-                    first_epoch = epoch_millis;
+                    first_epoch = adjusted;
                     first_ts = ts.clone();
                 }
-                last_epoch = epoch_millis;
+                last_epoch = adjusted;
                 last_ts = ts;
                 // 字节计数与 RingBuf::push 同口径：bytes 优先，否则 text 的 UTF-8 字节数
                 let n = bytes
@@ -239,6 +251,56 @@ mod tests {
         assert!(page[0].bytes.is_none());
         assert_eq!(page[1].bytes.as_deref(), Some(&b"\xff\xfe"[..]));
         assert!(page[1].text.contains('\u{FFFD}'));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn midnight_wrap_offsets_epochs_monotonic() {
+        // 评审 P3：23:59:59 → 00:00:01 跨午夜——内部 epoch 补 +24h 保持单调
+        //（回放间隔/时长不再塌缩），显示用 ts 字符串原样不变；锚点回跳单行读
+        // 与顺序整页读结果一致
+        let dir = temp_dir("idx-wrap");
+        let path = dir.join("wrap.log");
+        std::fs::write(
+            &path,
+            "23:59:59.000\tRX\ta\nbad-no-tab\n00:00:00.500\tTX\tb\n00:00:01.000\tRX\tc\n",
+        )
+        .unwrap();
+        let (index, mut reader) = open_offline(&path).unwrap();
+        assert_eq!(
+            (index.first_epoch, index.last_epoch),
+            (86_399_000, 86_401_000)
+        );
+        let page = reader.read_page(0, 10).unwrap();
+        assert_eq!(
+            page.iter().map(|l| l.epoch_millis).collect::<Vec<_>>(),
+            [86_399_000, 86_400_500, 86_401_000]
+        );
+        assert_eq!(page[1].ts, "00:00:00.500");
+        // 随机回跳：锚点续接回卷状态（第 2 锚点状态含 +24h 偏移）
+        let back = reader.read_page(1, 1).unwrap();
+        assert_eq!(back[0].epoch_millis, 86_400_500);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fallback_epoch_rows_do_not_trigger_wrap() {
+        // 行序回退行（ts 非法，epoch=seq 合成值）夹在合法行之间：不判回卷、
+        // 不更新 prev，后续合法行继续正常检测
+        let dir = temp_dir("idx-wrap-fb");
+        let path = dir.join("fb.log");
+        std::fs::write(
+            &path,
+            "23:00:00.000\tRX\ta\ngarbage-ts\tRX\tb\n23:00:00.100\tRX\tc\n",
+        )
+        .unwrap();
+        let (index, mut reader) = open_offline(&path).unwrap();
+        assert_eq!(index.last_epoch, 82_800_100);
+        let page = reader.read_page(0, 10).unwrap();
+        assert_eq!(
+            page.iter().map(|l| l.epoch_millis).collect::<Vec<_>>(),
+            [82_800_000, 1, 82_800_100]
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

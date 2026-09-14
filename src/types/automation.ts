@@ -80,7 +80,7 @@ export interface Scenario {
 }
 
 /**
- * 稳定错误码（model.rs `ScenarioErrorCode::as_str`，17 个；GUI/CLI 按字面量分支，
+ * 稳定错误码（model.rs `ScenarioErrorCode::as_str`，19 个；GUI/CLI 按字面量分支，
  * 勿改字符串）。`invalid_dir` 仅为后端码表完整性保留（封闭枚举在 serde 层拒绝）。
  */
 export type ScenarioErrorCode =
@@ -98,6 +98,8 @@ export type ScenarioErrorCode =
   | 'delay_too_long'
   | 'wait_too_long'
   | 'repeat_too_many'
+  | 'wait_too_short'
+  | 'repeat_too_few'
   | 'invalid_variable_name'
   | 'undefined_variable'
   | 'capture_group_invalid'
@@ -144,14 +146,16 @@ export interface ScenarioRunView {
   progress?: ScenarioProgressView
 }
 
-/** `scenario-progress` 事件载荷：每叶子步开始一条、稀疏。kind=叶步种类近似识别
- *  （send/signal/delay/wait/assert；repeat 不是叶步不产生进度） */
+/** `scenario-progress` 事件载荷：每叶子步开始一条、稀疏。kind=叶步种类，
+ *  path=步索引路径（含 Repeat 迭代后缀，如 `steps[0].steps[1]#0`）——由 runner
+ *  显式步骤回调提供（不再按 host 调用签名近似识别） */
 export interface ScenarioProgressPayload {
   runId: string
   sessionId: string
   currentStep: number
   totalSteps: number
   kind: string
+  path: string
 }
 
 // ===================== 前端库条目（非后端契约） =====================

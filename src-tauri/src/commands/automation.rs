@@ -16,11 +16,10 @@
 //! 因会话消失误报传输错误。
 //!
 //! # 事件契约（payload camelCase）
-//! - `scenario-progress`：每叶子步开始一条、稀疏。core runner 无逐步 hook，进度由
-//!   host 适配层 [`RunnerHost`] 按「新叶子步的 host 调用签名」近似识别（send/signal
-//!   必响；Delay 仅 >`WAIT_POLL_SLICE_MS` 时响——≤25ms 与 Wait 轮询分片不可区分，
-//!   轻微少计；Wait/Assert 首轮拉取响、后续轮询不响）。payload
-//!   {runId, sessionId, currentStep, totalSteps, kind}。**不加逐行事件**。
+//! - `scenario-progress`：每叶子步开始一条、稀疏。core runner 在每个叶子步开始前
+//!   调显式回调 [`ScenarioHost::on_step_started`]（path 精确含迭代后缀），宿主
+//!   装饰器 [`RunnerHost`] 据此更新 registry 并 emit。payload
+//!   {runId, sessionId, currentStep, totalSteps, kind, path}。**不加逐行事件**。
 //! - `scenario-finished`：恰一次，payload = [`ScenarioRunView`]。
 //!
 //! # Host 适配 [`ManagerScenarioHost`]
@@ -34,7 +33,6 @@
 //! 系统 UNIX 纪元毫秒。离线/回放会话被 manager 以稳定文案拒绝，host 原样透传为
 //! `HostError::Transport`。
 
-use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -42,9 +40,9 @@ use std::time::Duration;
 
 use bytetide_core::automation::report::StepStatus;
 use bytetide_core::automation::{
-    report_json, report_junit, run_scenario, validate_scenario, HostError, PinDef, Scenario,
-    ScenarioHost, ScenarioReport, ScenarioStatus, SendModeDef, ValidatedScenario, ValidatedStep,
-    WAIT_POLL_SLICE_MS,
+    count_executed_leaves, report_json, report_junit, run_scenario, validate_scenario, HostError,
+    PinDef, Scenario, ScenarioHost, ScenarioReport, ScenarioStatus, SendModeDef, ValidatedScenario,
+    ValidatedStep, WAIT_POLL_SLICE_MS,
 };
 use bytetide_core::serial::manager::{BridgeLine, Pin, SendMode, SendRequest};
 use bytetide_core::serial::PortManager;
@@ -82,8 +80,8 @@ pub struct ValidatedScenarioSummary {
     pub name: String,
 }
 
-/// 进度水位（当前执行到第几个叶子步 / 静态总步数；core runner 无逐步 hook，
-/// 事件驱动近似识别，故 plan 形状中的 path 缺省）。
+/// 进度水位（当前执行到第几个叶子步 / 静态总步数；由 runner 显式步骤回调驱动，
+/// plan 形状中的 path 随 scenario-progress 事件提供、水位查询面不存）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressView {
@@ -111,21 +109,10 @@ pub struct ScenarioRunView {
 
 // ===== 纯逻辑：校验摘要 / 会话守卫 / 断开取消 / 启动入口 =====
 
-/// 静态执行叶步上界（Repeat 展开；口径与 runner 运行期计数一致）。
-fn count_executed_leaves(steps: &[ValidatedStep]) -> u64 {
-    steps
-        .iter()
-        .map(|s| match s {
-            ValidatedStep::Repeat { times, steps } => {
-                u64::from(*times).saturating_mul(count_executed_leaves(steps))
-            }
-            _ => 1,
-        })
-        .sum()
-}
-
 /// 校验场景并产出摘要（`scenario_validate_cmd` 与启动前置共用；失败不出 Err，
-/// 以 ok=false + 稳定 code 返回）。
+/// 以 ok=false + 稳定 code 返回）。执行步静态上界经 core 的
+/// [`count_executed_leaves`](bytetide_core::automation::count_executed_leaves)
+/// 计算（与 runner 运行进度 totalSteps 同口径）。
 pub fn validate_summary(scenario: Scenario) -> ValidatedScenarioSummary {
     let name = scenario.name.clone();
     match validate_scenario(scenario) {
@@ -269,7 +256,6 @@ impl AutomationRegistry {
         manager: Arc<PortManager>,
         emit: EmitFn,
     ) -> Result<String, String> {
-        let total_steps = count_executed_leaves(&scenario.steps);
         let (run_id, cancel) = {
             let mut st = self.inner.lock();
             if st
@@ -307,10 +293,7 @@ impl AutomationRegistry {
                     registry: registry.clone(),
                     run_id: rid.clone(),
                     session_id: sid,
-                    total_steps,
-                    step: 0,
                     emit,
-                    last: Cell::new(None),
                 };
                 let report = run_scenario(&scenario, &mut host, &cancel);
                 let view = registry.finish_run(&rid, report);
@@ -558,47 +541,27 @@ impl ScenarioHost for ManagerScenarioHost {
     }
 }
 
-/// 新叶子步的 host 调用种类（progress tick 的「同叶/新叶」判定依据）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HostCall {
-    Send,
-    Signal,
-    SleepShort,
-    SleepLong,
-    LinesAfter,
-    LastNo,
-}
-
-/// 进度 host 装饰器：委托 [`ManagerScenarioHost`]，并按「新叶子步签名」稀疏发
-/// `scenario-progress` 事件 + 回写视图进度。单叶内的 host 调用序是确定的：
-/// Send=[send]、Signal=[signal]、Delay=[sleep]、Wait=[lines_after, (lines_after|
-/// sleep≤25ms)*]、Assert=[last_no, lines_after]。据此 tick 规则：
-/// - send / signal 必是新叶；
-/// - sleep >25ms 必是 Delay 新叶（≤25ms 与 Wait 轮询分片不可区分 → 不 tick）；
-/// - lines_after 在前一次调用不是 lines_after/sleep(≤25ms) 时是新叶首轮拉取
-///   （前一次是 last_no → Assert，否则 Wait）。
+/// 进度 host 装饰器：委托 [`ManagerScenarioHost`]，并把 runner 的显式步骤回调
+/// （[`ScenarioHost::on_step_started`]，path 精确含迭代后缀）转成稀疏
+/// `scenario-progress` 事件 + 登记表进度回写。无需按 host 调用签名推测。
 struct RunnerHost {
     inner: ManagerScenarioHost,
     registry: AutomationRegistry,
     run_id: String,
     session_id: String,
-    total_steps: u64,
-    step: u64,
     emit: EmitFn,
-    last: Cell<Option<HostCall>>,
 }
 
 impl RunnerHost {
-    fn tick(&mut self, kind: &'static str) {
-        self.step += 1;
-        self.registry
-            .set_progress(&self.run_id, self.step, self.total_steps);
+    fn emit_step_started(&mut self, path: &str, kind: &'static str, current: u64, total: u64) {
+        self.registry.set_progress(&self.run_id, current, total);
         let payload = serde_json::json!({
             "runId": self.run_id,
             "sessionId": self.session_id,
-            "currentStep": self.step,
-            "totalSteps": self.total_steps,
+            "currentStep": current,
+            "totalSteps": total,
             "kind": kind,
+            "path": path,
         });
         (self.emit)("scenario-progress", payload);
     }
@@ -606,52 +569,31 @@ impl RunnerHost {
 
 impl ScenarioHost for RunnerHost {
     fn send(&mut self, mode: SendModeDef, text: &str) -> Result<(), HostError> {
-        self.tick("send");
-        self.last.set(Some(HostCall::Send));
         self.inner.send(mode, text)
     }
 
     fn signal(&mut self, pin: PinDef, level: bool) -> Result<(), HostError> {
-        self.tick("signal");
-        self.last.set(Some(HostCall::Signal));
         self.inner.signal(pin, level)
     }
 
     fn last_no(&self) -> u64 {
-        self.last.set(Some(HostCall::LastNo));
         self.inner.last_no()
     }
 
     fn lines_after(&mut self, since: u64, max: usize) -> Result<Vec<BridgeLine>, HostError> {
-        let fresh = !matches!(
-            self.last.get(),
-            Some(HostCall::LinesAfter) | Some(HostCall::SleepShort)
-        );
-        if fresh {
-            let kind = if self.last.get() == Some(HostCall::LastNo) {
-                "assert"
-            } else {
-                "wait"
-            };
-            self.tick(kind);
-        }
-        self.last.set(Some(HostCall::LinesAfter));
         self.inner.lines_after(since, max)
     }
 
     fn sleep(&mut self, duration: Duration, cancel: &AtomicBool) -> Result<(), HostError> {
-        let long = duration > Duration::from_millis(WAIT_POLL_SLICE_MS);
-        if long {
-            self.tick("delay");
-            self.last.set(Some(HostCall::SleepLong));
-        } else {
-            self.last.set(Some(HostCall::SleepShort));
-        }
         self.inner.sleep(duration, cancel)
     }
 
     fn now_ms(&self) -> u64 {
         self.inner.now_ms()
+    }
+
+    fn on_step_started(&mut self, path: &str, kind: &'static str, current: u64, total: u64) {
+        self.emit_step_started(path, kind, current, total)
     }
 }
 

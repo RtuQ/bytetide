@@ -3,7 +3,7 @@
 //! 落盘录制与路径命名（recording.rs）、现场捕获（capture.rs）、读循环与行评估
 //! （runtime.rs 的 session_thread/stream_loop/ingest）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
@@ -75,8 +75,19 @@ struct SessionHandle {
 
 pub struct PortManager {
     sessions: RwLock<HashMap<String, SessionHandle>>,
+    /// 停止墓碑（两阶段关闭的第 1 阶段）：`disconnect` 移除会话句柄后，ring 的
+    /// 只读副本留在此处，供前端「最终补拉」取走停止前最后一批尚未拉取的行
+    /// （正常拉取周期 200ms + 渲染进程被节流时更久——没有墓碑时这批数据在
+    /// 句柄删除瞬间即不可达，违反「停止仅断开连接，保留标签页与日志」的约定）。
+    /// 前端拉空后调 [`Self::release_dead`] 显式释放（第 2 阶段）；未释放的按
+    /// FIFO 容量上限淘汰兜底。仅 [`Self::ring_lines_after_no`] 路由到此。
+    dead_rings: Mutex<VecDeque<(String, Arc<SessionRuntime>)>>,
     next_id: AtomicU64,
 }
+
+/// 墓碑容量：覆盖「连停数个会话」的补拉窗口即可，防无释放时内存常驻
+/// （每份 ring ≤ RING_CAP ≈ 17MB）。
+const DEAD_RING_CAP: usize = 4;
 
 impl Default for PortManager {
     fn default() -> Self {
@@ -88,7 +99,21 @@ impl PortManager {
     pub fn new() -> Self {
         Self {
             sessions: RwLock::new(HashMap::new()),
+            dead_rings: Mutex::new(VecDeque::new()),
             next_id: AtomicU64::new(1),
+        }
+    }
+
+    /// 释放停止墓碑（两阶段关闭第 2 阶段；未知 id 静默——FIFO 淘汰/重复释放幂等）。
+    pub fn release_dead(&self, id: &str) {
+        self.dead_rings.lock().retain(|(did, _)| did != id);
+    }
+
+    fn park_dead(&self, id: &str, runtime: &Arc<SessionRuntime>) {
+        let mut dead = self.dead_rings.lock();
+        dead.push_back((id.to_string(), runtime.clone()));
+        while dead.len() > DEAD_RING_CAP {
+            dead.pop_front();
         }
     }
 
@@ -317,6 +342,8 @@ impl PortManager {
         let (cmd_tx, cmd_rx) = mpsc::channel::<ReplayCmd>();
         // rx 立即 drop -> 写通道天然断开（断开语义对齐 Offline：send 早退守卫在前）
         let (write_tx, _rx) = mpsc::channel::<super::PortCmd>();
+        // spawn 失败转 anyhow（与 connect 的 reader 线程同错误策略，不 panic）；
+        // 失败时未登记会话，runtime/reader 随局部变量丢弃
         let join = spawn_replay(
             reader,
             runtime.clone(),
@@ -324,7 +351,8 @@ impl PortManager {
             cmd_rx,
             sink,
             id.clone(),
-        );
+        )
+        .map_err(|e| anyhow::anyhow!("spawn replay thread failed: {e}"))?;
         let name = path
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
@@ -404,6 +432,8 @@ impl PortManager {
         if let Some(join) = handle.join.take() {
             let _ = join.join();
         }
+        // 两阶段关闭第 1 阶段：线程已停、ring 定格，留墓碑供最终补拉
+        self.park_dead(id, &handle.runtime);
         Ok(())
     }
 
@@ -501,21 +531,49 @@ impl PortManager {
     /// 游标补拉：返回 ring 中 `no > since_no` 的行（前端视图拉模型的数据通道）。
     /// `no` 单调递增且 clear 不回退——游标语义下不重不漏；二分定位 O(log n)。
     /// 离线分页会话改走 `OfflineReader` 页读（no 连续：第 i 行 no=since_no+1+i）。
+    /// 已停止会话路由到停止墓碑（两阶段关闭的最终补拉窗口，见
+    /// [`Self::release_dead`]）；墓碑亦未命中才报「会话不存在」。
     pub fn ring_lines_after_no(
         &self,
         id: &str,
         since_no: u64,
         max: usize,
     ) -> anyhow::Result<Vec<BridgeLine>> {
+        let max = max.clamp(1, RING_CAP);
+        {
+            let sessions = self.sessions.read();
+            if let Some(h) = sessions.get(id) {
+                return Ok(match &h.offline {
+                    Some(r) => r.lock().lines_after(since_no, max)?,
+                    None => h.runtime.ring.lines_after_no(since_no, max),
+                });
+            }
+        }
+        let dead = self.dead_rings.lock();
+        let runtime = dead
+            .iter()
+            .find(|(did, _)| did == id)
+            .map(|(_, rt)| rt)
+            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        Ok(runtime.ring.lines_after_no(since_no, max))
+    }
+
+    /// 按行号精确读单行（会话缺失 Err；行不存在 `Ok(None)`；`no=0` 恒 None）。
+    /// ring/离线文件的 no 都按序连续 → `lines_after(no-1, 1)` 一步定位，供
+    /// REST `/lines?no=` 与批注回填做有界读取（评审 P1-1：不物化全量快照）。
+    pub fn bridge_line_by_no(&self, id: &str, no: u64) -> anyhow::Result<Option<BridgeLine>> {
         let sessions = self.sessions.read();
         let h = sessions
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
-        let max = max.clamp(1, RING_CAP);
-        Ok(match &h.offline {
-            Some(r) => r.lock().lines_after(since_no, max)?,
-            None => h.runtime.ring.lines_after_no(since_no, max),
-        })
+        if no == 0 {
+            return Ok(None);
+        }
+        let line = match &h.offline {
+            Some(r) => r.lock().lines_after(no - 1, 1)?.into_iter().next(),
+            None => h.runtime.ring.lines_after_no(no - 1, 1).into_iter().next(),
+        };
+        Ok(line.filter(|l| l.no == no))
     }
 
     /// 往前翻页补拉：返回 ring 中 `no < before_no` 的最新 max 行（升序）。
@@ -828,144 +886,6 @@ impl PortManager {
     }
 }
 
+
 #[cfg(test)]
-mod tests {
-    //! manager 侧单测：编排访问器（perf/桥镜像/游标）与会话状态串。
-    //! （状态机/ingest 单测与读循环 loopback TCP 集成在 serial/runtime.rs，
-    //! 录制/捕获/传输契约测试在各自模块。）
-    use super::*;
-
-    fn mk_log(
-        ts: &str,
-        dir: super::super::port::Dir,
-        text: &str,
-        bytes: Option<Vec<u8>>,
-        epoch: u64,
-    ) -> LogLine {
-        LogLine {
-            ts: ts.into(),
-            dir,
-            text: text.into(),
-            bytes,
-            epoch_millis: epoch,
-        }
-    }
-
-    #[test]
-    fn perf_snapshot_skips_stopped_and_offline() {
-        let m = PortManager::new();
-        let mk_handle = |stopped: bool| {
-            let runtime = Arc::new(SessionRuntime::new());
-            runtime.ingest(
-                &mk_log("t", super::super::port::Dir::Rx, "x", None, 1000),
-                IngestOrigin::Transport,
-                &crate::sink::NullSink,
-            );
-            let stop = Arc::new(AtomicBool::new(stopped));
-            let (tx, _rx) = mpsc::channel();
-            SessionHandle {
-                config: PortConfig::default(),
-                kind: SessionKind::Live,
-                stop,
-                write_tx: tx,
-                log_path: Arc::new(RwLock::new(PathBuf::from("x.log"))),
-                log_base: PathBuf::from("x.log"),
-                join: None,
-                runtime,
-                plot: Arc::new(RwLock::new(PlotConfig::default())),
-                bookmarks: Arc::new(RwLock::new(Vec::new())),
-                alerts: Arc::new(RwLock::new(Vec::new())),
-                annotations: Arc::new(RwLock::new(Vec::new())),
-                offline: None,
-                replay_tx: None,
-            }
-        };
-        m.sessions.write().insert("s1".into(), mk_handle(false));
-        m.sessions.write().insert("s2".into(), mk_handle(true)); // 已停止
-        let ids: Vec<String> = m.perf_snapshot().into_iter().map(|(id, ..)| id).collect();
-        assert_eq!(ids, vec!["s1".to_string()]);
-    }
-
-    #[test]
-    fn bridge_bookmarks_alerts_roundtrip_and_unknown_session() {
-        let m = PortManager::new();
-        let id = m.load_offline(PortConfig::default(), PathBuf::from("x.log"), vec![]);
-        assert!(m.bridge_bookmarks(&id).unwrap().is_empty());
-        assert!(m.bridge_alerts(&id).unwrap().is_empty());
-
-        let bms = vec![BridgeBookmark {
-            no: 3,
-            ts: "00:00:01.000".into(),
-            text: "ERR line".into(),
-        }];
-        assert!(m.bridge_set_bookmarks(&id, bms.clone()));
-        assert_eq!(m.bridge_bookmarks(&id).unwrap(), bms);
-
-        let alerts = vec![BridgeAlert {
-            id: "a1".into(),
-            rule_id: "r1".into(),
-            pattern: "ERR".into(),
-            level: "err".into(),
-            no: 3,
-            ts: "00:00:01.000".into(),
-            text: "ERR line".into(),
-            at: 12345,
-        }];
-        assert!(m.bridge_set_alerts(&id, alerts.clone()));
-        assert_eq!(m.bridge_alerts(&id).unwrap(), alerts);
-
-        // 未知会话：写入 false、读取 None
-        assert!(!m.bridge_set_bookmarks("nope", vec![]));
-        assert!(m.bridge_bookmarks("nope").is_none());
-        assert!(!m.bridge_set_alerts("nope", vec![]));
-        assert!(m.bridge_alerts("nope").is_none());
-
-        let notes = vec![BridgeAnnotation {
-            id: "an1".into(),
-            no: 9,
-            ts: "00:00:09.000".into(),
-            text: "ERR line".into(),
-            note: "从这里开始校验失败".into(),
-            at: 999,
-        }];
-        assert!(m.bridge_set_annotations(&id, notes.clone()));
-        assert_eq!(m.bridge_annotations(&id).unwrap(), notes);
-        assert!(!m.bridge_set_annotations("nope", vec![]));
-        assert!(m.bridge_annotations("nope").is_none());
-    }
-
-    #[test]
-    fn bridge_last_no_reads_ring_cursor_without_full_snapshot() {
-        let m = PortManager::new();
-        // 未知会话 None
-        assert_eq!(m.bridge_last_no("nope"), None);
-        let id = m.load_offline(
-            PortConfig::default(),
-            PathBuf::from("x.log"),
-            vec![
-                mk_log("01:00:00.000", super::super::port::Dir::Rx, "a", None, 1000),
-                mk_log("02:00:00.000", super::super::port::Dir::Tx, "b", None, 2000),
-            ],
-        );
-        // /exchange 基线：仅游标值（与 buf.last_no 一致），不分配快照
-        assert_eq!(m.bridge_last_no(&id), Some(2));
-    }
-
-    #[test]
-    fn session_state_offline_remains_offline() {
-        let m = PortManager::new();
-        let id = m.load_offline(PortConfig::default(), PathBuf::from("x.log"), vec![]);
-        let snap = m
-            .bridge_list()
-            .into_iter()
-            .find(|s| s.id == id)
-            .expect("离线会话在列表");
-        assert_eq!(snap.status, "offline");
-        assert_eq!(snap.last_error, None);
-    }
-
-    // 读循环端到端集成（本机 loopback TCP 跑 session_thread/stream_loop）在
-    // serial/runtime.rs 测试——被测主循环在该文件；离线分页会话（load_offline_indexed）
-    // 的虚拟 ring 查询路由端到端用例在 offline 模块单测与 src-tauri/tests/offline_pages.rs。
-    // 本文件只保留编排面，行数受架构检查器 1000 行限额约束（scripts/check-architecture.mjs）。
-}
+mod tests;

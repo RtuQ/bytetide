@@ -226,13 +226,20 @@ fn replay_soak_rings_and_events_stay_bounded() {
     // 规则就位（real=开跑前、quick=bulk 后的告警相前）：统一用 Pause 冻结 ingest
     // 再灌规则——期望命中以**冻结时刻的 ingest 水位**为锚（ingest 恒跑在 scan
     // 前面，scan 游标不能作锚）
+    //
+    // 复审 R-CI-2：deadline 用本次 Pause 的独立起点，不用整测 t0——bulk 相
+    // 耗时可能已超 5s，全局计时会让暂停控制「零等待即判死」。
     let pause_and_freeze = |tx: &std::sync::mpsc::Sender<ReplayCmd>| {
+        let pause_started = Instant::now();
         tx.send(ReplayCmd::Pause).unwrap();
         while m
             .replay_view(&id)
             .is_none_or(|(s, _)| s != ReplayState::Paused)
         {
-            assert!(t0.elapsed() < Duration::from_secs(5), "pause 未生效");
+            assert!(
+                pause_started.elapsed() < Duration::from_secs(5),
+                "pause 未生效"
+            );
             std::thread::sleep(Duration::from_millis(1));
         }
         m.bridge_last_no(&id).unwrap_or(0)
@@ -364,9 +371,12 @@ fn replay_soak_rings_and_events_stay_bounded() {
     });
     println!("SOAK_SUMMARY {summary}");
 
-    // 结束清理：断开 = Stop + join + 会话移除
+    // 结束清理：断开 = Stop + join + 会话移除（停止墓碑保留只读 ring 供最终
+    // 补拉，release 后彻底不可达——两阶段关闭契约）
     m.disconnect(&id).expect("disconnect");
-    assert!(m.ring_lines_after_no(&id, 0, 1).is_err(), "会话已移除");
+    assert!(!m.bridge_list().iter().any(|s| s.id == id), "会话已移除");
+    m.release_dead(&id);
+    assert!(m.ring_lines_after_no(&id, 0, 1).is_err(), "释放后不可达");
     assert_eq!(m.replay_view(&id), None);
 }
 

@@ -183,6 +183,7 @@ pub fn run() {
             commands::list_ports_cmd,
             commands::connect_cmd,
             commands::disconnect_cmd,
+            commands::release_session_cmd,
             commands::send_cmd,
             commands::set_signal_cmd,
             commands::clear_log_cmd,

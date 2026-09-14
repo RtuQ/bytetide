@@ -338,14 +338,14 @@ describe('运行生命周期', () => {
     const id = store.addScenario(mkScenario('a')) as string
     cmdMocks.scenarioStart.mockResolvedValueOnce('run1')
     await store.start('sess1', id)
-    store.onProgress({ runId: 'run1', sessionId: 'sess1', currentStep: 2, totalSteps: 5, kind: 'wait' })
+    store.onProgress({ runId: 'run1', sessionId: 'sess1', currentStep: 2, totalSteps: 5, kind: 'wait', path: 'steps[1]' })
     expect(store.runs['run1'].progress).toEqual({ currentStep: 2, totalSteps: 5 })
     expect(store.runs['run1'].kind).toBe('wait')
     // 未知 run / 已完成的 run：迟到事件忽略
-    store.onProgress({ runId: 'ghost', sessionId: 's', currentStep: 1, totalSteps: 1, kind: 'send' })
+    store.onProgress({ runId: 'ghost', sessionId: 's', currentStep: 1, totalSteps: 1, kind: 'send', path: 'steps[0]' })
     cmdMocks.scenarioStop.mockResolvedValueOnce(undefined)
     await store.stop('run1')
-    store.onProgress({ runId: 'run1', sessionId: 'sess1', currentStep: 3, totalSteps: 5, kind: 'send' })
+    store.onProgress({ runId: 'run1', sessionId: 'sess1', currentStep: 3, totalSteps: 5, kind: 'send', path: 'steps[0]' })
     expect(store.runs['run1'].progress).toEqual({ currentStep: 2, totalSteps: 5 })
   })
 

@@ -529,6 +529,9 @@ mod tests {
         ) -> Result<Vec<BridgeLine>, ServiceError> {
             Err(ServiceError::NotFound)
         }
+        fn line_by_no(&self, _id: &str, _no: u64) -> Result<Option<BridgeLine>, ServiceError> {
+            Err(ServiceError::NotFound)
+        }
         fn last_no(&self, _id: &str) -> Result<u64, ServiceError> {
             Err(ServiceError::NotFound)
         }

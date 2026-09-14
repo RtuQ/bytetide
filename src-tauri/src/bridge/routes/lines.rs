@@ -1,6 +1,12 @@
 //! 行数据路由：`/lines` `/follow` `/histogram` `/bookmarks` `/alerts` `/export`。
+//!
+//! 读取有界性（评审 P1-1）：`/lines` 与 `/histogram` 不再全量物化快照——
+//! 无过滤把 `offset/limit` 直接下推为 no 区间页读（ring nos 连续、离线文件
+//! nos 连续，`lines_after`/`lines_before`/`line_by_no` 一步定位）；有过滤走
+//! 固定页大小流式扫描，只保留命中分页窗口与计数。对分页离线会话，任意
+//! `limit` 请求的内存占用与文件行数无关。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use axum::{
     body::Body,
@@ -13,10 +19,11 @@ use serde::{Deserialize, Serialize};
 use tokio_util::io::ReaderStream;
 
 use super::{
-    apply_filter, build_filter, filtered, not_found, BridgeCtx, FilterFields, FilterSpec,
+    apply_filter, build_filter, not_found, BridgeCtx, BridgeService, FilterFields, FilterSpec,
     DEFAULT_LIMIT, MAX_LIMIT,
 };
-use bytetide_core::serial::manager::BridgeLine;
+use crate::bridge::ServiceError;
+use bytetide_core::serial::manager::{BridgeLine, BridgeStats};
 use bytetide_core::serial::port::Dir;
 
 // =============================== /lines ===============================
@@ -58,38 +65,28 @@ pub(crate) async fn lines(
         Ok(x) => x,
         Err(e) => return e.into_response(),
     };
-    let snap = match ctx.service.snapshot(&id) {
+    let stats = match ctx.service.stats(&id) {
         Ok(s) => s,
         Err(_) => return not_found(),
     };
-    // 过滤 + 命中
-    let filt: Vec<BridgeLine> = snap
-        .iter()
-        .filter_map(|l| {
-            let hit = apply_filter(l, &f)?;
-            let mut bl = l.clone();
-            bl.r#match = hit;
-            Some(bl)
-        })
-        .collect();
-    let first_no = snap.first().map(|l| l.no).unwrap_or(0);
-    let last_no = snap.last().map(|l| l.no).unwrap_or(0);
-    let size = snap.len();
-
-    // 选择（优先级）
-    let selected: Vec<&BridgeLine> = select_lines(&filt, &p);
-
-    // 分页
     let offset = p.offset.unwrap_or(0);
     let limit = p.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-    let total = selected.len();
+    let (page, total) = if f.is_noop() {
+        match bounded_fetch(&*ctx.service, &id, &p, &stats, offset, limit) {
+            Ok(x) => x,
+            Err(_) => return not_found(),
+        }
+    } else {
+        // Err = 会话缺失或页读失败（存储故障不与「无命中」混淆，统一 404 语义）
+        match stream_scan(&*ctx.service, &id, &f, &p, offset, limit) {
+            Ok(x) => x,
+            Err(_) => return not_found(),
+        }
+    };
+    let first_no = stats.first_no;
+    let last_no = stats.last_no;
+    let size = stats.size;
     let truncated = total.saturating_sub(offset) > limit;
-    let page: Vec<BridgeLine> = selected
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .cloned()
-        .collect();
 
     let fmt = p.format.as_deref();
     if fmt == Some("csv") || fmt == Some("tsv") {
@@ -156,42 +153,324 @@ fn csv_escape(s: &str, sep: char) -> String {
     }
 }
 
-fn select_lines<'a>(filt: &'a [BridgeLine], p: &LinesParams) -> Vec<&'a BridgeLine> {
+/// 流式扫描页大小（有过滤路径；单次内存 = 一页行 + 命中窗口）。
+const SCAN_PAGE: usize = 1000;
+/// 命中窗口上限（offset+limit 的钳制）：防超大 offset 把滚动窗口撑爆。
+/// 超出窗口的 offset 返回空页（total 仍精确）——正常分页 consumer 远用不到。
+const SCAN_WINDOW_CAP: usize = 20_000;
+
+/// 无过滤的有界读取：把 `offset/limit` 直接下推为 no 区间页读，不做任何
+/// 全量扫描。选择语义与原 select_lines 一致（选择模式下 total 的口径保持
+/// 原响应形状：no=0/1、区间=命中数、around=窗口长度、last=min(N, size)）。
+/// nos 在 [first_no, last_no] 连续（ring 与离线文件皆然），区间计数用算术。
+fn bounded_fetch(
+    svc: &dyn BridgeService,
+    id: &str,
+    p: &LinesParams,
+    stats: &BridgeStats,
+    offset: usize,
+    limit: usize,
+) -> Result<(Vec<BridgeLine>, usize), ServiceError> {
+    let (first, last, size) = (stats.first_no, stats.last_no, stats.size);
+    let empty = Ok((Vec::new(), 0usize));
+    if first == 0 || last == 0 {
+        return empty;
+    }
+    // no=X：单行直取
     if let Some(no) = p.no {
-        return filt.iter().filter(|l| l.no == no).take(1).collect();
+        return Ok(match svc.line_by_no(id, no)? {
+            Some(l) if offset == 0 => (vec![l], 1),
+            Some(_) => (Vec::new(), 1),
+            None => (Vec::new(), 0),
+        });
     }
+    // from+to：闭区间命中
     if let (Some(from), Some(to)) = (p.from, p.to) {
-        return filt.iter().filter(|l| l.no >= from && l.no <= to).collect();
-    }
-    if let Some(last) = p.last {
-        let start = filt.len().saturating_sub(last);
-        return filt[start..].iter().collect();
-    }
-    if let Some(since) = p.since_no {
-        return filt.iter().filter(|l| l.no > since).collect();
-    }
-    if let Some(around) = p.around {
-        let span = p.span.unwrap_or(10) as usize;
-        // 精确命中
-        if let Some(i) = filt.iter().position(|l| l.no == around) {
-            let start = i.saturating_sub(span);
-            let end = (i + span + 1).min(filt.len());
-            return filt[start..end].iter().collect();
+        let lo = from.max(first);
+        let hi = to.min(last);
+        if hi < lo {
+            return empty;
         }
-        // 最近邻
-        let idx = filt
-            .iter()
-            .position(|l| l.no > around)
-            .unwrap_or(filt.len());
-        let start = idx.saturating_sub(span);
-        let end = (idx + span).min(filt.len());
-        return filt[start..end].iter().collect();
+        let total = (hi - lo + 1) as usize;
+        let start = lo.saturating_add(offset as u64);
+        if start > hi {
+            return Ok((Vec::new(), total));
+        }
+        let page = svc
+            .lines_after(id, start - 1, limit)?
+            .into_iter()
+            .take_while(|l| l.no <= hi)
+            .collect();
+        return Ok((page, total));
     }
-    // from + limit（无 to）：no >= from，靠分页 limit 截断
+    // last=N：先确定最新 N 行组成的选择集，再在选择集内应用 offset/limit。
+    if let Some(n) = p.last {
+        let total = (n as u64).min(size as u64) as usize;
+        if offset >= total {
+            return Ok((Vec::new(), total));
+        }
+        let selected_first = last.saturating_sub(total as u64).saturating_add(1);
+        let page_first = selected_first.saturating_add(offset as u64);
+        let page = svc.lines_after(id, page_first.saturating_sub(1), limit)?;
+        return Ok((page, total));
+    }
+    // since_no：no > since
+    if let Some(since) = p.since_no {
+        let start = since.max(first - 1).saturating_add(1);
+        if start > last {
+            return empty;
+        }
+        let total = (last - start + 1) as usize;
+        let at = start.saturating_add(offset as u64);
+        if at > last {
+            return Ok((Vec::new(), total));
+        }
+        let page = svc
+            .lines_after(id, at - 1, limit)?
+            .into_iter()
+            .take_while(|l| l.no <= last)
+            .collect();
+        return Ok((page, total));
+    }
+    // around：锚点 ±span（精确命中闭区间 [a-span, a+len) 镜像原 index 语义；
+    // 锚点缺失取首个 no > around 的行（窗口长 2×span），越过表尾取最新 span 行）
+    if let Some(around) = p.around {
+        let span = p.span.unwrap_or(10);
+        let (lo, hi) = match svc.line_by_no(id, around)? {
+            Some(_) => (
+                around.saturating_sub(span).max(first),
+                around.saturating_add(span).min(last),
+            ),
+            None => match svc.lines_after(id, around, 1)?.first().map(|l| l.no) {
+                Some(next) => (
+                    next.saturating_sub(span).max(first),
+                    next.saturating_add(span).saturating_sub(1).min(last),
+                ),
+                None => (last.saturating_sub(span.saturating_sub(1)).max(first), last),
+            },
+        };
+        if lo > hi {
+            return empty;
+        }
+        let total = (hi - lo + 1) as usize;
+        let start = lo.saturating_add(offset as u64);
+        if start > hi {
+            return Ok((Vec::new(), total));
+        }
+        let page = svc
+            .lines_after(id, start - 1, limit)?
+            .into_iter()
+            .take_while(|l| l.no <= hi)
+            .collect();
+        return Ok((page, total));
+    }
+    // from（无 to）：no >= from
     if let Some(from) = p.from {
-        return filt.iter().filter(|l| l.no >= from).collect();
+        let lo = from.max(first);
+        if lo > last {
+            return empty;
+        }
+        let total = (last - lo + 1) as usize;
+        let start = lo.saturating_add(offset as u64);
+        if start > last {
+            return Ok((Vec::new(), total));
+        }
+        let page = svc.lines_after(id, start - 1, limit)?;
+        return Ok((page, total));
     }
-    filt.iter().collect()
+    // 缺省：全量顺序分页
+    let total = size;
+    let start = first.saturating_add(offset as u64);
+    if start > last {
+        return Ok((Vec::new(), total));
+    }
+    Ok((svc.lines_after(id, start - 1, limit)?, total))
+}
+
+/// 有过滤的流式扫描：固定页大小 `lines_after` 走完全程，只保留「命中分页
+/// 窗口」与计数——内存与命中总量无关（评审 P1-1）。选择语义镜像原
+/// select_lines（对命中序列做 index 窗口）：
+/// - no：line_by_no 单行（未命中过滤 → 空页）；
+/// - last=N：选择集 = 最后 N 个命中 → 尾窗口（cap = min(N, offset+limit)，
+///   再与 SCAN_WINDOW_CAP 取小）；
+/// - 其余（from/to、since、from、缺省）：选择集 = 范围内全部命中 → 头窗口
+///   （跳过前 offset 个命中后收集 limit 个，内存 ≤ limit）；
+/// - around：命中序列中锚点的 ±span index 窗口（精确/最近邻/越表尾）。
+fn stream_scan(
+    svc: &dyn BridgeService,
+    id: &str,
+    f: &FilterSpec,
+    p: &LinesParams,
+    offset: usize,
+    limit: usize,
+) -> Result<(Vec<BridgeLine>, usize), ()> {
+    // no=X：单行
+    if let Some(no) = p.no {
+        let line = svc.line_by_no(id, no).map_err(drop)?;
+        return Ok(match line {
+            Some(mut bl) => match apply_filter(&bl, f) {
+                Some(hit) => {
+                    bl.r#match = hit;
+                    (if offset == 0 { vec![bl] } else { Vec::new() }, 1)
+                }
+                None => (Vec::new(), 0),
+            },
+            None => (Vec::new(), 0),
+        });
+    }
+    // around：需要锚点命中序号，独立扫描分支
+    if let Some(around) = p.around {
+        let span = p.span.unwrap_or(10).min(SCAN_WINDOW_CAP as u64) as usize;
+        return stream_scan_around(svc, id, f, around, span, offset, limit);
+    }
+    // 其余模式统一扫描：游标起点按选择模式跳过必不在窗口的前缀
+    let (start_cursor, last_n) = if let (Some(from), Some(_to)) = (p.from, p.to) {
+        (from.saturating_sub(1), None::<usize>) // to 截断在循环内按 no 判断
+    } else if let Some(n) = p.last {
+        (0, Some(n))
+    } else if let Some(since) = p.since_no {
+        (since, None)
+    } else if let Some(from) = p.from {
+        (from.saturating_sub(1), None)
+    } else {
+        (0, None)
+    };
+    // 尾窗口 cap（仅 last=N）：必须保留最后 N 个命中，才能在该选择集内从
+    // offset 起分页；只保留 offset+limit 会错误地把页定位到全局命中序列末尾。
+    // N 超过安全上限时仍只保留尾部上限窗口，窗口之外的页返回空但 total 精确。
+    let tail_cap = last_n.map(|n| n.min(SCAN_WINDOW_CAP));
+    let mut cursor = start_cursor;
+    let mut keep: VecDeque<BridgeLine> = VecDeque::new();
+    let mut matched = 0usize;
+    loop {
+        let page = svc.lines_after(id, cursor, SCAN_PAGE).map_err(drop)?;
+        if page.is_empty() {
+            break;
+        }
+        cursor = page.last().map(|l| l.no).unwrap_or(cursor);
+        for l in page {
+            if let (Some(from), Some(to)) = (p.from, p.to) {
+                if l.no < from || l.no > to {
+                    continue;
+                }
+            }
+            if let Some(hit) = apply_filter(&l, f) {
+                let mut bl = l;
+                bl.r#match = hit;
+                matched += 1;
+                match tail_cap {
+                    // 头窗口：跳过前 offset 个命中，收集 limit 个（精确分页）
+                    None => {
+                        if matched > offset && keep.len() < limit {
+                            keep.push_back(bl);
+                        }
+                    }
+                    // 尾窗口：保留最后 cap 个命中
+                    Some(cap) => {
+                        if keep.len() == cap {
+                            keep.pop_front();
+                        }
+                        keep.push_back(bl);
+                    }
+                }
+            }
+        }
+    }
+    let total = match last_n {
+        Some(n) => matched.min(n),
+        None => matched,
+    };
+    // 头窗口：keep 即命中[offset..offset+limit]（不足则全量）。
+    // 尾窗口：keep = 最后 keep.len() 个命中，全局起点 win_first；选择集起点
+    // sel_first = matched - total；分页起点落在窗口/选择集之前 → 空页
+    let page = match tail_cap {
+        None => keep.into_iter().collect(),
+        Some(_) => {
+            let win_first = matched.saturating_sub(keep.len());
+            let sel_first = matched.saturating_sub(total);
+            let skip_at = sel_first.max(win_first).saturating_add(offset);
+            if skip_at < win_first || skip_at >= matched {
+                Vec::new()
+            } else {
+                keep.into_iter()
+                    .skip(skip_at - win_first)
+                    .take(limit)
+                    .collect()
+            }
+        }
+    };
+    Ok((page, total))
+}
+
+/// around 的流式窗口：锚点在命中序列中的 index i（精确=该行命中时的序号，
+/// 否则=首个 no > around 的命中序号，越表尾=总命中数），窗口 = [i-span, i+span]
+/// （精确）或 [i-span, i+span-1]（最近邻），index 越界端截断。扫描期锚点前只保
+/// 留最后 span+1 个命中，锚点后收集 span 个。
+#[allow(clippy::too_many_arguments)]
+fn stream_scan_around(
+    svc: &dyn BridgeService,
+    id: &str,
+    f: &FilterSpec,
+    around: u64,
+    span: usize,
+    offset: usize,
+    limit: usize,
+) -> Result<(Vec<BridgeLine>, usize), ()> {
+    let mut cursor = 0u64;
+    let mut win: VecDeque<BridgeLine> = VecDeque::new();
+    let mut le = 0usize; // no ≤ around 的命中数（锚点精确命中时含锚点）
+    let mut exact_idx: Option<usize> = None;
+    let mut post = 0usize; // 锚点后已收集的命中数
+    loop {
+        let page = svc.lines_after(id, cursor, SCAN_PAGE).map_err(drop)?;
+        if page.is_empty() {
+            break;
+        }
+        cursor = page.last().map(|l| l.no).unwrap_or(cursor);
+        for l in page {
+            let Some(hit) = apply_filter(&l, f) else {
+                continue;
+            };
+            let mut bl = l;
+            bl.r#match = hit;
+            if bl.no <= around {
+                le += 1;
+                if bl.no == around {
+                    exact_idx = Some(le - 1);
+                }
+                if win.len() == span + 1 {
+                    win.pop_front();
+                }
+                win.push_back(bl);
+            } else if post < span {
+                post += 1;
+                win.push_back(bl);
+            }
+        }
+    }
+    // 命中序列 index 窗口 [start, end]（含端点）
+    let anchor_idx = exact_idx.unwrap_or(le);
+    let start = anchor_idx.saturating_sub(span);
+    let end = anchor_idx
+        .saturating_add(span)
+        .saturating_sub(usize::from(exact_idx.is_none()));
+    let total_hits = le + post;
+    let win_first = total_hits.saturating_sub(win.len());
+    let skip = start.saturating_sub(win_first);
+    let take = end
+        .saturating_sub(start)
+        .saturating_add(1)
+        .min(win.len().saturating_sub(skip));
+    // 窗口切片后按 offset/limit 分页（镜像原 select_lines 的窗口+分页两步）
+    let total = take;
+    let page = win
+        .into_iter()
+        .skip(skip)
+        .take(take)
+        .skip(offset)
+        .take(limit)
+        .collect();
+    Ok((page, total))
 }
 
 // =============================== /follow ===============================
@@ -338,15 +617,25 @@ pub(crate) async fn histogram(
         Ok(x) => x,
         Err(e) => return e.into_response(),
     };
-    let filt = match filtered(&ctx, &id, &f) {
-        Some(v) => v,
-        None => return not_found(),
-    };
     let bucket = p.bucket.unwrap_or(1000).max(1);
+    // 流式扫描计数（评审 P1-1 同源）：命中只累加桶计数，不物化命中行列表
+    let mut cursor = 0u64;
     let mut map: BTreeMap<u64, u64> = BTreeMap::new();
-    for l in &filt {
-        let b = (l.epoch_millis / bucket) * bucket;
-        *map.entry(b).or_insert(0) += 1;
+    loop {
+        let page = match ctx.service.lines_after(&id, cursor, SCAN_PAGE) {
+            Ok(v) => v,
+            Err(_) => return not_found(),
+        };
+        if page.is_empty() {
+            break;
+        }
+        cursor = page.last().map(|l| l.no).unwrap_or(cursor);
+        for l in &page {
+            if apply_filter(l, &f).is_some() {
+                let b = (l.epoch_millis / bucket) * bucket;
+                *map.entry(b).or_insert(0) += 1;
+            }
+        }
     }
     let out: Vec<HistBucket> = map
         .into_iter()
@@ -430,7 +719,7 @@ pub(crate) async fn export_log(
                 StatusCode::NOT_FOUND,
                 "log file not found on disk (cleared or never written)",
             )
-                .into_response()
+                .into_response();
         }
     };
     let stream = ReaderStream::with_capacity(file, 64 * 1024);

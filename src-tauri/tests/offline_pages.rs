@@ -238,11 +238,32 @@ fn offline_session_guards_clear_and_log_path() {
     let stats = m.bridge_stats(&id).unwrap();
     assert_eq!(stats.size, 0);
     assert_eq!((stats.rx_lines, stats.tx_lines), (7, 3)); // 计数器不重置
-                                                          // 断开=清理；旧全量路径（create_offline_session_cmd 背后）不受影响
+                                                          // 断开=停止墓碑（清屏后的镜像仍空，供最终补拉）；释放后彻底不可达。
+                                                          // 旧全量路径（create_offline_session_cmd 背后）不受影响
     m.disconnect(&id).unwrap();
+    assert!(m.ring_lines_after_no(&id, 0, 10).unwrap().is_empty());
+    m.release_dead(&id);
     assert!(m.ring_lines_after_no(&id, 0, 10).is_err());
     let old = m.load_offline(PortConfig::default(), PathBuf::from("x.log"), vec![]);
     assert_eq!(m.ring_lines_after_no(&old, 0, 10).unwrap().len(), 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn offline_line_by_no_propagates_source_io_failure() {
+    let dir = temp_dir("line-by-no-io");
+    let path = write_log(&dir, "gone.log", 2, line_text);
+    let m = mk_manager();
+    let (id, _) = m
+        .load_offline_indexed(PortConfig::default(), path.clone())
+        .expect("open");
+    std::fs::remove_file(&path).expect("remove source after indexing");
+
+    let err = match m.bridge_line_by_no(&id, 1) {
+        Err(err) => err,
+        Ok(_) => panic!("source IO failure must not masquerade as a missing line"),
+    };
+    assert!(err.to_string().contains("offline log io error"));
     std::fs::remove_dir_all(&dir).ok();
 }
 

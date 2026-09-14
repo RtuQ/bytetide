@@ -102,26 +102,33 @@ literal/hex/mask（校验层只允许 group=0）存命中行整行文本。
 | `hex` | 十六进制字节序列子串查找（如 `"50 4f 4e 47"`；去空白后须偶数长纯 hex）；优先匹配行原始字节，无字节行回退文本 |
 | `mask` | 每对 `??` 通配或两位 hex，如 `"5a ?? 4f"` |
 
-matcher 模式**不做变量替换**——可字面匹配含 `${` 的设备输出。
+matcher 模式**支持变量替换**（`${name}` 语法与 send text 同源）：含引用的模式在
+执行该步时替换后编译（regex 可编译 / hex、mask 严格解析在替换后校验）；无引用的
+模式预编译、运行零开销——仍可字面匹配含 `${` 的设备输出（`${` 后非合法变量名的
+序列按字面量保留）。
 
 ## 4. 变量规则
 
-- 引用语法 `${name}`；仅 `send.text` 与 `assert.message` 参与替换与引用检查。
+- 引用语法 `${name}`；`send.text`、`assert.message` 与 matcher 模式均参与替换
+  与引用检查。
 - 变量来源：初始 `variables`，或更早 `wait.save` 的捕获。
-- 静态校验保守语义：直线块内严格按序（引用必须先捕获/声明）；**Repeat 体放宽**——
-  体内可用集 = 外层可用集 ∪ 体内全部 save（跨迭代引用、先行引用不误报；
-  运行期 `substitute` 对真正未定义的引用兜底报 `undefined_variable`）。
+- 静态校验严格按首轮迭代顺序：直线块与 Repeat 体内一致——引用必须来自初始
+  `variables` 或**更早步骤**的 save（「循环体先引用后保存」第一轮迭代必然
+  未定义，预检即报 `undefined_variable`）；跨迭代携带变量须在初始 `variables`
+  预声明。Repeat 体内 save 在块后（`times ≥ 1`）即已定义，其后的引用合法。
+- 运行期 `substitute` 兜底报 `undefined_variable`（防御绕过校验的构造）。
 - 字面量边界：`$$` 原样保留（无转义）；`$` 后跟非 `{` 原样保留；`${` 无闭合 `}`
   或内容非法 → 整段按字面量保留（不算引用）。
 
-## 5. 上限（执行前静态校验，超限即拒绝）
+## 5. 上限（执行前静态校验，越界即拒绝）
 
-| 项 | 上限 |
+| 项 | 范围 |
 |---|---|
 | Repeat 嵌套深度 | 4 层 |
-| 执行步数（Repeat 展开后） | 10,000 |
-| delay.ms / wait.timeoutMs | 600,000 ms |
-| repeat.times | 10,000 |
+| 执行步数（Repeat 展开后） | ≤ 10,000 |
+| delay.ms | ≤ 600,000 ms |
+| wait.timeoutMs | 1 – 600,000 ms |
+| repeat.times | 1 – 10,000 |
 
 ## 6. 错误码表
 
@@ -143,9 +150,11 @@ matcher 模式**不做变量替换**——可字面匹配含 `${` 的设备输�
 | `delay_too_long` | delay.ms 超 600,000 |
 | `wait_too_long` | wait.timeoutMs 超 600,000 |
 | `repeat_too_many` | repeat.times 超 10,000 |
+| `wait_too_short` | wait.timeoutMs 为 0（下界 1） |
+| `repeat_too_few` | repeat.times 为 0（下界 1） |
 | `invalid_variable_name` | 变量名不合法 |
 | `undefined_variable` | 引用了不可达（未声明/未捕获）的变量 |
-| `capture_group_invalid` | save.group 超出该 matcher 允许范围 |
+| `capture_group_invalid` | save.group 超出该 matcher 允许范围（动态模板推迟到运行期捕获时报） |
 
 校验错误携带索引路径（如 `steps[3].steps[1]`）。
 
@@ -156,6 +165,8 @@ matcher 模式**不做变量替换**——可字面匹配含 `${` 的设备输�
 | `wait_timeout` | 等待超时 |
 | `assert_failed` | 断言未命中（message 为替换后的失败说明） |
 | `undefined_variable` | 运行期替换遇到未定义变量 |
+| `invalid_regex` / `invalid_hex` / `invalid_mask` / `matcher_conflict` | 含引用的 matcher 替换后编译失败（沿用校验码） |
+| `capture_group_invalid` | 动态模板 save.group 运行期越界 |
 | `step_limit_exceeded` | 运行期步数预算（10,000）耗尽 |
 | `host_backpressure` | host 发送/接收队列满被拒 |
 | `host_transport` | 传输/会话层故障（断连、hex 解码失败、会话不支持该操作等） |

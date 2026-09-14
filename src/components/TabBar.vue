@@ -28,7 +28,9 @@ onBeforeUnmount(() => window.removeEventListener(POPOVER_EVENT, onOpenLog))
         @click="store.setActive(s.id)"
       >
         <span class="dot" :class="s.status" :title="s.status"></span>
-        <span class="name" :title="s.config.name">{{ s.kind === 'offline' ? s.config.name : `${s.config.name || '?'}@${s.config.baudRate}` }}</span>
+        <!-- live 显示端口@波特率；offline/replay 无链路，只显示文件名（replay
+             波特率恒 0，旧实现显示成 文件名@0） -->
+        <span class="name" :title="s.config.name">{{ s.kind === 'live' ? `${s.config.name || '?'}@${s.config.baudRate}` : s.config.name }}</span>
         <button
           class="close"
           title="关闭"

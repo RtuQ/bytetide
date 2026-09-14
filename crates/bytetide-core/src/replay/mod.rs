@@ -126,11 +126,13 @@ mod tests {
         tx.send(ReplayCmd::SeekLine(1)).unwrap();
         wait_until(5_000, || m.bridge_last_no(&id) == Some(10));
         assert_eq!(m.ring_bounds(&id).unwrap().first_no, 6);
-        // 断开 = Stop + join + 移除会话
+        // 断开 = Stop + join + 移除会话（停止墓碑保留只读 ring 供最终补拉，
+        // release 后彻底不可达）
         m.disconnect(&id).unwrap();
-        assert!(m.ring_lines_after_no(&id, 0, 10).is_err(), "会话已移除");
         assert_eq!(m.replay_state(&id), None);
         assert!(!m.bridge_list().iter().any(|s| s.id == id));
+        m.release_dead(&id);
+        assert!(m.ring_lines_after_no(&id, 0, 10).is_err(), "已释放");
     }
 
     #[test]
@@ -294,7 +296,11 @@ mod tests {
             started.elapsed() < Duration::from_secs(2),
             "disconnect 不等回放播完"
         );
-        assert!(m.ring_lines_after_no(&id, 0, 10).is_err());
         assert!(m.bridge_list().is_empty());
+        // 停止墓碑：只读 ring 留供最终补拉，显式释放后彻底不可达
+        let tail = m.ring_lines_after_no(&id, 0, 10).unwrap();
+        assert_eq!(tail.len(), 1);
+        m.release_dead(&id);
+        assert!(m.ring_lines_after_no(&id, 0, 10).is_err(), "释放后不可达");
     }
 }

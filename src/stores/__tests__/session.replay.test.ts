@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useSessionStore } from '../session'
 import { isPullSession } from '../session/model'
+import { drainSession } from '../../composables/useTauriEvents'
 import type { PortConfig } from '../../types'
 
 // invoke 全文件打桩：回放命令在无 Tauri 后端的测试环境可走通
@@ -98,6 +99,8 @@ describe('回放会话生命周期', () => {
       if (cmd === 'open_replay_session_cmd') {
         return { sessionId: 'r1', lineCount: 10, durationMs: 9000 }
       }
+      // 停止/断开的最终补拉：拉空（墓碑或在线 ring 均无增量）
+      if (cmd === 'ring_lines_no_cmd') return []
       return null
     })
     const store = useSessionStore()
@@ -105,22 +108,80 @@ describe('回放会话生命周期', () => {
     return { store, id }
   }
 
-  it('stopSession 断开：disconnect 下发、status 置 disconnected、控制面定格 stopped', async () => {
+  it('stopSession 断开：两阶段关闭（disconnect → 补拉 → release）、status 置 disconnected、控制面定格 stopped', async () => {
     const { store, id } = await mkReplay()
     const r = store.sessions[id]!
     r.status = 'connected'
     r.replay = { state: 'running', speed: 1, looped: false, line: 3 }
     await store.stopSession(id)
-    expect(calledCommands()).toContain('disconnect_cmd')
+    const cmds = calledCommands()
+    expect(cmds).toContain('disconnect_cmd')
+    expect(cmds).toContain('release_session_cmd')
+    // 两阶段顺序：先断开（挂墓碑）再释放（补拉完成后）
+    expect(cmds.indexOf('disconnect_cmd')).toBeLessThan(cmds.indexOf('release_session_cmd'))
     expect(r.status).toBe('disconnected')
     expect(r.replay?.state).toBe('stopped')
   })
 
-  it('closeTab 关闭：disconnect 下发并移除会话', async () => {
+  it('closeTab 关闭：disconnect + release 下发并移除会话', async () => {
     const { store, id } = await mkReplay()
     await store.closeTab(id)
-    expect(calledCommands()).toContain('disconnect_cmd')
+    const cmds = calledCommands()
+    expect(cmds).toContain('disconnect_cmd')
+    expect(cmds).toContain('release_session_cmd')
     expect(store.sessions[id]).toBeUndefined()
+  })
+
+  it('复审 R-P1-2：在途常规拉取未完成时，stopSession 等待其结束并完成最终拉空后才 release', async () => {
+    const { store, id } = await mkReplay()
+    const r = store.sessions[id]!
+    r.status = 'connected'
+    r.replay = { state: 'running', speed: 1, looped: false, line: 0 }
+    // 第一批拉取挂起（模拟渲染进程被节流/IPC 慢），手控放行
+    let releaseFirstPull!: (v: unknown[]) => void
+    const firstPull = new Promise<unknown[]>((resolve) => {
+      releaseFirstPull = resolve
+    })
+    let pullCount = 0
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'open_replay_session_cmd') {
+        return { sessionId: 'r1', lineCount: 10, durationMs: 9000 }
+      }
+      if (cmd === 'ring_lines_no_cmd') {
+        pullCount += 1
+        if (pullCount === 1) return firstPull
+        if (pullCount === 2) {
+          // 最终补拉：游标已到 1，尾行 no=2
+          return [
+            { ts: '00:00:02.000', dir: 'rx', text: 'tail-line', epochMillis: 2000, no: 2 },
+          ]
+        }
+        return []
+      }
+      return null
+    })
+    // 在途常规拉取占用 draining
+    drainSession(id)
+    await vi.waitFor(() => expect(pullCount).toBe(1)) // 常规拉取已走到挂起点
+    // 停止：drainSessionTail 必须等在途拉取真正结束（而非固定超时后放弃）
+    const stopP = store.stopSession(id)
+    // 在途未放行期间，release 不得发生
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(calledCommands()).not.toContain('release_session_cmd')
+    // 放行在途拉取 → 常规拉取收尾 → 最终补拉拉尾行 → release
+    releaseFirstPull([
+      { ts: '00:00:01.000', dir: 'rx', text: 'inflight-line', epochMillis: 1000, no: 1 },
+    ])
+    await stopP
+    const cmds = calledCommands()
+    expect(cmds).toContain('release_session_cmd')
+    expect(cmds.indexOf('release_session_cmd')).toBeGreaterThan(cmds.indexOf('disconnect_cmd'))
+    // 尾批两行（在途行 + 最终补拉行）都进了表，不丢尾批
+    const texts = r.lines.map((l) => l.text)
+    expect(texts).toContain('inflight-line')
+    expect(texts).toContain('tail-line')
+    expect(r.status).toBe('disconnected')
+    expect(r.replay?.state).toBe('stopped')
   })
 
   it('clearLog 允许（清屏不清控制面与离线元信息）', async () => {

@@ -28,6 +28,9 @@ pub trait BridgeService: Send + Sync + 'static {
     fn snapshot(&self, id: &str) -> Result<Vec<BridgeLine>, ServiceError>;
     /// `no` 之后（不含）的行，至多 `max` 条（生产侧钳到 ring 容量，一轮必取全增量）。
     fn lines_after(&self, id: &str, no: u64, max: usize) -> Result<Vec<BridgeLine>, ServiceError>;
+    /// 按行号精确读单行（会话缺失 Err；行不存在 `Ok(None)`；`no=0` 恒 None）。
+    /// `/lines?no=` 与批注回填的有界读取面（评审 P1-1：替代全量 snapshot）。
+    fn line_by_no(&self, id: &str, no: u64) -> Result<Option<BridgeLine>, ServiceError>;
     fn last_no(&self, id: &str) -> Result<u64, ServiceError>;
     fn log_path(&self, id: &str) -> Result<PathBuf, ServiceError>;
     fn plot(&self, id: &str) -> Result<PlotConfig, ServiceError>;
@@ -106,6 +109,14 @@ impl BridgeService for ManagerBridgeService {
             .state::<AppState>()
             .manager
             .ring_lines_after_no(id, no, max)
+            .map_err(|e| ServiceError::Backend(e.to_string()))
+    }
+
+    fn line_by_no(&self, id: &str, no: u64) -> Result<Option<BridgeLine>, ServiceError> {
+        self.app
+            .state::<AppState>()
+            .manager
+            .bridge_line_by_no(id, no)
             .map_err(|e| ServiceError::Backend(e.to_string()))
     }
 

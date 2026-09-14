@@ -26,6 +26,65 @@ use crate::serial::port::{Dir, LogLine};
 /// 4095 行，单页内存上限=调用方 max（manager 钳到 RING_CAP）。
 pub(crate) const PAGE_LINES: u64 = 4096;
 
+/// 一天的毫秒数（时间戳解析产物=当日毫秒，跨午夜回卷补偿的最小单位）。
+pub(crate) const DAY_MS: u64 = 86_400_000;
+
+/// 稀疏锚点：页定位偏移 + 跨午夜回卷状态。页读从任意锚点重启顺序扫描时，
+/// 续接索引期在该行的日期偏移与前一合法行原始 epoch，保证任意页读顺序
+/// （正向拉取 / 回补 / seek）产出的调整后 epoch 与索引期逐行一致。
+pub(crate) struct Anchor {
+    /// 锚点行（no=k*PAGE_LINES+1）的文件字节偏移。
+    pub(crate) off: u64,
+    /// 该锚点行生效的日期回卷偏移（毫秒）。
+    pub(crate) day_off: u64,
+    /// 锚点行之前最近一个合法 ts 行的原始当日毫秒（k=0 为 None）。
+    pub(crate) prev_raw: Option<u64>,
+}
+
+/// 跨午夜回卷检测（索引期与页读期共享的顺序状态机）：合法 ts 行的原始当日
+/// 毫秒比前一个合法值小超过半天 ⟹ 判定日期回卷，偏移累加一天（评审 P3——
+/// 使回放间隔/时长等内部 epoch 消费单调；显示用原始 ts 字符串不变）。
+/// 行序回退行（ts 非法，epoch=seq 的合成值）不参与检测也不更新 prev——合成值
+/// 既会伪造回卷也会掩盖回卷（特例：合法 ts 恰等于行序号时误判为回退，仅错过
+/// 该行的检测机会，无累积影响）。
+pub(crate) struct DayWrap {
+    day_off: u64,
+    prev: Option<u64>,
+}
+
+impl DayWrap {
+    pub(crate) fn new() -> Self {
+        Self {
+            day_off: 0,
+            prev: None,
+        }
+    }
+
+    /// 从锚点记录的状态续接（页读重启扫描）。
+    pub(crate) fn resume(day_off: u64, prev: Option<u64>) -> Self {
+        Self { day_off, prev }
+    }
+
+    /// 锚点快照（索引期记录锚点用）。
+    pub(crate) fn snapshot(&self) -> (u64, Option<u64>) {
+        (self.day_off, self.prev)
+    }
+
+    /// 输入一行：`is_valid_ts` = epoch 来自合法 ts 解析（非行序回退）。返回该行
+    /// 生效的日期偏移。
+    pub(crate) fn feed(&mut self, raw_epoch: u64, is_valid_ts: bool) -> u64 {
+        if is_valid_ts {
+            if let Some(prev) = self.prev {
+                if raw_epoch < prev.saturating_sub(DAY_MS / 2) {
+                    self.day_off += DAY_MS;
+                }
+            }
+            self.prev = Some(raw_epoch);
+        }
+        self.day_off
+    }
+}
+
 /// 离线日志打开/读取错误。
 #[derive(Debug)]
 pub enum OfflineError {
@@ -492,8 +551,10 @@ mod tests {
         assert_eq!(m.bridge_last_no(&id), Some(0));
         let b = m.ring_bounds(&id).unwrap();
         assert_eq!((b.first_no, b.last_no, b.size), (0, 0, 0));
-        // 断开即清理
+        // 断开 = 停止墓碑（清屏后的镜像仍空），显式释放后彻底不可达
         m.disconnect(&id).unwrap();
+        assert!(m.ring_lines_after_no(&id, 0, 10).unwrap().is_empty());
+        m.release_dead(&id);
         assert!(m.ring_lines_after_no(&id, 0, 10).is_err());
         std::fs::remove_dir_all(&dir).ok();
     }

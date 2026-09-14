@@ -98,7 +98,7 @@ pub(crate) fn build_filter(f: &FilterFields) -> Result<FilterSpec, (StatusCode, 
             return Err((
                 StatusCode::BAD_REQUEST,
                 format!("dir must be rx|tx, got {other}"),
-            ))
+            ));
         }
         _ => None,
     };

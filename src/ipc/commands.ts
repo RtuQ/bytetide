@@ -44,6 +44,10 @@ export function createCommands(client: IpcClient) {
     disconnect(sessionId: string): Promise<void> {
       return client.invoke<void>('disconnect_cmd', { sessionId })
     },
+    /** 释放停止墓碑（两阶段关闭第 2 阶段）：停止补拉完成后调用；未知 id 幂等 */
+    releaseSession(sessionId: string): Promise<void> {
+      return client.invoke<void>('release_session_cmd', { sessionId })
+    },
     send(sessionId: string, mode: SendMode, text: string): Promise<void> {
       return client.invoke<void>('send_cmd', { sessionId, mode, text })
     },

@@ -51,6 +51,15 @@ pub fn disconnect_cmd(session_id: String, state: State<'_, AppState>) -> Result<
     result
 }
 
+/// 释放停止墓碑（两阶段关闭第 2 阶段）：前端对已停止会话补拉完尾批后调用，
+/// 彻底丢弃只读 ring 副本。未知 id 静默成功（FIFO 淘汰/重复释放幂等）。
+#[tauri::command]
+pub fn release_session_cmd(session_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    state.manager.release_dead(&session_id);
+    state.replays.forget(&session_id);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn send_cmd(
     session_id: String,

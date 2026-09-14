@@ -27,8 +27,16 @@
 //!   （`matched_no` = 命中行 no）；否则 now ≥ deadline 报 `wait_timeout`；否则睡
 //!   `min(25ms, 剩余)`（[`WAIT_POLL_SLICE_MS`]）。timeoutMs=0 仍有一次拉取机会。
 //! - **捕获 save**：regex matcher 对命中行 text 取 captures——group 0 = 整个正则
-//!   匹配、>0 = 对应捕获组（组未参与匹配存空串）；literal/hex/mask（校验层只允许
+//!   匹配、>0 = 对应捕获组（组未参与匹配存空串；组越界报 `capture_group_invalid`
+//!   ——动态模板的组范围校验推迟到此）；literal/hex/mask（校验层只允许
 //!   group 0）= 命中行整行 text。写入变量表，后续步骤 substitute 立即可见。
+//! - **matcher 变量替换**：Wait/Assert 模板含 `${name}` 时，步开始先替换再编译
+//!   （值在本步内不变只做一次）；未定义引用报 `undefined_variable`，替换后模式
+//!   语法非法沿用 matcher 校验码（`invalid_regex`/`invalid_hex`/`invalid_mask`/
+//!   `matcher_conflict`）。无引用模板 validate 期已预编译，本层零开销。
+//! - **进度回调**：每个将执行的叶子步开始前调
+//!   [`ScenarioHost::on_step_started`]（path 含迭代后缀、current/total 精确），
+//!   宿主据此上报进度，无需按 host 调用签名推测。
 //! - **Assert 回看**：在「最近 within_last 行」内找（不消费 Wait 游标）；命中取
 //!   **最新**一条的 no。`within_last = 0` 视为 1（只看最后一行）——0 不是「全部
 //!   历史」。未命中报 `assert_failed`，message = 替换后的 Assert.message。
@@ -57,7 +65,8 @@ use std::time::Duration;
 
 use crate::automation::matcher::{substitute, CompiledMatcher};
 use crate::automation::model::{
-    CaptureSpec, PinDef, SendModeDef, ValidatedScenario, ValidatedStep, MAX_EXECUTED_STEPS,
+    count_executed_leaves, CaptureSpec, MatcherInstantiateError, PinDef, SendModeDef,
+    ValidatedScenario, ValidatedStep, MAX_EXECUTED_STEPS,
 };
 use crate::automation::report::{
     ScenarioReport, ScenarioStatus, StepErrorInfo, StepReport, StepStatus,
@@ -126,6 +135,13 @@ pub trait ScenarioHost {
     fn sleep(&mut self, duration: Duration, cancel: &AtomicBool) -> Result<(), HostError>;
     /// 当前墙钟毫秒（报告时间戳与 Wait deadline 的唯一时间源；可注入假钟）。
     fn now_ms(&self) -> u64;
+    /// 叶子步开始回调（每个将执行的叶子步恰一次，步体执行前）。`path` 含迭代
+    /// 后缀（如 `steps[6].steps[1]#0`），`kind` = 叶步种类，`current` = 1 基执行
+    /// 序号，`total` = 静态执行步上界。默认 no-op；宿主据此上报精确进度（桌面
+    /// 稀疏事件 / CLI stderr），替代按 host 调用签名推测的启发式。
+    fn on_step_started(&mut self, path: &str, kind: &'static str, current: u64, total: u64) {
+        let _ = (path, kind, current, total);
+    }
 }
 
 /// 执行场景（迭代式；确定性：同输入 + 同 host 行为 + 同钟 → 相同报告）。
@@ -136,6 +152,7 @@ pub fn run_scenario(
 ) -> ScenarioReport {
     let started = host.now_ms();
     let mut vars = scenario.variables.clone();
+    let total = count_executed_leaves(&scenario.steps);
     let baseline = host.last_no();
     let mut cursor = baseline;
     let mut reports: Vec<StepReport> = Vec::new();
@@ -222,6 +239,8 @@ pub fn run_scenario(
         }
         executed += 1;
         let path = format!("{step_path}{}", iter_suffix(&stack));
+        // 显式步骤边界（精确进度事件 / CLI 进度的唯一来源；total = 静态上界）
+        host.on_step_started(&path, kind_of(&step), executed, total);
         let outcome = run_leaf(&step, &path, host, cancel, &mut vars, &mut cursor);
         reports.push(outcome.report);
         if let Some(status) = outcome.abort {
@@ -377,15 +396,52 @@ fn iter_suffix(stack: &[Frame]) -> String {
 }
 
 /// Wait save 捕获值：regex 对命中行 text 取 captures（组未参与存空串）；
-/// literal/hex/mask（校验层只允许 group 0）= 命中行整行 text。
-fn capture_value(matcher: &CompiledMatcher, spec: &CaptureSpec, line: &BridgeLine) -> String {
+/// literal/hex/mask（校验层只允许 group 0）= 命中行整行 text。动态模板的
+/// 组范围 validate 期不可知，越界在此以 `capture_group_invalid` 报步级错误。
+fn capture_value(
+    matcher: &CompiledMatcher,
+    spec: &CaptureSpec,
+    line: &BridgeLine,
+) -> Result<String, StepErrorInfo> {
     match matcher.regex() {
-        Some(re) => re
-            .captures(&line.text)
-            .and_then(|caps| caps.get(spec.group))
-            .map(|m| m.as_str().to_string())
-            .unwrap_or_default(),
-        None => line.text.clone(),
+        Some(re) => {
+            if spec.group >= re.captures_len() {
+                return Err(step_error(
+                    "capture_group_invalid",
+                    format!(
+                        "capture group {} out of range: matcher exposes {} group(s) (group 0 = whole match)",
+                        spec.group,
+                        re.captures_len()
+                    ),
+                ));
+            }
+            Ok(re
+                .captures(&line.text)
+                .and_then(|caps| caps.get(spec.group))
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default())
+        }
+        None => {
+            if spec.group != 0 {
+                return Err(step_error(
+                    "capture_group_invalid",
+                    format!(
+                        "capture group {} out of range: non-regex matcher only exposes group 0",
+                        spec.group
+                    ),
+                ));
+            }
+            Ok(line.text.clone())
+        }
+    }
+}
+
+/// 动态 matcher 实例化错误 → 步级稳定错误码（变量未定义沿用
+/// `undefined_variable`；模式编译失败沿用 matcher 校验码字符串）。
+fn instantiate_step_error(e: &MatcherInstantiateError) -> StepErrorInfo {
+    match e {
+        MatcherInstantiateError::Variable(v) => step_error("undefined_variable", v.to_string()),
+        MatcherInstantiateError::Compile(m) => step_error(m.code.as_str(), m.message.clone()),
     }
 }
 
@@ -419,7 +475,7 @@ fn run_leaf(
                         started,
                         host.now_ms(),
                         step_error("undefined_variable", e.to_string()),
-                    )
+                    );
                 }
             };
             if *append_newline {
@@ -478,6 +534,20 @@ fn run_leaf(
             timeout_ms,
             save,
         } => {
+            // matcher 模板实例化（Static=克隆；Dynamic=替换后编译，失败报
+            // undefined_variable / matcher 校验码）；值在本步内不变，只做一次
+            let matcher = match matcher.instantiate(vars) {
+                Ok(m) => m,
+                Err(e) => {
+                    return failed(
+                        path.to_string(),
+                        kind,
+                        started,
+                        host.now_ms(),
+                        instantiate_step_error(&e),
+                    );
+                }
+            };
             let deadline = started.saturating_add(*timeout_ms);
             loop {
                 if cancel.load(Ordering::Relaxed) {
@@ -491,7 +561,7 @@ fn run_leaf(
                             started,
                             host.now_ms(),
                             host_step_error(&e),
-                        )
+                        );
                     }
                     Ok(batch) => {
                         // 观察过的批次即消费：无论命中与否，游标推进到批内最大 no
@@ -502,10 +572,20 @@ fn run_leaf(
                             matcher.matches(line.dir, &line.text, line.bytes.as_deref())
                         }) {
                             if let Some(spec) = save {
-                                vars.insert(
-                                    spec.variable.clone(),
-                                    capture_value(matcher, spec, hit),
-                                );
+                                match capture_value(&matcher, spec, hit) {
+                                    Ok(value) => {
+                                        vars.insert(spec.variable.clone(), value);
+                                    }
+                                    Err(e) => {
+                                        return failed(
+                                            path.to_string(),
+                                            kind,
+                                            started,
+                                            host.now_ms(),
+                                            e,
+                                        );
+                                    }
+                                }
                             }
                             return LeafOutcome {
                                 report: passed_report(
@@ -536,7 +616,7 @@ fn run_leaf(
                 let slice = (deadline - now).min(WAIT_POLL_SLICE_MS);
                 match host.sleep(Duration::from_millis(slice), cancel) {
                     Err(HostError::Cancelled) => {
-                        return interrupted(path.to_string(), kind, started, host.now_ms())
+                        return interrupted(path.to_string(), kind, started, host.now_ms());
                     }
                     Err(e) => {
                         return failed(
@@ -545,7 +625,7 @@ fn run_leaf(
                             started,
                             host.now_ms(),
                             host_step_error(&e),
-                        )
+                        );
                     }
                     Ok(()) => {}
                 }
@@ -556,7 +636,20 @@ fn run_leaf(
             within_last,
             template,
         } => {
-            // 回看「最近 within_last 行」（0 视为 1：只看最后一行）；不消费 Wait 游标
+            // matcher 模板实例化（同 Wait）；回看「最近 within_last 行」（0 视为 1：
+            // 只看最后一行）；不消费 Wait 游标
+            let matcher = match matcher.instantiate(vars) {
+                Ok(m) => m,
+                Err(e) => {
+                    return failed(
+                        path.to_string(),
+                        kind,
+                        started,
+                        host.now_ms(),
+                        instantiate_step_error(&e),
+                    );
+                }
+            };
             let last = host.last_no();
             let n = (*within_last).max(1);
             let since = last.saturating_sub(n as u64);
@@ -569,7 +662,7 @@ fn run_leaf(
                         started,
                         host.now_ms(),
                         host_step_error(&e),
-                    )
+                    );
                 }
             };
             let mut matched_no = None;

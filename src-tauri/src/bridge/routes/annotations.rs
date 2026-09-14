@@ -105,11 +105,11 @@ pub(crate) async fn annotations_post(
         )
             .into_response();
     }
-    // 行仍在缓冲中时回填 ts/text，AI 只需给 no + note
-    let snap = match ctx.service.snapshot(&id) {
-        Ok(s) => s,
-        Err(_) => return not_found(),
-    };
+    // 行仍在缓冲中时回填 ts/text，AI 只需给 no + note（按行号单行有界读取，
+    // 评审 P1-1：不再全量 snapshot；会话缺失 404，单行缺失保留调用方提供的值）
+    if ctx.service.line_by_no(&id, 1).is_err() {
+        return not_found();
+    }
     let now = now_ms();
     let mut candidates: Vec<BridgeAnnotation> = Vec::with_capacity(body.notes.len());
     for (i, n) in body.notes.into_iter().enumerate() {
@@ -124,7 +124,7 @@ pub(crate) async fn annotations_post(
         if n.no == 0 {
             return (axum::http::StatusCode::BAD_REQUEST, "no must be >= 1").into_response();
         }
-        let (ts, text) = match snap.iter().find(|l| l.no == n.no) {
+        let (ts, text) = match ctx.service.line_by_no(&id, n.no).ok().flatten() {
             Some(l) => (l.ts.clone(), clip_str(&l.text)),
             None => (n.ts, clip_str(&n.text)),
         };

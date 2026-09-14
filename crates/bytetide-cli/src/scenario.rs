@@ -409,6 +409,12 @@ impl Drop for CliHost {
 }
 
 impl ScenarioHost for CliHost {
+    fn on_step_started(&mut self, path: &str, kind: &'static str, current: u64, total: u64) {
+        // runner 显式步骤回调 → live stderr 进度（长场景运行中可见，报告完成后
+        // 另有逐步结果输出）
+        eprintln!("[{current}/{total}] → {kind} {path}");
+    }
+
     fn send(&mut self, mode: SendModeDef, text: &str) -> Result<(), HostError> {
         if self.shared.dead.load(Ordering::Relaxed) {
             return Err(self.shared.dead_error());

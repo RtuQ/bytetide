@@ -11,7 +11,10 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
 
 use super::index::OfflineIndex;
-use super::{classify_line, is_data_line, OfflineError, RawRow, PAGE_LINES};
+use super::{
+    classify_line, is_data_line, parse_ts_ms, strip_eol, Anchor, DayWrap, OfflineError, RawRow,
+    PAGE_LINES,
+};
 use crate::serial::port::LogLine;
 use crate::serial::ring::BridgeLine;
 
@@ -20,9 +23,9 @@ use crate::serial::ring::BridgeLine;
 /// 会话经 `RingBuf::push` 分配的 no 完全一致。
 pub struct OfflineReader {
     path: PathBuf,
-    /// 稀疏索引：anchors[k] = 数据行 no=k*PAGE_LINES+1 的文件字节偏移。
-    /// len = ceil(line_count/PAGE_LINES)（空文件为 0，页读不会用到）。
-    anchors: Vec<u64>,
+    /// 稀疏索引：anchors[k] = 数据行 no=k*PAGE_LINES+1 的字节偏移 + 回卷状态
+    /// 快照。len = ceil(line_count/PAGE_LINES)（空文件为 0，页读不会用到）。
+    anchors: Vec<Anchor>,
     line_count: u64,
     first_epoch: u64,
     last_epoch: u64,
@@ -36,9 +39,12 @@ pub struct OfflineReader {
     /// 清屏水位（对齐 RingBuf::clear：ring 清空、seq 不回退、计数器保留）。
     cleared: bool,
     /// 顺序读游标：cur_next_no=下一个待读数据行 no，cur_off=其字节偏移
-    /// （None=无效，需走锚点回退）。仅是连读加速，任何失效都安全回退。
+    /// （None=无效，需走锚点回退）；回卷快照必须与该字节偏移同步保存。
+    /// 仅是连读加速，任何失效都安全回退。
     cur_next_no: u64,
     cur_off: Option<u64>,
+    cur_day_off: u64,
+    cur_prev_raw: Option<u64>,
 }
 
 impl OfflineReader {
@@ -46,7 +52,7 @@ impl OfflineReader {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         path: PathBuf,
-        anchors: Vec<u64>,
+        anchors: Vec<Anchor>,
         index: OfflineIndex,
         first_ts: String,
         last_ts: String,
@@ -72,6 +78,8 @@ impl OfflineReader {
             cleared: false,
             cur_next_no: 0,
             cur_off: None,
+            cur_day_off: 0,
+            cur_prev_raw: None,
         }
     }
 
@@ -90,21 +98,29 @@ impl OfflineReader {
         }
         let count = ((self.line_count - want_start + 1) as usize).min(max);
         // 定位：顺序游标命中直接续读，否则锚点回退（k*PAGE_LINES+1 ≤ want_start）
-        let (start_no, start_off) = if self.cur_next_no == want_start {
+        let (start_no, start_off, day_off, prev_raw) = if self.cur_next_no == want_start {
             match self.cur_off {
-                Some(off) => (want_start, off),
-                None => anchor_pos(want_start, &self.anchors),
+                Some(off) => {
+                    // 游标连读：文件偏移与回卷状态必须来自同一个页尾快照。
+                    (want_start, off, self.cur_day_off, self.cur_prev_raw)
+                }
+                None => self.anchor_state(want_start),
             }
         } else {
-            anchor_pos(want_start, &self.anchors)
+            self.anchor_state(want_start)
         };
+        // 页内回卷状态机从锚点快照续接：任意页读顺序产出的调整后 epoch
+        // 与索引期顺序扫描逐行一致（评审 P3 跨午夜补偿）
+        let mut wrap = DayWrap::resume(day_off, prev_raw);
         let mut file = std::fs::File::open(&self.path)?;
         file.seek(SeekFrom::Start(start_off))?;
         let mut reader = BufReader::with_capacity(64 * 1024, file);
         let mut buf: Vec<u8> = Vec::with_capacity(256);
         let mut consumed: u64 = 0;
         let mut no = start_no;
-        // 跳扫到首个目标行：非数据行不占号，只有数据行推进 no
+        // 跳扫到首个目标行：非数据行不占号，只有数据行推进 no。跳过的数据行
+        // 也要喂回卷状态机（ts 列廉价探测，不构造行对象）——否则目标行的回卷
+        // 判定丢失锚点行之后的 prev，与索引期顺序扫描结果不一致
         while no < want_start {
             buf.clear();
             let n = reader.read_until(b'\n', &mut buf)?;
@@ -116,6 +132,9 @@ impl OfflineReader {
             }
             consumed += n as u64;
             if is_data_line(&buf) {
+                if let Some((raw_epoch, is_valid)) = peek_epoch(&buf, no - 1) {
+                    wrap.feed(raw_epoch, is_valid);
+                }
                 no += 1;
             }
         }
@@ -129,13 +148,18 @@ impl OfflineReader {
                 break; // 截断：返回已收部分
             }
             consumed += n as u64;
-            if let RawRow::Row(line) = classify_line(&buf, seq) {
+            if let RawRow::Row(mut line) = classify_line(&buf, seq) {
+                // epoch==seq = 行序回退行（ts 非法）：不参与回卷检测，仅叠加偏移
+                let is_valid_ts = line.epoch_millis != seq;
+                let day_off = wrap.feed(line.epoch_millis, is_valid_ts);
+                line.epoch_millis = line.epoch_millis.saturating_add(day_off);
                 out.push(line);
                 seq += 1;
             }
         }
         self.cur_next_no = seq + 1;
         self.cur_off = Some(start_off + consumed);
+        (self.cur_day_off, self.cur_prev_raw) = wrap.snapshot();
         Ok(out)
     }
 
@@ -294,13 +318,39 @@ impl OfflineReader {
         self.cleared = true;
         self.cur_off = None;
         self.cur_next_no = 0;
+        self.cur_day_off = 0;
+        self.cur_prev_raw = None;
     }
 }
 
-/// 锚点回退定位：数据行 want_start 所在块的锚点（k*PAGE_LINES+1 ≤ want_start）。
-fn anchor_pos(want_start: u64, anchors: &[u64]) -> (u64, u64) {
+/// 跳扫行的廉价 epoch 探测：仅取 ts 列（首个 tab 前）解析当日毫秒，不构造
+/// 行对象（跳扫热路径避免 ts/dir/text 三份 String 分配）。返回 (epoch, 是否
+/// 合法 ts)；非数据行返回 None（不参与回卷检测）。
+fn peek_epoch(raw: &[u8], seq: u64) -> Option<(u64, bool)> {
+    let line = strip_eol(raw);
+    if line.is_empty() || line[0] == b'#' {
+        return None;
+    }
+    let first = line.iter().position(|&b| b == b'\t')?;
+    let ts = std::str::from_utf8(&line[..first]).ok()?;
+    match parse_ts_ms(ts) {
+        Some(ms) => Some((ms, true)),
+        None => Some((seq, false)),
+    }
+}
+
+/// 锚点定位：数据行 want_start 所在块的锚点状态（k*PAGE_LINES+1 ≤ want_start）。
+/// 返回 (锚点行 no, 字节偏移, 日期偏移, 前一合法行原始 epoch)。
+fn anchor_state(want_start: u64, anchors: &[Anchor]) -> (u64, u64, u64, Option<u64>) {
     let k = ((want_start - 1) / PAGE_LINES) as usize;
-    (k as u64 * PAGE_LINES + 1, anchors[k])
+    let a = &anchors[k];
+    (k as u64 * PAGE_LINES + 1, a.off, a.day_off, a.prev_raw)
+}
+
+impl OfflineReader {
+    fn anchor_state(&self, want_start: u64) -> (u64, u64, u64, Option<u64>) {
+        anchor_state(want_start, &self.anchors)
+    }
 }
 
 fn to_bridge(no: u64, l: LogLine) -> BridgeLine {
@@ -376,6 +426,29 @@ mod tests {
         // no=4097 起恰是第二个锚点：零跳扫直接落位
         assert_eq!(p[0].text, "line-4096");
         assert_eq!(p[1].text, "line-4097");
+    }
+
+    #[test]
+    fn sequential_page_keeps_midnight_wrap_after_cursor() {
+        let dir = temp_dir("reader-midnight-cursor");
+        let path = dir.join("midnight.log");
+        let mut body = String::new();
+        for i in 0..4_000 {
+            let ts = if i < 2_500 {
+                "23:59:59.000"
+            } else {
+                "00:00:00.000"
+            };
+            body.push_str(&format!("{ts}\tRX\tline-{i}\n"));
+        }
+        std::fs::write(&path, body).unwrap();
+        let (_, mut r) = super::super::open_offline(&path).unwrap();
+
+        let first = r.read_page(0, 3_000).unwrap();
+        assert_eq!(first[2_500].epoch_millis, 86_400_000);
+        let next = r.read_page(3_000, 1).unwrap();
+        assert_eq!(next[0].epoch_millis, 86_400_000);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

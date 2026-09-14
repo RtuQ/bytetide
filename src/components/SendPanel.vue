@@ -11,12 +11,21 @@ const mode = ref<'ascii' | 'hex'>('ascii')
 const appendNewline = ref(true)
 const busy = ref(false)
 
+/** 发送能力统一守卫：仅 live 会话且已连接（评审 P2-2——Replay/Offline 会话
+ *  的状态可能是 connected，但后端拒发，UI 不应让用户执行必然失败的操作） */
+const canSend = computed(
+  () => active.value?.kind === 'live' && active.value.status === 'connected',
+)
+const cannotSendReason = computed(() =>
+  active.value?.kind === 'live' ? '未连接' : '回放/离线会话只读，不支持发送',
+)
+
 /** 功能页签：单发=原发送框；快捷帧/序列/校验为发送区升级新增 */
 const tab = ref<'single' | 'quick' | 'seq' | 'ck'>('single')
 
 async function send() {
   const s = active.value
-  if (!s || busy.value) return
+  if (!s || !canSend.value || busy.value) return
   let payload = text.value
   if (mode.value === 'ascii' && appendNewline.value) payload += '\n'
   busy.value = true
@@ -48,7 +57,7 @@ function startAuto() {
 }
 async function tickAuto() {
   const s = active.value
-  if (!s || s.status !== 'connected') return
+  if (!s || !canSend.value) return
   let p = text.value
   if (mode.value === 'ascii' && appendNewline.value) p += '\n'
   try {
@@ -60,6 +69,14 @@ async function tickAuto() {
 watch([autoEnabled, autoIntervalMs, () => active.value?.id], () => {
   if (autoEnabled.value) startAuto()
   else stopAuto()
+})
+// 会话切到不可发送状态（断开/切到 replay 等）自动关停定时发送——
+// 防止对回放会话以最低 50ms 间隔持续空转调用后端、静默吞错
+watch(canSend, (v) => {
+  if (!v) {
+    autoEnabled.value = false
+    stopAuto()
+  }
 })
 onBeforeUnmount(stopAuto)
 
@@ -105,7 +122,7 @@ function saveCurrentAsPreset() {
 }
 function sendPreset(p: SendPreset) {
   const s = active.value
-  if (!s || s.status !== 'connected') return
+  if (!s || !canSend.value) return
   store.send(s.id, p.payload, p.mode).catch((e: unknown) => alert(String(e)))
 }
 function renamePreset(p: SendPreset) {
@@ -316,7 +333,12 @@ function saveCkPreset() {
           <input class="auto-int" type="number" v-model.number="autoIntervalMs" min="50" step="100" />
           <span class="small muted">ms</span>
           <span class="send-spacer"></span>
-          <button class="btn btn-primary" :disabled="busy || active.status !== 'connected'" @click="send">
+          <button
+            class="btn btn-primary"
+            :disabled="busy || !canSend"
+            :title="canSend ? '发送' : `无法发送：${cannotSendReason}`"
+            @click="send"
+          >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
             <span>发送</span>
           </button>

@@ -34,6 +34,10 @@ struct FakeState {
     lines: Vec<BridgeLine>,
     /// send 时立即追加的 RX 回包文本（no = baseline+1，模拟快响应设备）。
     reply: Option<String>,
+    /// snapshot 调用计数（/lines、/annotations 必须走有界读取面，P1-1 回归）。
+    snapshot_calls: usize,
+    /// lines_after 调用记录 (since, max)：/lines 有界读取断言用。
+    lines_after_calls: Vec<(u64, usize)>,
 }
 
 /// 内存 fake：单会话行表；`notify_*` no-op（路由层测试不关心前端事件）。
@@ -49,6 +53,8 @@ impl FakeService {
                 present: true,
                 lines: vec![mk_line(7, Dir::Rx, "idle")],
                 reply: Some("ACK".into()),
+                snapshot_calls: 0,
+                lines_after_calls: Vec::new(),
             }),
         }
     }
@@ -57,6 +63,34 @@ impl FakeService {
     fn missing() -> Self {
         Self {
             inner: Mutex::new(FakeState::default()),
+        }
+    }
+
+    /// 存在的会话：nos 1..=n，`no % 3 == 0` 的行文本为 noise（过滤用例）。
+    fn populated(n: u64) -> Self {
+        Self::populated_from(1, n)
+    }
+
+    /// 同 populated 但 nos 从 `first` 起（first_no > 1 模拟 ring 头部已淘汰）。
+    fn populated_from(first: u64, n: u64) -> Self {
+        let lines = (first..first + n)
+            .map(|no| {
+                let text = if no % 3 == 0 {
+                    format!("noise-{no}")
+                } else {
+                    format!("hit-{no}")
+                };
+                mk_line(no, Dir::Rx, &text)
+            })
+            .collect();
+        Self {
+            inner: Mutex::new(FakeState {
+                present: true,
+                lines,
+                reply: None,
+                snapshot_calls: 0,
+                lines_after_calls: Vec::new(),
+            }),
         }
     }
 }
@@ -97,20 +131,47 @@ impl BridgeService for FakeService {
     }
 
     fn stats(&self, _id: &str) -> Result<BridgeStats, ServiceError> {
-        Err(ServiceError::NotFound)
+        let g = self.inner.lock().expect("fake mutex");
+        if !g.present {
+            return Err(ServiceError::NotFound);
+        }
+        let (first_no, last_no) = match (g.lines.first(), g.lines.last()) {
+            (Some(f), Some(l)) => (f.no, l.no),
+            _ => (0, 0),
+        };
+        Ok(BridgeStats {
+            rx_lines: 0,
+            tx_lines: 0,
+            rx_bytes: 0,
+            tx_bytes: 0,
+            first_no,
+            last_no,
+            first_ts: String::new(),
+            last_ts: String::new(),
+            first_epoch: 0,
+            last_epoch: 0,
+            ring_cap: RING_CAP,
+            size: g.lines.len(),
+        })
     }
 
+    /// 有界读取计数（评审 P1-1 回归）：/lines、/annotations 不得再调 snapshot。
     fn snapshot(&self, _id: &str) -> Result<Vec<BridgeLine>, ServiceError> {
-        let g = self.inner.lock().expect("fake mutex");
-        if g.present {
-            Ok(g.lines.clone())
+        let mut g = self.inner.lock().expect("fake mutex");
+        g.snapshot_calls += 1;
+        let st = g.present;
+        let lines = g.lines.clone();
+        drop(g);
+        if st {
+            Ok(lines)
         } else {
             Err(ServiceError::NotFound)
         }
     }
 
     fn lines_after(&self, _id: &str, no: u64, max: usize) -> Result<Vec<BridgeLine>, ServiceError> {
-        let g = self.inner.lock().expect("fake mutex");
+        let mut g = self.inner.lock().expect("fake mutex");
+        g.lines_after_calls.push((no, max));
         if !g.present {
             return Err(ServiceError::NotFound);
         }
@@ -120,6 +181,14 @@ impl BridgeService for FakeService {
             .take(max)
             .cloned()
             .collect())
+    }
+
+    fn line_by_no(&self, _id: &str, no: u64) -> Result<Option<BridgeLine>, ServiceError> {
+        let g = self.inner.lock().expect("fake mutex");
+        if !g.present {
+            return Err(ServiceError::NotFound);
+        }
+        Ok(g.lines.iter().find(|l| l.no == no).cloned())
     }
 
     fn last_no(&self, _id: &str) -> Result<u64, ServiceError> {
@@ -389,4 +458,389 @@ fn bridge_view_runtime_error_serializes_camel_case_and_lowercase_state() {
     assert_eq!(json["runtime"]["bound"], serde_json::Value::Null);
     // 配置侧同为 camelCase（顺带锁定信封整体形状）
     assert_eq!(json["config"]["allowSend"], serde_json::json!(false));
+}
+
+// =============================== /lines 有界读取（评审 P1-1） ===============================
+
+/// 无过滤 + limit：offset/limit 直接下推为单次有界页读，绝不 snapshot。
+#[tokio::test]
+async fn lines_limit_pushes_down_and_never_snapshots() {
+    let (app, svc) = app(false, FakeService::populated(10_000));
+    let resp = app
+        .oneshot(get("/sessions/s1/lines?limit=10", Some(TOKEN)))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = body_json(resp).await;
+    // 页 = 首 10 行；total/truncated 与原全量物化口径一致
+    let nos: Vec<u64> = v["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["no"].as_u64().unwrap())
+        .collect();
+    assert_eq!(nos, (1..=10).collect::<Vec<_>>());
+    assert_eq!(v["total"], serde_json::json!(10_000));
+    assert_eq!(v["truncated"], serde_json::json!(true));
+    assert_eq!(v["firstNo"], serde_json::json!(1));
+    assert_eq!(v["lastNo"], serde_json::json!(10_000));
+    assert_eq!(v["size"], serde_json::json!(10_000));
+    // 有界性：0 次 snapshot；一次 max=10 的 lines_after（百万行文件同样有界）
+    let g = svc.inner.lock().expect("fake mutex");
+    assert_eq!(g.snapshot_calls, 0, "无过滤 /lines 不得 snapshot");
+    assert_eq!(g.lines_after_calls, vec![(0, 10)]);
+}
+
+/// 无过滤 + offset/limit：分页起点按下推游标落位。
+#[tokio::test]
+async fn lines_offset_limit_pushes_down() {
+    let (app, svc) = app(false, FakeService::populated(10_000));
+    let resp = app
+        .oneshot(get("/sessions/s1/lines?offset=9990&limit=20", Some(TOKEN)))
+        .await
+        .expect("oneshot");
+    let v = body_json(resp).await;
+    let nos: Vec<u64> = v["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["no"].as_u64().unwrap())
+        .collect();
+    assert_eq!(nos, (9991..=10_000).collect::<Vec<_>>());
+    assert_eq!(v["total"], serde_json::json!(10_000));
+    assert_eq!(v["truncated"], serde_json::json!(false));
+    let g = svc.inner.lock().expect("fake mutex");
+    assert_eq!(g.snapshot_calls, 0);
+}
+
+/// 有过滤：固定页大小流式扫描，只保留命中窗口，绝不 snapshot。
+#[tokio::test]
+async fn lines_filtered_streams_without_snapshot() {
+    let (app, svc) = app(false, FakeService::populated(10_000));
+    let resp = app
+        .oneshot(get("/sessions/s1/lines?re=hit&limit=3", Some(TOKEN)))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = body_json(resp).await;
+    let lines = v["lines"].as_array().unwrap();
+    assert_eq!(lines.len(), 3);
+    let nos: Vec<u64> = lines.iter().map(|l| l["no"].as_u64().unwrap()).collect();
+    assert_eq!(nos, vec![1, 2, 4]);
+    // total = 全部命中数（nos 1..=10000 中非 3 的倍数）
+    assert_eq!(v["total"], serde_json::json!(10_000 - 10_000 / 3));
+    let g = svc.inner.lock().expect("fake mutex");
+    assert_eq!(g.snapshot_calls, 0, "有过滤 /lines 不得 snapshot");
+    // 流式页读有界：单次 max ≤ 1000（SCAN_PAGE）；10 页扫完 + 1 次拉空确认
+    assert!(g.lines_after_calls.iter().all(|(_, max)| *max <= 1000));
+    assert_eq!(g.lines_after_calls.len(), 11);
+}
+
+/// 选择模式（last/no/around/since）在无过滤下全部有界。
+#[tokio::test]
+async fn lines_selection_modes_stay_bounded() {
+    let (app, svc) = app(false, FakeService::populated(10_000));
+    // last=5 → 最新 5 行
+    let v = body_json(
+        app.clone()
+            .oneshot(get("/sessions/s1/lines?last=5", Some(TOKEN)))
+            .await
+            .expect("oneshot"),
+    )
+    .await;
+    let nos: Vec<u64> = v["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["no"].as_u64().unwrap())
+        .collect();
+    assert_eq!(nos, (9996..=10_000).collect::<Vec<_>>());
+    assert_eq!(v["total"], serde_json::json!(5));
+    // no=42 → 单行
+    let v = body_json(
+        app.clone()
+            .oneshot(get("/sessions/s1/lines?no=42", Some(TOKEN)))
+            .await
+            .expect("oneshot"),
+    )
+    .await;
+    assert_eq!(v["lines"][0]["no"], serde_json::json!(42));
+    assert_eq!(v["total"], serde_json::json!(1));
+    // around=50&span=2 → 48..=52
+    let v = body_json(
+        app.clone()
+            .oneshot(get("/sessions/s1/lines?around=50&span=2", Some(TOKEN)))
+            .await
+            .expect("oneshot"),
+    )
+    .await;
+    let nos: Vec<u64> = v["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["no"].as_u64().unwrap())
+        .collect();
+    assert_eq!(nos, (48..=52).collect::<Vec<_>>());
+    assert_eq!(v["total"], serde_json::json!(5));
+    // since_no=9998 → 9999、10000
+    let v = body_json(
+        app.oneshot(get("/sessions/s1/lines?sinceNo=9998", Some(TOKEN)))
+            .await
+            .expect("oneshot"),
+    )
+    .await;
+    let nos: Vec<u64> = v["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["no"].as_u64().unwrap())
+        .collect();
+    assert_eq!(nos, vec![9999, 10_000]);
+    let g = svc.inner.lock().expect("fake mutex");
+    assert_eq!(g.snapshot_calls, 0);
+}
+
+/// `last=N` 先形成最后 N 行的选择集，再在该选择集内应用 offset/limit。
+#[tokio::test]
+async fn lines_last_paginates_inside_selected_tail() {
+    let (app, _svc) = app(false, FakeService::populated(10_000));
+    let resp = app
+        .oneshot(get(
+            "/sessions/s1/lines?last=100&offset=20&limit=10",
+            Some(TOKEN),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = body_json(resp).await;
+    let nos: Vec<u64> = v["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["no"].as_u64().unwrap())
+        .collect();
+    assert_eq!(nos, (9_921..=9_930).collect::<Vec<_>>());
+    assert_eq!(v["total"], serde_json::json!(100));
+    assert_eq!(v["truncated"], serde_json::json!(true));
+}
+
+/// 过滤后的 `last=N` 同样先取最后 N 个命中，再在其中分页。
+#[tokio::test]
+async fn lines_filtered_last_paginates_inside_selected_matches() {
+    let (app, _svc) = app(false, FakeService::populated(30));
+    let resp = app
+        .oneshot(get(
+            "/sessions/s1/lines?re=hit&last=10&offset=2&limit=3",
+            Some(TOKEN),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = body_json(resp).await;
+    let nos: Vec<u64> = v["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["no"].as_u64().unwrap())
+        .collect();
+    // 全部命中为非 3 倍数；最后 10 个是 16,17,19,20,22,23,25,26,28,29。
+    assert_eq!(nos, vec![19, 20, 22]);
+    assert_eq!(v["total"], serde_json::json!(10));
+    assert_eq!(v["truncated"], serde_json::json!(true));
+}
+
+/// 单行选择也遵守统一分页：offset 越过选择集时页为空但 total 保持 1。
+#[tokio::test]
+async fn lines_no_offset_returns_empty_page_with_selection_total() {
+    let (app, _svc) = app(false, FakeService::populated(100));
+    let resp = app
+        .oneshot(get(
+            "/sessions/s1/lines?no=42&offset=1&limit=10",
+            Some(TOKEN),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = body_json(resp).await;
+    assert_eq!(v["lines"], serde_json::json!([]));
+    assert_eq!(v["total"], serde_json::json!(1));
+    assert_eq!(v["truncated"], serde_json::json!(false));
+}
+
+/// offset 越过范围选择集只清空当前页，不改变 total。
+#[tokio::test]
+async fn lines_range_offset_past_end_preserves_total() {
+    let (app, _svc) = app(false, FakeService::populated(100));
+    let resp = app
+        .oneshot(get(
+            "/sessions/s1/lines?from=10&to=12&offset=9&limit=10",
+            Some(TOKEN),
+        ))
+        .await
+        .expect("oneshot");
+    let v = body_json(resp).await;
+    assert_eq!(v["lines"], serde_json::json!([]));
+    assert_eq!(v["total"], serde_json::json!(3));
+    assert_eq!(v["truncated"], serde_json::json!(false));
+}
+
+/// live ring 已淘汰头部时，around 窗口必须以实际 firstNo 为下界。
+#[tokio::test]
+async fn lines_around_clamps_to_evicted_ring_head() {
+    let svc = FakeService {
+        inner: Mutex::new(FakeState {
+            present: true,
+            lines: (1_000..=1_010)
+                .map(|no| mk_line(no, Dir::Rx, &format!("line-{no}")))
+                .collect(),
+            ..FakeState::default()
+        }),
+    };
+    let (app, _svc) = app(false, svc);
+    let resp = app
+        .oneshot(get(
+            "/sessions/s1/lines?around=1005&span=10&limit=100",
+            Some(TOKEN),
+        ))
+        .await
+        .expect("oneshot");
+    let v = body_json(resp).await;
+    assert_eq!(v["lines"][0]["no"], serde_json::json!(1_000));
+    assert_eq!(v["lines"][10]["no"], serde_json::json!(1_010));
+    assert_eq!(v["total"], serde_json::json!(11));
+}
+
+/// 批注回填按行号单行读取（line_by_no），不再 snapshot。
+#[tokio::test]
+async fn annotations_backfill_uses_line_by_no() {
+    let (app, svc) = app(false, FakeService::populated(100));
+    let resp = app
+        .oneshot(post_json(
+            "/sessions/s1/annotations",
+            r#"{"notes":[{"no":7,"note":"check"}]}"#,
+            Some(TOKEN),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = body_json(resp).await;
+    assert_eq!(v["added"], serde_json::json!(1));
+    let note = &v["annotations"][0];
+    assert_eq!(note["no"], serde_json::json!(7));
+    // ts/text 由后端按行号回填
+    assert_eq!(note["text"], serde_json::json!("hit-7"));
+    assert_eq!(note["ts"], serde_json::json!("00:00:00.000"));
+    let g = svc.inner.lock().expect("fake mutex");
+    assert_eq!(g.snapshot_calls, 0, "批注回填不得 snapshot");
+}
+
+/// 复审 R-P1-1：选择集分页契约——「先选集、后分页」。
+/// last=100&offset=20&limit=10 → 最新 100 行的第 21–30 行（9921..9930），
+/// 而非全局末尾窗口。无过滤路径对照。
+#[tokio::test]
+async fn lines_last_offset_paginates_within_selection() {
+    let (app, svc) = app(false, FakeService::populated(10_000));
+    let v = body_json(
+        app.oneshot(get(
+            "/sessions/s1/lines?last=100&offset=20&limit=10",
+            Some(TOKEN),
+        ))
+        .await
+        .expect("oneshot"),
+    )
+    .await;
+    let nos: Vec<u64> = v["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["no"].as_u64().unwrap())
+        .collect();
+    assert_eq!(nos, (9921..=9930).collect::<Vec<_>>());
+    assert_eq!(v["total"], serde_json::json!(100));
+    assert_eq!(v["truncated"], serde_json::json!(true));
+    let g = svc.inner.lock().expect("fake mutex");
+    assert_eq!(g.snapshot_calls, 0);
+    // 有界：单次页读恰好 max=10
+    assert_eq!(g.lines_after_calls, vec![(9920, 10)]);
+}
+
+/// 复审 R-P1-1：`no=X&offset>0` 空页但 total 保留；offset 越过选择集末尾
+/// 同样空页保 total（不得重置为 0）。
+#[tokio::test]
+async fn lines_offset_beyond_selection_keeps_total() {
+    let (app, _svc) = app(false, FakeService::populated(10_000));
+    // no=42&offset=1 → 选择集 1 行，offset=1 页为空
+    let v = body_json(
+        app.clone()
+            .oneshot(get("/sessions/s1/lines?no=42&offset=1", Some(TOKEN)))
+            .await
+            .expect("oneshot"),
+    )
+    .await;
+    assert_eq!(v["lines"].as_array().unwrap().len(), 0);
+    assert_eq!(v["total"], serde_json::json!(1));
+    assert_eq!(v["truncated"], serde_json::json!(false));
+    // sinceNo=9998&offset=5 → 选择集 2 行（9999、10000），页空
+    let v = body_json(
+        app.oneshot(get("/sessions/s1/lines?sinceNo=9998&offset=5", Some(TOKEN)))
+            .await
+            .expect("oneshot"),
+    )
+    .await;
+    assert_eq!(v["lines"].as_array().unwrap().len(), 0);
+    assert_eq!(v["total"], serde_json::json!(2));
+    assert_eq!(v["truncated"], serde_json::json!(false));
+}
+
+/// 复审 R-P1-1：around 窗口下界钳到 first_no（ring 头部已淘汰时不高估 total）。
+#[tokio::test]
+async fn lines_around_window_clamps_to_first_no() {
+    // nos 900..999（first_no=900）：around=905&span=10 → 窗口 [895,915] ∩
+    // [900,999] = 900..=915，total=16（未钳制会错误地按 21 计）
+    let (app, svc) = app(false, FakeService::populated_from(900, 100));
+    let v = body_json(
+        app.oneshot(get("/sessions/s1/lines?around=905&span=10", Some(TOKEN)))
+            .await
+            .expect("oneshot"),
+    )
+    .await;
+    let nos: Vec<u64> = v["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["no"].as_u64().unwrap())
+        .collect();
+    assert_eq!(nos, (900..=915).collect::<Vec<_>>());
+    assert_eq!(v["total"], serde_json::json!(16));
+    let g = svc.inner.lock().expect("fake mutex");
+    assert_eq!(g.snapshot_calls, 0);
+}
+
+/// 复审 R-P1-1：过滤路径同契约——re 命中子集的 last+offset 在选择集内分页。
+#[tokio::test]
+async fn lines_filtered_last_offset_paginates_within_selection() {
+    let (app, svc) = app(false, FakeService::populated(10_000));
+    let v = body_json(
+        app.oneshot(get(
+            "/sessions/s1/lines?re=hit&last=100&offset=20&limit=10",
+            Some(TOKEN),
+        ))
+        .await
+        .expect("oneshot"),
+    )
+    .await;
+    let nos: Vec<u64> = v["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["no"].as_u64().unwrap())
+        .collect();
+    // 选择集 = 最新 100 个 hit（no 非 3 倍数），页 = 其第 21–30 个
+    let hits: Vec<u64> = (1..=10_000).filter(|i| i % 3 != 0).collect();
+    let sel_first = hits.len() - 100;
+    let expected: Vec<u64> = hits[sel_first + 20..sel_first + 30].to_vec();
+    assert_eq!(nos, expected);
+    assert_eq!(v["total"], serde_json::json!(100));
+    let g = svc.inner.lock().expect("fake mutex");
+    assert_eq!(g.snapshot_calls, 0);
 }

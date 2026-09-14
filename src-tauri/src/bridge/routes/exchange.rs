@@ -113,7 +113,7 @@ fn compile_exchange_match(
             return Err(ApiError::bad_request(
                 "invalid_direction",
                 format!("dir must be rx|tx, got {other:?}"),
-            ))
+            ));
         }
     };
     let (re_src, hex_src, mask_src) = (
@@ -638,6 +638,15 @@ mod tests {
                 .take(max)
                 .cloned()
                 .collect())
+        }
+        fn line_by_no(&self, _id: &str, no: u64) -> Result<Option<BridgeLine>, ServiceError> {
+            Ok(self
+                .lines
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|l| l.no == no)
+                .cloned())
         }
         fn last_no(&self, _id: &str) -> Result<u64, ServiceError> {
             Ok(self.lines.lock().unwrap().last().map(|l| l.no).unwrap_or(0))

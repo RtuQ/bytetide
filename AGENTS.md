@@ -188,10 +188,31 @@ body 用 `.panel-body`；需限高滚动的用 `.kw-body` / `.ar-body`（已带 
 - **重连**：`store.reconnectSession(id)` —— 用原配置重连，后端生成新 id，前端把日志/搜索/关键词/自动回复/历史迁移过去
 - **关闭**：`store.closeTab(id)` —— 断开并删除标签页（彻底丢弃）
 
+**两阶段关闭（丢尾批修复）**：`PortManager::disconnect` 移除句柄后把只读 ring 副本
+留入 `dead_rings` 墓碑（FIFO cap 4）；前端 `drainSessionTail`（useTauriEvents）以
+**可等待交接**收尾——先置 `tailPending` 让常规拉取让路，await 在途拉取的真实完成
+promise（`draining` Map 存 promise，勿回退成固定超时/裸 Set），再独占执行最终拉空；
+stopSession 必须等它 resolve 后才调 `release_session_cmd`（`PortManager::release_dead`）
+释放墓碑。只有 `ring_lines_after_no` 路由到墓碑；`closeTab` 不补拉直接 release。
+
 LogView 工具栏的按钮按 `active.status` 切换：`connected/connecting` → 红色“停止”；`disconnected/error` → 蓝色“重连”。
 **不要再让“断开”等于“关闭”**——这是用户明确反对的旧行为。
 
 标签页状态点（`.tab .dot`）用 CSS 颜色驱动：`disconnected` 灰 / `connecting` 琥珀脉冲 / `connected` 绿发光 / `error` 红。
+
+### 场景自动化契约（Stage 3 评审后收紧）
+- **变量可达性严格按首轮迭代顺序**（直线块与 Repeat 体一致）：引用必须来自初始
+  `variables` 或更早步骤的 `Wait.save`；「循环体先引用后保存」预检即报
+  `undefined_variable`，跨迭代携带须初始预声明。下界：`wait.timeoutMs ≥ 1`、
+  `repeat.times ≥ 1`（新码 `wait_too_short`/`repeat_too_few`）。
+- **matcher 模式参与变量替换**（设计契约恢复）：无引用的 matcher validate 期预编译
+  （`ValidatedStep` 持 `MatcherTemplate::Static`）；含 `${name}` 的保留
+  `Dynamic` 模板，运行期替换后编译（失败沿用 `invalid_regex` 等稳定码），
+  save.group 越界推迟到运行期报 `capture_group_invalid`。
+- **进度 = runner 显式回调**：`ScenarioHost::on_step_started(path, kind, current,
+  total)` 每叶子步恰一次（path 含迭代后缀）；桌面 `RunnerHost` 转
+  `scenario-progress` 事件（payload 含 path），CLI 输出 stderr 进度。勿回退到
+  按 host 调用签名推测的启发式（连续 Wait/短 Delay 会漏报）。
 
 ---
 

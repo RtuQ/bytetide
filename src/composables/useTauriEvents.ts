@@ -39,8 +39,12 @@ const PULL_MAX_PAGES = 24
 /** 上滑回补单页行数：比正向拉取小，保证滚动响应即时（可连续触发多页） */
 const BACKFILL_PAGE_MAX = 2000
 
-/** 正在拉取的会话集合（防同会话并发 drain 导致游标回退覆盖） */
-const draining = new Set<string>()
+/** 在途拉取表（会话 id → 完成 promise）：防同会话并发 drain 导致游标回退覆盖，
+ *  且值可等待——最终补拉以此做所有权交接，不用固定等待时间猜在途何时结束 */
+const draining = new Map<string, Promise<void>>()
+/** 最终补拉挂起中的会话：常规拉取见之让路，保证 stopSession 的 release 只会
+ *  发生在最终拉空真正完成之后 */
+const tailPending = new Set<string>()
 /** 正在往前翻页回补的会话集合（防同会话并发回补重复插入同一批行） */
 const backfilling = new Set<string>()
 
@@ -103,80 +107,138 @@ export async function requestBackfill(sessionId: string): Promise<void> {
   }
 }
 
-async function drainSession(sessionId: string): Promise<void> {
-  if (draining.has(sessionId)) return
-  draining.add(sessionId)
-  try {
-    const store = useSessionStore()
-    for (let page = 0; page < PULL_MAX_PAGES; page++) {
-      const s = store.sessions[sessionId]
-      // 会话没了/非拉模型会话（offline 初始装载后静态）就停。
-      // live：断开后端句柄已移除，停在 connected/connecting 之外；
-      // replay：后端会话常驻（Finished/Stopped 后仍可查询），只有控制面定格
-      // stopped（用户停止/断开）或会话移除才停——EOF 事件后的最后一波仍要拉齐
-      if (!s || !isPullSession(s)) return
-      if (s.kind === 'live' && s.status !== 'connected' && s.status !== 'connecting') return
-      if (s.kind === 'replay' && s.replay?.state === 'stopped') return
-      let pulled: PulledLine[]
-      try {
-        pulled = await commands.ringLinesAfter(sessionId, s.pullNo, PULL_PAGE_MAX)
-      } catch {
-        return // 无后端（浏览器冒烟）或会话已断开，静默
-      }
-      if (pulled.length === 0) return
-      const t0 = performance.now()
-      const fresh = store.appendPulled(
-        sessionId,
-        pulled.map((l) => ({
-          ts: l.ts,
-          dir: l.dir,
-          text: l.text,
-          bytes: l.bytes,
-          epochMillis: l.epochMillis,
-          ringNo: l.no,
-        })),
-      )
-      if (fresh.length === 0) return // 游标已到最新
-      store.tallyBytes(sessionId, fresh)
-      // 性能哨兵：滞后=墙钟−最新行后端时间戳，批耗时=本处理段。
-      // replay 跳过——行时间戳是源文件历史时刻，滞后恒为巨值（假阳性）；
-      // 取证探针同理（seg 探针的 lagMs 同口径）
-      if (s.kind !== 'replay') {
-        recordBatch(sessionId, fresh, performance.now() - t0)
-      }
-      // 解析引擎 feed（未启用脚本时 no-op）：切帧在主线程线性批处理
-      feedParser(sessionId, fresh)
-      // 取证探针（seg/raf，仅 DEV 构建；release 由 Vite tree-shake 移除）
-      const handlerMs = performance.now() - t0
-      if (import.meta.env.DEV && handlerMs > 5 && s.kind !== 'replay') {
-        const s2 = store.sessions[sessionId]
+async function pullUntilEmpty(sessionId: string, ignoreStatus: boolean): Promise<void> {
+  const store = useSessionStore()
+  for (let page = 0; page < PULL_MAX_PAGES; page++) {
+    const s = store.sessions[sessionId]
+    // 会话没了/非拉模型会话（offline 初始装载后静态）就停。
+    // live：断开后端句柄已移除，停在 connected/connecting 之外；
+    // replay：后端会话常驻（Finished/Stopped 后仍可查询），只有控制面定格
+    // stopped（用户停止/断开）或会话移除才停——EOF 事件后的最后一波仍要拉齐。
+    // ignoreStatus（最终补拉）跳过状态守卫：停止/断开正是要拉这最后一批
+    if (!s || !isPullSession(s)) return
+    if (
+      !ignoreStatus &&
+      ((s.kind === 'live' && s.status !== 'connected' && s.status !== 'connecting') ||
+        (s.kind === 'replay' && s.replay?.state === 'stopped'))
+    )
+      return
+    let pulled: PulledLine[]
+    try {
+      pulled = await commands.ringLinesAfter(sessionId, s.pullNo, PULL_PAGE_MAX)
+    } catch {
+      return // 无后端（浏览器冒烟）或会话已断开，静默
+    }
+    if (pulled.length === 0) return
+    const t0 = performance.now()
+    const fresh = store.appendPulled(
+      sessionId,
+      pulled.map((l) => ({
+        ts: l.ts,
+        dir: l.dir,
+        text: l.text,
+        bytes: l.bytes,
+        epochMillis: l.epochMillis,
+        ringNo: l.no,
+      })),
+    )
+    if (fresh.length === 0) return // 游标已到最新
+    store.tallyBytes(sessionId, fresh)
+    // 性能哨兵：滞后=墙钟−最新行后端时间戳，批耗时=本处理段。
+    // replay 跳过——行时间戳是源文件历史时刻，滞后恒为巨值（假阳性）；
+    // 取证探针同理（seg 探针的 lagMs 同口径）
+    if (s.kind !== 'replay') {
+      recordBatch(sessionId, fresh, performance.now() - t0)
+    }
+    // 解析引擎 feed（未启用脚本时 no-op）：切帧在主线程线性批处理
+    feedParser(sessionId, fresh)
+    // 取证探针（seg/raf，仅 DEV 构建；release 由 Vite tree-shake 移除）
+    const handlerMs = performance.now() - t0
+    if (import.meta.env.DEV && handlerMs > 5 && s.kind !== 'replay') {
+      const s2 = store.sessions[sessionId]
+      void commands
+        .appendPerfDiagnostic({
+          kind: 'seg',
+          sessionId,
+          lagMs: Math.min(Date.now() - fresh[fresh.length - 1]!.epochMillis, 4_000_000),
+          batchMs: Math.round(handlerMs * 10) / 10,
+          lines: s2?.lines.length ?? 0,
+          vis: `a=${fresh.length},pg=${page + 1}`,
+        })
+        .catch(() => {})
+      requestAnimationFrame(() => {
         void commands
           .appendPerfDiagnostic({
-            kind: 'seg',
+            kind: 'raf',
             sessionId,
-            lagMs: Math.min(Date.now() - fresh[fresh.length - 1]!.epochMillis, 4_000_000),
-            batchMs: Math.round(handlerMs * 10) / 10,
+            lagMs: Math.round(performance.now() - t0),
+            batchMs: 0,
             lines: s2?.lines.length ?? 0,
-            vis: `a=${fresh.length},pg=${page + 1}`,
+            vis: '',
           })
           .catch(() => {})
-        requestAnimationFrame(() => {
-          void commands
-            .appendPerfDiagnostic({
-              kind: 'raf',
-              sessionId,
-              lagMs: Math.round(performance.now() - t0),
-              batchMs: 0,
-              lines: s2?.lines.length ?? 0,
-              vis: '',
-            })
-            .catch(() => {})
-        })
-      }
-      if (pulled.length < PULL_PAGE_MAX) return // 拉空，已到最新
+      })
     }
+    if (pulled.length < PULL_PAGE_MAX) return // 拉空，已到最新
+  }
+}
+
+/** 独占启动一次拉取：check+set 之间无 await（单线程 JS 原子），完成 promise
+ *  登记在 draining 供最终补拉等待/交接 */
+function beginDrain(sessionId: string, ignoreStatus: boolean): Promise<void> | null {
+  if (draining.has(sessionId)) return null
+  const p = pullUntilEmpty(sessionId, ignoreStatus)
+  const tracked = p.finally(() => {
+    if (draining.get(sessionId) === tracked) draining.delete(sessionId)
+  })
+  draining.set(sessionId, tracked)
+  return tracked
+}
+
+/** 常规拉取（200ms tick）：在途或最终补拉挂起时合流跳过。
+ *  具名导出仅供测试构造「在途拉取」场景——生产入口只有拉取循环 */
+export function drainSession(sessionId: string): void {
+  if (tailPending.has(sessionId)) return
+  beginDrain(sessionId, false)
+}
+
+/** 测试探针（勿在生产代码消费）：会话的拉取互斥状态快照 */
+export function drainStateForTest(sessionId: string): {
+  draining: boolean
+  tailPending: boolean
+} {
+  return { draining: draining.has(sessionId), tailPending: tailPending.has(sessionId) }
+}
+
+/**
+ * 最终补拉（评审 P1-2「停止丢尾批」修复）：停止/断开瞬间，最近一个拉取周期
+ * （渲染进程被系统节流时远不止 200ms）内已进入后端 ring、尚未入表的行由这里
+ * 收尾——无视连接状态守卫拉空游标。live 停止后端留有只读墓碑 ring（两阶段
+ * 关闭第 1 阶段），设备断连时 ring 本就在；调用方随后 releaseSession 释放
+ * （第 2 阶段）。
+ *
+ * 所有权交接（复审 R-P1-2）：先置 tailPending 让常规拉取让路，再 **await 在途
+ * 拉取的真实完成 promise**（不用固定等待时间猜），等干净后经同步 check+set
+ * 独占执行最终拉空。stopSession 必须等本函数 resolve 后才 release——释放只会
+ * 发生在最终拉空真正完成之后。并发重入（stopSession 与事件侧双路）经
+ * tailPending 合流。
+ */
+export async function drainSessionTail(sessionId: string): Promise<void> {
+  if (tailPending.has(sessionId)) return
+  tailPending.add(sessionId)
+  try {
+    // 依次等待在途拉取真正结束（tailPending 已就位，不会再有新的常规拉取）。
+    // last 哨兵防微任务时序下对同一 promise 重复等待
+    let last: Promise<void> | undefined
+    for (;;) {
+      const inflight = draining.get(sessionId)
+      if (!inflight || inflight === last) break
+      last = inflight
+      await inflight.catch(() => {})
+    }
+    await beginDrain(sessionId, true)
   } finally {
-    draining.delete(sessionId)
+    tailPending.delete(sessionId)
   }
 }
 
@@ -194,18 +256,18 @@ export async function setupEvents(): Promise<Unlisten[]> {
 
   // 会话状态：live 的连接/断开 toast 提示；replay 的状态事件不打连接 toast
   //（起跑 connected / EOF·停止 disconnected 对回放语义是「回放中/已播完」，
-  // 用 ReplayControls 的状态标签表达），断开时仍补最后一波拉取
+  // 用 ReplayControls 的状态标签表达），断开时最终补拉收尾（丢尾批修复）
   unlistens.push(
     await onSessionStatus((p) => {
       store.setStatus(p.sessionId, p.status)
       const session = store.sessions[p.sessionId]
       if (session?.kind === 'replay') {
-        if (p.status === 'disconnected') void drainSession(p.sessionId)
+        if (p.status === 'disconnected') void drainSessionTail(p.sessionId)
         return
       }
       if (p.status === 'connected') toast('连接成功', 'success', 2600, session?.config.name)
       if (p.status === 'disconnected') toast('连接已断开', 'info', 2600, session?.config.name)
-      if (p.status === 'disconnected') void drainSession(p.sessionId)
+      if (p.status === 'disconnected') void drainSessionTail(p.sessionId)
     }),
   )
   unlistens.push(

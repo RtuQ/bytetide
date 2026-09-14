@@ -78,6 +78,8 @@ impl ReplayClock for WallClock {
 
 /// 启动回放线程（生产装配入口）：立即置 Running 并上报 connected；
 /// 控制通道关闭或 Stop 命令前线程常驻（Finished 后驻留等待 SeekLine 复活）。
+/// 线程资源耗尽等 spawn 失败返回 `io::Error`（与实时连接 `connect` 同策略，
+/// 不 panic——调用方转 `anyhow::Result` 报给 UI）。
 pub fn spawn_replay(
     reader: OfflineReader,
     runtime: Arc<SessionRuntime>,
@@ -85,7 +87,7 @@ pub fn spawn_replay(
     commands: Receiver<ReplayCmd>,
     sink: Arc<dyn EventSink>,
     session_id: String,
-) -> JoinHandle<()> {
+) -> std::io::Result<JoinHandle<()>> {
     std::thread::Builder::new()
         .name(format!("replay-{session_id}"))
         .spawn(move || {
@@ -96,7 +98,6 @@ pub fn spawn_replay(
                 reader, runtime, config, commands, &*sink, session_id, &clock,
             );
         })
-        .expect("spawn replay thread failed")
 }
 
 /// 回放主循环（测试经同一实现注入虚拟时钟）。
@@ -509,8 +510,11 @@ mod tests {
             self.gate_after.store(after, Ordering::Relaxed);
         }
 
-        /// 放行（阻塞中的睡眠立即返回并记账）。
+        /// 放行（阻塞中的睡眠立即返回并记账）。须持 gate_mu 再 store+notify：
+        /// 无锁 notify 会与 sleep_ms 的「检查 gate_after → 进入 wait」窗口竞争
+        /// 丢失唤醒（检查在锁内、通知在锁外 ⇒ 通知可落在检查后、等待前）。
         fn release(&self) {
+            let _g = self.gate_mu.lock().unwrap();
             self.gate_after.store(0, Ordering::Relaxed);
             self.gate_cv.notify_all();
         }
@@ -924,6 +928,23 @@ mod tests {
         run.send(ReplayCmd::Stop);
         run.join();
         assert!(run.state_is(ReplayState::Stopped));
+    }
+
+    #[test]
+    fn midnight_wrap_gap_is_preserved() {
+        // 评审 P3：23:59:59.000 → 23:59:59.500 → 00:00:00.500——跨午夜边界的
+        // 原始间隔（500 + 1000）在回放中完整保留（离线 reader 的回卷补偿使
+        // 内部 epoch 单调）；显示 ts 仍为原当日时刻
+        let mut run = TestRun::new(
+            cfg(1.0, false, DEFAULT_MAX_GAP_MS),
+            &[86_399_000, 86_399_500, 500],
+        );
+        wait_until(2_000, || run.state_is(ReplayState::Finished));
+        assert_eq!(run.clock.total_sleep(), 1_500);
+        let snap = run.ring();
+        assert_eq!(snap[2].ts, "00:00:00.500");
+        assert_eq!(snap[2].epoch_millis, 86_400_500);
+        run.join();
     }
 
     #[test]

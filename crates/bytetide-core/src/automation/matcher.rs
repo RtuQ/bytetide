@@ -11,8 +11,10 @@
 //! - `$$` 原样保留（不支持转义）；`$` 后跟非 `{` 原样保留；
 //! - `${` 无闭合 `}` 或内容非合法变量名 → 整段按字面量保留（不算引用、不校验不替换）。
 //!
-//! 仅 `Send.text` 与 `Assert.message` 参与替换与引用检查；matcher 模式
-//! （literal/regex/hex/mask）不做替换——保证能字面匹配含 `${` 的设备输出。
+//! 设计契约：`Send.text`、`Assert.message` 与 matcher 模式（literal/regex/hex/mask
+//! 的 pattern 字段）均参与替换——含引用的 matcher 由校验层保留模板、运行期替换后
+//! 编译（见 `automation::model::MatcherTemplate`）；无引用的 matcher 不经替换，
+//! 仍可字面匹配含 `${` 的设备输出。
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -324,7 +326,7 @@ pub fn substitute(input: &str, vars: &BTreeMap<String, String>) -> Result<String
             None => {
                 return Err(VariableError {
                     variable: name.to_string(),
-                })
+                });
             }
         }
         last = span.end;
