@@ -15,11 +15,16 @@ impl SessionLog {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        // 用 write 权限打开并 seek 到末尾，而非 append 标志——Windows 的
+        // 用读写权限打开并 seek 到末尾，而非 append 标志——Windows 的
         // append 句柄只有 FILE_APPEND_DATA 权限，set_len（清屏截断）会
         // Access Denied（macOS/Linux 的 O_APPEND 无此限制）；write+seek
         // 保留「打开即续写」语义且截断可用。
-        let mut file = OpenOptions::new().create(true).write(true).open(path)?;
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)?;
         file.seek(SeekFrom::End(0))?;
         Ok(Self {
             writer: BufWriter::new(file),
