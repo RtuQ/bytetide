@@ -8,6 +8,7 @@ import type {
   LogLine,
   PlotConfig,
   PortConfig,
+  ReplayState,
   SearchState,
   SessionKind,
   SessionStatus,
@@ -22,6 +23,16 @@ import type { DecodedFrame } from '../../types/parser'
 
 /** 中心区视图模式：log=仅日志；split=日志+图表同屏；plot=仅图表 */
 export type CenterView = 'log' | 'split' | 'plot'
+
+/** 回放会话控制面（replay 会话专属，live/offline 恒 null）：细粒度状态 + 当前
+ *  speed/looped 镜像 + 源文件行号水位（ReplayView 落账，replay-state 事件与
+ *  replayStatus 轮询共用一写入点） */
+export interface ReplayRuntime {
+  state: ReplayState
+  speed: number
+  looped: boolean
+  line: number
+}
 
 export interface Session {
   id: string
@@ -93,9 +104,13 @@ export interface Session {
   rxLines: number
   txLines: number
   jump: { no: number; token: number } | null
+  /** 回放控制面（仅 kind='replay'）：状态/倍速/循环/当前行水位（runtime 策略：
+   *  重连回落 null——回放会话不可重连；清屏不动——控制面与日志行数据无关） */
+  replay: ReplayRuntime | null
   /** 离线源文件元信息（Task 8 流式打开写入）：数据行数与首/末行 epoch 毫秒。
-   *  live 会话恒 0；描述源文件本身（清屏/重连均不抹）。现状无 UI 消费者
-   *  （旧全量链路 parseLogFile 的 total 直接丢弃），预留给状态栏/对比视图 */
+   *  live 会话恒 0；描述源文件本身（清屏/重连均不抹）。replay 会话写入 lineCount
+   *  供回放工具条显示总行数。现状无 UI 消费者（旧全量链路 parseLogFile 的 total
+   *  直接丢弃），预留给状态栏/对比视图 */
   offlineLineCount: number
   offlineFirstEpoch: number
   offlineLastEpoch: number
@@ -146,12 +161,19 @@ export const SESSION_FIELDS = [
   'rxLines',
   'txLines',
   'jump',
+  'replay',
   'offlineLineCount',
   'offlineFirstEpoch',
   'offlineLastEpoch',
 ] as const
 
 export type SessionField = (typeof SESSION_FIELDS)[number]
+
+/** 拉模型会话判定：live/replay 的后端 ring 持续产出（拉取循环按游标拉 delta）；
+ *  offline 初始尾窗一次入表后静态，拉取循环跳过 */
+export function isPullSession(s: Pick<Session, 'kind'>): boolean {
+  return s.kind === 'live' || s.kind === 'replay'
+}
 
 /** 会话默认值工厂（原 makeSession）：rules 数组各会话独立持有，不共享引用 */
 export function createSession(id: string, config: PortConfig): Session {
@@ -196,6 +218,7 @@ export function createSession(id: string, config: PortConfig): Session {
     rxLines: 0,
     txLines: 0,
     jump: null,
+    replay: null,
     offlineLineCount: 0,
     offlineFirstEpoch: 0,
     offlineLastEpoch: 0,

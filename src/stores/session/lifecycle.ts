@@ -42,6 +42,9 @@ export const FIELD_POLICY: Record<SessionField, 'carry' | 'resetReconnect' | 're
   rxLines: 'carry',
   txLines: 'carry',
   jump: 'carry',
+  // 回放控制面：runtime——回放会话不可重连（重连动作在 store 层拒绝），重连
+  // 回落默认 null；清屏不动（控制面状态与日志行数据无关）
+  replay: 'runtime',
   // 离线源文件元信息：描述源文件本身，重连（仅 live 可达）与清屏均不抹
   offlineLineCount: 'carry',
   offlineFirstEpoch: 'carry',

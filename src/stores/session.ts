@@ -5,5 +5,6 @@
  * compat=Pinia store 组装），本文件仅保持 import 路径不变——所有组件零改动。
  */
 export { useSessionStore, registerParserOnClear } from './session/compat'
+export { isPullSession } from './session/model'
 export type { Session, CenterView } from './session/compat'
 export type { SeqRunState } from './session/compat'

@@ -20,6 +20,9 @@ import type {
   PortInfo,
   PulledLine,
   RawLogLine,
+  ReplayAction,
+  ReplayOpenResult,
+  ReplayView,
   RingBounds,
   SendMode,
 } from './types'
@@ -79,6 +82,22 @@ export function createCommands(client: IpcClient) {
       return max === undefined
         ? client.invoke<PulledLine[]>('offline_lines_after_cmd', { sessionId, sinceNo })
         : client.invoke<PulledLine[]>('offline_lines_after_cmd', { sessionId, sinceNo, max })
+    },
+    /** 打开时序回放会话（Stage 3 Task 7）：后端按相邻行原始时间差把源文件重放进
+     *  ring（r{N}，拉模型复用），返回 {sessionId,lineCount,durationMs} */
+    openReplaySession(path: string, speed: number, looped: boolean): Promise<ReplayOpenResult> {
+      return client.invoke<ReplayOpenResult>('open_replay_session_cmd', { path, speed, looped })
+    },
+    /** 回放控制（pause/resume/seek/speed/loop/stop）；value 仅 seek/speed/loop 需要，
+     *  缺省不传键。返回控制面视图（命令层同时 emit replay-state） */
+    replayControl(sessionId: string, action: ReplayAction, value?: number): Promise<ReplayView> {
+      return value === undefined
+        ? client.invoke<ReplayView>('replay_control_cmd', { sessionId, action })
+        : client.invoke<ReplayView>('replay_control_cmd', { sessionId, action, value })
+    },
+    /** 回放状态查询（前端轮询兜底：EOF/Error 等无控制命令的状态变化也可见） */
+    replayStatus(sessionId: string): Promise<ReplayView> {
+      return client.invoke<ReplayView>('replay_status_cmd', { sessionId })
     },
     setLiveRules(sessionId: string, rules: LiveRulesPayload): Promise<void> {
       return client.invoke<void>('set_live_rules_cmd', {

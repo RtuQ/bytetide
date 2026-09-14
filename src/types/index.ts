@@ -1,7 +1,11 @@
 export type Dir = 'rx' | 'tx'
 export type SessionStatus = 'disconnected' | 'connecting' | 'connected' | 'error' | 'offline'
-/** 会话来源：live=实时串口；offline=从日志文件离线载入（无后端连接） */
-export type SessionKind = 'live' | 'offline'
+/** 会话来源：live=实时串口；offline=从日志文件离线载入（无后端连接）；
+ *  replay=时序回放（离线日志按相邻行原始时间差重放为伪实时会话，Stage 3） */
+export type SessionKind = 'live' | 'offline' | 'replay'
+/** 回放细粒度控制面状态（与 core ReplayState::as_str 对齐；会话级 status 照常
+ *  走 SessionStatus：起跑 connected、Finished/Stopped disconnected、Error error） */
+export type ReplayState = 'ready' | 'running' | 'paused' | 'finished' | 'stopped' | 'error'
 
 export interface PortConfig {
   name: string

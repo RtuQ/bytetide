@@ -1,5 +1,5 @@
 pub mod bridge;
-mod commands;
+pub mod commands;
 mod gui_sink;
 mod hotplug;
 mod state;
@@ -151,6 +151,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(AppState {
             manager: bytetide_core::serial::PortManager::new(),
+            replays: commands::ReplayRegistry::default(),
         })
         .setup(|app| {
             let handle = app.handle().clone();
@@ -200,6 +201,9 @@ pub fn run() {
             commands::create_offline_session_cmd,
             commands::open_offline_session_cmd,
             commands::offline_lines_after_cmd,
+            commands::open_replay_session_cmd,
+            commands::replay_control_cmd,
+            commands::replay_status_cmd,
             commands::bridge_get_config_cmd,
             commands::bridge_set_config_cmd,
             commands::bridge_regen_token_cmd,

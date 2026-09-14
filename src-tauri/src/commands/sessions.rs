@@ -42,10 +42,13 @@ pub fn connect_cmd(
 
 #[tauri::command]
 pub fn disconnect_cmd(session_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    state
+    let result = state
         .manager
         .disconnect(&session_id)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+    // 回放会话镜像随会话移除（speed/looped 登记，见 commands/replay.rs）
+    state.replays.forget(&session_id);
+    result
 }
 
 #[tauri::command]

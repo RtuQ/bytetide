@@ -12,6 +12,7 @@ import { lineHexDump, lineHexLen } from '../composables/useHexDump'
 import { lineBytes } from '../parser/lineBytes'
 import { humanizeMs } from '../composables/useRate'
 import { requestBackfill } from '../composables/useTauriEvents'
+import ReplayControls from './ReplayControls.vue'
 import type { LogLine } from '../types'
 import { toast } from '../composables/useToast'
 
@@ -187,9 +188,12 @@ function onKeydown(e: KeyboardEvent) {
 window.addEventListener('keydown', onKeydown)
 onScopeDispose(() => window.removeEventListener('keydown', onKeydown))
 
-// 落盘录制/分段仅对读线程存活的会话可用（已连接或连接中），未连接时命令通道已关
+// 落盘录制/分段仅对 live 会话的读线程可用（已连接或连接中）；replay 无落盘
+// （打开日志仍可用：log_path=源文件），未连接时命令通道已关
 const recLive = computed(() => {
-  const st = session.value?.status
+  const s = session.value
+  if (!s || s.kind !== 'live') return false
+  const st = s.status
   return st === 'connected' || st === 'connecting'
 })
 
@@ -406,7 +410,7 @@ onBeforeUnmount(() => {
           <span>停止</span>
         </button>
         <button
-          v-else-if="session.kind !== 'offline'"
+          v-else-if="session.kind === 'live'"
           class="btn btn-sm btn-primary"
           title="重新连接该串口"
           @click="store.reconnectSession(props.sessionId)"
@@ -460,6 +464,12 @@ onBeforeUnmount(() => {
         {{ session.error }}
       </span>
     </div>
+
+    <!-- 回放控制条：仅 replay 会话（Stage 3 Task 7），工具栏与日志区之间 -->
+    <ReplayControls
+      v-if="session && session.kind === 'replay'"
+      :session-id="props.sessionId"
+    />
 
     <LogScroller
       v-if="session"

@@ -47,6 +47,7 @@ const EVENT_NAMES: [keyof ReturnType<typeof createEventSubscriptions>, string][]
   ['onAlertHit', 'alert-hit'],
   ['onCaptureActive', 'capture-active'],
   ['onCaptureSaved', 'capture-saved'],
+  ['onReplayState', 'replay-state'],
 ]
 
 describe('events 适配层：事件名与订阅', () => {

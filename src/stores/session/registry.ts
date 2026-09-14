@@ -1,4 +1,5 @@
 import type { Session } from './model'
+import type { ReplayState } from '../../types'
 
 /**
  * 会话注册表（Task 6）：`Record<string, Session>` 规范持有、唯一真相。
@@ -109,4 +110,16 @@ export function flushPendingTo(st: RegistryState, id: string): void {
 export function dropPending(id: string): void {
   pendingStatus.delete(id)
   pendingError.delete(id)
+}
+
+/** 回放控制面视图落账（Stage 3 Task 7）：replay-state 事件与 replayStatus 轮询
+ *  共用一写入点。仅 replay 会话生效；未知/已移除/非回放会话的迟到事件忽略 */
+export function applyReplayView(
+  st: RegistryState,
+  id: string,
+  view: { state: ReplayState; speed: number; looped: boolean; line: number },
+): void {
+  const s = st.sessions[id]
+  if (!s || s.kind !== 'replay') return
+  s.replay = { state: view.state, speed: view.speed, looped: view.looped, line: view.line }
 }

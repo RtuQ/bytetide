@@ -154,6 +154,32 @@ describe('commands 适配层：命令字符串与 camelCase 参数键', () => {
     expect(lastCall(calls)).toEqual({ command: 'offline_lines_after_cmd', args: { sessionId: 'o1', sinceNo: 0 } })
   })
 
+  it('openReplaySession：映射 open_replay_session_cmd（path/speed/looped），ReplayOpenResult 透传', async () => {
+    const opened = { sessionId: 'r1', lineCount: 30, durationMs: 29000 }
+    const { client, calls } = makeFakeClient([opened])
+    const out = await createCommands(client).openReplaySession('/tmp/a.log', 2.5, true)
+    expect(lastCall(calls)).toEqual({ command: 'open_replay_session_cmd', args: { path: '/tmp/a.log', speed: 2.5, looped: true } })
+    expect(out).toEqual(opened)
+  })
+
+  it('replayControl：映射 replay_control_cmd（sessionId/action/value）；value 缺省不传键', async () => {
+    const view = { sessionId: 'r1', state: 'paused', speed: 2.5, looped: true, line: 4 }
+    const { client, calls } = makeFakeClient([view, view])
+    const c = createCommands(client)
+    expect(await c.replayControl('r1', 'seek', 5)).toEqual(view)
+    expect(lastCall(calls)).toEqual({ command: 'replay_control_cmd', args: { sessionId: 'r1', action: 'seek', value: 5 } })
+    await c.replayControl('r1', 'pause')
+    expect(lastCall(calls)).toEqual({ command: 'replay_control_cmd', args: { sessionId: 'r1', action: 'pause' } })
+  })
+
+  it('replayStatus：映射 replay_status_cmd（sessionId），ReplayView 透传', async () => {
+    const view = { sessionId: 'r1', state: 'running', speed: 1, looped: false, line: 3 }
+    const { client, calls } = makeFakeClient([view])
+    const out = await createCommands(client).replayStatus('r1')
+    expect(lastCall(calls)).toEqual({ command: 'replay_status_cmd', args: { sessionId: 'r1' } })
+    expect(out).toEqual(view)
+  })
+
   it('listCaptures / deleteCapture / capturesDir：现场档案三命令', async () => {
     const metas: CaptureMeta[] = [{ fileName: 'x.log', path: '/c/x.log', size: 3, modifiedMs: 5 }]
     const { client, calls } = makeFakeClient([metas, null, '/c'])

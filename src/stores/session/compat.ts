@@ -7,13 +7,14 @@ import type { DecodedFrame } from '../../types/parser'
 import type {
   AiAnnotation, AlertRule, AutoReplyRule, CaptureCfg, CaptureMeta, FilterStage, Keyword,
   LogConfig, LogLine, PlotConfig, PortConfig, PortInfo, PresetCategory, RawLogLine,
+  ReplayState,
   SearchState, SendSequence,
 } from '../../types'
 import { createSession, type CenterView, type Session } from './model'
 import { carrySessionForReconnect, clearSessionData } from './lifecycle'
 import {
   dropPending, flushPendingTo, getActive, listSessions, recordError, recordStatus,
-  registerSession, removeSession, replaceSession, type RegistryState,
+  registerSession, removeSession, replaceSession, applyReplayView, type RegistryState,
 } from './registry'
 import {
   appendLinesInto, appendPulledInto, applyDecodedInto, prependBackfillInto, resetDecodedOf,
@@ -278,6 +279,34 @@ export const useSessionStore = defineStore('session', {
       )
       return opened.sessionId
     },
+    /** 打开时序回放会话（Stage 3 Task 7）：后端 start_replay 按相邻行原始时间差
+     *  把源文件重放进 ring（r{N}，IngestOrigin::Replay：告警评估、零自动回复零
+     *  捕获、无落盘）。ring 从空起步、pullNo=0——拉取循环（isPullSession 放行
+     *  replay）按游标拉齐即可，无离线式初始尾窗。控制面初值本地置 ready，随后
+     *  由 replay-state 事件 / replayStatus 轮询修正；告警规则随建账推送（回放
+     *  自动回复被 origin 结构性排除）。 */
+    async loadReplaySession(path: string, speed = 1.0, looped = false) {
+      const baseName = path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') || '回放日志'
+      const config: PortConfig = {
+        name: baseName,
+        baudRate: 0,
+        dataBits: 8,
+        parity: 'none',
+        stopBits: '1',
+        flowControl: 'none',
+      }
+      const opened = await commands.openReplaySession(path, speed, looped)
+      const s = createSession(opened.sessionId, config)
+      s.kind = 'replay'
+      // runner 起跑即发 connected（session-status 事件随后修正）
+      s.status = 'connecting'
+      s.offlineLineCount = opened.lineCount
+      s.replay = { state: 'ready', speed, looped, line: 0 }
+      registerSession(this as unknown as RegistryState, s)
+      this.flushPending(opened.sessionId)
+      this.pushLiveRules(opened.sessionId)
+      return opened.sessionId
+    },
     async closeTab(id: string) {
       try {
         await commands.disconnect(id)
@@ -300,11 +329,19 @@ export const useSessionStore = defineStore('session', {
       }
       s.status = 'disconnected'
       s.error = ''
+      // 回放会话：后端线程已 Stop+join 并移除会话——控制面定格 stopped
+      //（拉取循环据此停表；重连被拒绝，出路=关闭标签页或重开回放）
+      if (s.kind === 'replay' && s.replay) {
+        s.replay = { ...s.replay, state: 'stopped' }
+      }
     },
-    /** 用原配置重连：后端生成新会话 id，前端把原会话数据迁移到新 id 下 */
+    /** 用原配置重连：后端生成新会话 id，前端把原会话数据迁移到新 id 下。
+     *  仅 live 会话可重连：offline 无连接可重建；replay 按 plan 拒绝（源文件
+     *  重开即可回放），字段策略 replay='runtime' 与此对应 */
     async reconnectSession(id: string) {
       const s = this.sessions[id]
       if (!s) return
+      if (s.kind !== 'live') return
       const config = s.config
       let newId: string
       try {
@@ -341,11 +378,21 @@ export const useSessionStore = defineStore('session', {
       }
       parserOnClear?.(id)
     },
-    /** 推送实时规则到后端（拉模型：评估在读线程，规则变更/重连后整体覆盖） */
+    /** 推送实时规则到后端（拉模型：评估在读线程，规则变更/重连后整体覆盖）。
+     *  live 与 replay 均推送——回放的告警经 common ingest 仍评估，自动回复被
+     *  Replay origin 结构性排除（core replay 模块）；offline 无读线程不推 */
     pushLiveRules(id: string) {
       const s = this.sessions[id]
-      if (!s || s.kind !== 'live') return
+      if (!s || (s.kind !== 'live' && s.kind !== 'replay')) return
       commands.setLiveRules(id, buildLiveRulesPayload(s)).catch(() => {})
+    },
+    /** 回放控制面视图落账：replay-state 事件 / replayStatus 轮询共用（迟到事件
+     *  与非回放会话在 registry 层忽略） */
+    setReplayView(
+      id: string,
+      view: { state: ReplayState; speed: number; looped: boolean; line: number },
+    ) {
+      applyReplayView(this as unknown as RegistryState, id, view)
     },
     /** 更新现场捕获配置（会话级，重连迁移）：本地合并后整包推送后端读线程 */
     updateCapture(id: string, patch: Partial<CaptureCfg>) {

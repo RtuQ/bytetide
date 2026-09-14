@@ -1,4 +1,5 @@
 import { useSessionStore } from '../stores/session'
+import { isPullSession } from '../stores/session/model'
 import { useAlertStore } from '../stores/alerts'
 import { playAlertBeep } from './useAlertBeep'
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
@@ -14,6 +15,7 @@ import {
   onCaptureActive,
   onCaptureSaved,
   onPortChanged,
+  onReplayState,
   onSessionError,
   onSessionStatus,
 } from '../ipc/events'
@@ -50,10 +52,11 @@ const backfilling = new Set<string>()
  */
 export async function requestBackfill(sessionId: string): Promise<void> {
   if (backfilling.has(sessionId)) return
-  const store = useSessionStore()
-  const s = store.sessions[sessionId]
-  // live 与 indexed 离线（Task 8 分页）会话均可回补——离线的"ring"是整个源文件
-  if (!s || s.backfillExhausted) return
+    const store = useSessionStore()
+    const s = store.sessions[sessionId]
+    // live 与 indexed 离线（Task 8 分页）会话均可回补——离线的"ring"是整个源文件；
+    // replay 的 ring 命令照常路由（同 RING_CAP 窗口），无需额外守卫
+    if (!s || s.backfillExhausted) return
   const head = s.lines[0]
   // 无可补视图（空/清屏后）、视图头无 rn（本地/旧全量链路行）或属旧 ring 纪元
   // （重连迁移行，旧 ring 已销毁；离线会话 reconnectNo 恒 0 不受影响）
@@ -107,9 +110,13 @@ async function drainSession(sessionId: string): Promise<void> {
     const store = useSessionStore()
     for (let page = 0; page < PULL_MAX_PAGES; page++) {
       const s = store.sessions[sessionId]
-      // 会话没了/已停止（后端句柄移除，invoke 会报"会话不存在"）就停
-      if (!s || s.kind !== 'live') return
-      if (s.status !== 'connected' && s.status !== 'connecting') return
+      // 会话没了/非拉模型会话（offline 初始装载后静态）就停。
+      // live：断开后端句柄已移除，停在 connected/connecting 之外；
+      // replay：后端会话常驻（Finished/Stopped 后仍可查询），只有控制面定格
+      // stopped（用户停止/断开）或会话移除才停——EOF 事件后的最后一波仍要拉齐
+      if (!s || !isPullSession(s)) return
+      if (s.kind === 'live' && s.status !== 'connected' && s.status !== 'connecting') return
+      if (s.kind === 'replay' && s.replay?.state === 'stopped') return
       let pulled: PulledLine[]
       try {
         pulled = await commands.ringLinesAfter(sessionId, s.pullNo, PULL_PAGE_MAX)
@@ -131,13 +138,17 @@ async function drainSession(sessionId: string): Promise<void> {
       )
       if (fresh.length === 0) return // 游标已到最新
       store.tallyBytes(sessionId, fresh)
-      // 性能哨兵：滞后=墙钟−最新行后端时间戳，批耗时=本处理段
-      recordBatch(sessionId, fresh, performance.now() - t0)
+      // 性能哨兵：滞后=墙钟−最新行后端时间戳，批耗时=本处理段。
+      // replay 跳过——行时间戳是源文件历史时刻，滞后恒为巨值（假阳性）；
+      // 取证探针同理（seg 探针的 lagMs 同口径）
+      if (s.kind !== 'replay') {
+        recordBatch(sessionId, fresh, performance.now() - t0)
+      }
       // 解析引擎 feed（未启用脚本时 no-op）：切帧在主线程线性批处理
       feedParser(sessionId, fresh)
       // 取证探针（seg/raf，仅 DEV 构建；release 由 Vite tree-shake 移除）
       const handlerMs = performance.now() - t0
-      if (import.meta.env.DEV && handlerMs > 5) {
+      if (import.meta.env.DEV && handlerMs > 5 && s.kind !== 'replay') {
         const s2 = store.sessions[sessionId]
         void commands
           .appendPerfDiagnostic({
@@ -181,11 +192,17 @@ export async function setupEvents(): Promise<Unlisten[]> {
   }, PULL_INTERVAL_MS)
   unlistens.push(() => window.clearInterval(timer))
 
-  // 会话停止时立即拉最后一波（disconnect 前后端已 flush 完 ring）
+  // 会话状态：live 的连接/断开 toast 提示；replay 的状态事件不打连接 toast
+  //（起跑 connected / EOF·停止 disconnected 对回放语义是「回放中/已播完」，
+  // 用 ReplayControls 的状态标签表达），断开时仍补最后一波拉取
   unlistens.push(
     await onSessionStatus((p) => {
       store.setStatus(p.sessionId, p.status)
       const session = store.sessions[p.sessionId]
+      if (session?.kind === 'replay') {
+        if (p.status === 'disconnected') void drainSession(p.sessionId)
+        return
+      }
       if (p.status === 'connected') toast('连接成功', 'success', 2600, session?.config.name)
       if (p.status === 'disconnected') toast('连接已断开', 'info', 2600, session?.config.name)
       if (p.status === 'disconnected') void drainSession(p.sessionId)
@@ -259,6 +276,14 @@ export async function setupEvents(): Promise<Unlisten[]> {
       store.setCaptureActive(p.sessionId, null)
       toast('现场捕获已保存', 'success', 3200)
       void store.loadCaptures()
+    }),
+  )
+
+  // 回放控制面（Stage 3 Task 7）：control 命令执行后命令层 emit 一次；EOF/Error
+  // 等无控制命令的状态变化由 ReplayControls 的 replayStatus 轮询兜底
+  unlistens.push(
+    await onReplayState((p) => {
+      store.setReplayView(p.sessionId, p)
     }),
   )
 

@@ -4,7 +4,14 @@
 // 不接触 Tauri 的 Event 壳；退订函数为同步调用。
 import type { IpcClient, Unlisten } from './client'
 import { tauriClient } from './client'
-import type { AiAnnotation, ErrorPayload, PlotConfig, PortInfo, StatusPayload } from './types'
+import type {
+  AiAnnotation,
+  ErrorPayload,
+  PlotConfig,
+  PortInfo,
+  ReplayView,
+  StatusPayload,
+} from './types'
 
 /** alert-hit 载荷：后端读线程评估命中，稀疏事件（行号是 ring no，回查 UI 行号用） */
 export interface AlertHitPayload {
@@ -43,6 +50,10 @@ export interface CaptureSavedPayload {
   sessionId: string
 }
 
+/** replay-state 载荷：回放状态/控制变化（命令层在 control 命令执行后发一次；
+ *  EOF/Error 等无控制命令的变化由前端 replayStatus 轮询兜底） */
+export type ReplayStatePayload = ReplayView
+
 /** 按业务域命名的事件订阅；工厂形式便于测试注入假 IpcClient */
 export function createEventSubscriptions(client: IpcClient) {
   return {
@@ -72,6 +83,9 @@ export function createEventSubscriptions(client: IpcClient) {
     onCaptureSaved(handler: (payload: CaptureSavedPayload) => void): Promise<Unlisten> {
       return client.listen<CaptureSavedPayload>('capture-saved', handler)
     },
+    onReplayState(handler: (payload: ReplayStatePayload) => void): Promise<Unlisten> {
+      return client.listen<ReplayStatePayload>('replay-state', handler)
+    },
   }
 }
 
@@ -87,6 +101,7 @@ export const onBridgeAnnotationsUpdated = tauriEvents.onBridgeAnnotationsUpdated
 export const onAlertHit = tauriEvents.onAlertHit
 export const onCaptureActive = tauriEvents.onCaptureActive
 export const onCaptureSaved = tauriEvents.onCaptureSaved
+export const onReplayState = tauriEvents.onReplayState
 
 /** 前端 → 后端单发事件；工厂形式便于测试注入 */
 export function createEmitter(client: IpcClient) {

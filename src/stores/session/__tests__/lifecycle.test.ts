@@ -177,6 +177,7 @@ describe('SESSION_FIELDS 与 createSession 工厂', () => {
     expect(s.rxLines).toBe(0)
     expect(s.txLines).toBe(0)
     expect(s.jump).toBeNull()
+    expect(s.replay).toBeNull()
     expect(s.offlineLineCount).toBe(0)
     expect(s.offlineFirstEpoch).toBe(0)
     expect(s.offlineLastEpoch).toBe(0)
@@ -206,6 +207,18 @@ describe('FIELD_POLICY 穷举', () => {
     for (const f of SESSION_FIELDS) {
       expect(allowed, `${String(f)} 的策略`).toContain(FIELD_POLICY[f])
     }
+  })
+
+  it('replay 字段策略为 runtime：回放会话不可重连（重连回落 null），清屏不动控制面', () => {
+    expect(FIELD_POLICY.replay).toBe('runtime')
+    const prev = sentinelSession()
+    prev.kind = 'replay'
+    prev.replay = { state: 'paused', speed: 2, looped: true, line: 4 }
+    // 重连回落默认（未在迁移清单）
+    expect(carrySessionForReconnect(prev, 'new').replay).toBeNull()
+    // 清屏保留（控制面状态与日志行数据无关）
+    clearSessionData(prev)
+    expect(prev.replay).toEqual({ state: 'paused', speed: 2, looped: true, line: 4 })
   })
 })
 
@@ -300,6 +313,8 @@ describe('carrySessionForReconnect（重连迁移）', () => {
       rxLines: 10,
       txLines: 20,
       jump: { no: 5, token: 12345 },
+      // runtime 策略：回放会话不可重连（重连即拒绝），重连回落默认 null
+      replay: null,
       // carry：离线源文件元信息随迁（离线会话实际不可达重连，策略穷举仍要求一致）
       offlineLineCount: 12345,
       offlineFirstEpoch: 111,

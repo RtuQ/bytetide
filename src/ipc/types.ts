@@ -17,6 +17,7 @@ export type {
   PortConfig,
   PortInfo,
   RawLogLine,
+  ReplayState,
   StatusPayload,
 } from '../types'
 
@@ -26,6 +27,7 @@ import type {
   BridgeConfig,
   CaptureCfg,
   Dir,
+  ReplayState,
 } from '../types'
 
 /** 拉模型游标拉取的单行（ring_lines_no_cmd / ring_lines_before_cmd 返回，Rust BridgeLine）。
@@ -56,6 +58,28 @@ export interface OfflineOpenResult {
   firstEpoch: number
   lastEpoch: number
 }
+
+/** 打开时序回放会话（Stage 3 Task 7）的返回：durationMs=源文件首末行 epoch 差
+ *  （当日毫秒口径，跨午夜日志低估——与回放调度同源同偏差，仅作时长展示） */
+export interface ReplayOpenResult {
+  sessionId: string
+  lineCount: number
+  durationMs: number
+}
+
+/** 回放控制面视图（replay_control/replay_status 返回与 replay-state 事件共同载荷）：
+ *  line=当前文件行号水位（最后已入库源文件行；seek 后未恢复=目标-1） */
+export interface ReplayView {
+  sessionId: string
+  state: ReplayState
+  speed: number
+  looped: boolean
+  line: number
+}
+
+/** replay_control_cmd 的 action（value：seek=行号、speed=倍速、loop=1/0；
+ *  pause/resume/stop 不带值） */
+export type ReplayAction = 'pause' | 'resume' | 'seek' | 'speed' | 'loop' | 'stop'
 
 /** 后端 BridgeBookmark 镜像（camelCase）：行被淘汰后 text 为空、只保留行号 */
 export interface BridgeBookmark {
