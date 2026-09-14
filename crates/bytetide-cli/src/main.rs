@@ -7,6 +7,7 @@ mod clisink;
 mod input;
 mod ports;
 mod render;
+mod scenario;
 
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;
@@ -32,6 +33,7 @@ fn main() {
     let code = match cli.command {
         Command::List => cmd_list(),
         Command::Monitor(a) => cmd_monitor(&a),
+        Command::Run(a) => scenario::cmd_run(&a),
     };
     // 显式 exit：stdin 线程可能阻塞在读上，不等它自然退出
     std::process::exit(code);
@@ -52,7 +54,7 @@ fn cmd_list() -> i32 {
 
 fn cmd_monitor(args: &MonitorArgs) -> i32 {
     let color = color_enabled(args);
-    let config = match args::to_port_config(args) {
+    let config = match args::to_port_config(&args.source) {
         Ok(Some(c)) => c,
         Ok(None) => match pick_port(args, color) {
             Ok(c) => c,
@@ -103,7 +105,7 @@ fn pick_port(args: &MonitorArgs, color: bool) -> Result<PortConfig, i32> {
         .default(0)
         .interact_opt();
     match sel {
-        Ok(Some(i)) => Ok(args::serial_config(args, &all[i].name)),
+        Ok(Some(i)) => Ok(args::serial_config(&args.source, &all[i].name)),
         _ => {
             eprintln!("已取消");
             Err(1)
@@ -111,8 +113,8 @@ fn pick_port(args: &MonitorArgs, color: bool) -> Result<PortConfig, i32> {
     }
 }
 
-/// 人读连接描述（提示/汇总用）
-fn describe_config(c: &PortConfig) -> String {
+/// 人读连接描述（提示/汇总用；scenario 复用）
+pub(crate) fn describe_config(c: &PortConfig) -> String {
     match c.transport.as_deref() {
         Some("tcp-client") => format!(
             "TCP {}:{}",

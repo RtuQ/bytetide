@@ -1,5 +1,7 @@
 //! 命令行参数定义与 PortConfig 映射（映射为纯函数，便于单测）。
 
+use std::path::PathBuf;
+
 use bytetide_core::serial::port::PortConfig;
 use clap::{ArgGroup, Parser, Subcommand};
 
@@ -15,13 +17,16 @@ pub struct Cli {
 }
 
 #[derive(Subcommand, Debug)]
-#[allow(clippy::large_enum_variant)] // MonitorArgs 仅一个变体持有，装箱无收益
+#[allow(clippy::large_enum_variant)] // Monitor/Run Args 仅一个变体持有，装箱无收益
 pub enum Command {
     /// 列出可用串口
     List,
     /// 监控数据源（串口 / TCP / UDP），Ctrl-C 或 /quit 退出
     #[command(after_help = AFTER_HELP)]
     Monitor(MonitorArgs),
+    /// 执行自动化场景（进度/错误走 stderr，报告只写 --report 文件）
+    #[command(after_help = RUN_AFTER_HELP)]
+    Run(RunArgs),
 }
 
 pub const AFTER_HELP: &str =
@@ -36,10 +41,17 @@ pub const AFTER_HELP: &str =
 录制模板 token 与桌面端一致：%Y %M %D %H(端口/会话名) %h %m %s %t %%；缺省不落盘。
 --retry 重连后新会话行号从头计数，重连期间收到的数据会重新输出。";
 
+pub const RUN_AFTER_HELP: &str =
+    "数据源选项与 monitor 相同；run 是主动驱动设备的场景工具，必须显式指定数据源（不进入交互选择）。
+
+退出码：0 场景通过；1 运行时/连接失败；2 参数或场景非法；3 wait/assert 未按预期命中；130 Ctrl-C 取消。
+
+报告只写入 --report 文件（--report - 时写 stdout，此为唯一 stdout 输出）；
+进度与错误始终走 stderr。格式：--report-format json|junit（默认 json）。";
+
+/// 数据源与串口参数（monitor / run 共用，flate 进两者；arg id 供互斥组引用）。
 #[derive(clap::Args, Debug)]
-// 四个数据源参数互斥（缺省合法：进入交互选择或报错，由运行时处理）
-#[command(group(ArgGroup::new("source").args(&["port", "tcp", "tcp_listen", "udp"])))]
-pub struct MonitorArgs {
+pub struct SourceArgs {
     /// 串口路径（如 COM3、/dev/ttyUSB0）
     #[arg(short, long, value_name = "PATH")]
     pub port: Option<String>,
@@ -67,12 +79,21 @@ pub struct MonitorArgs {
     /// UDP 监听端口
     #[arg(long, value_name = "PORT")]
     pub udp: Option<u16>,
-    /// 录制文件路径/模板（缺省不录制；token 见帮助尾注）
-    #[arg(short = 'o', long, value_name = "PATH|TEMPLATE")]
-    pub record: Option<String>,
     /// 会话名（网络源用作录制模板 %H 与提示）
     #[arg(long, value_name = "NAME")]
     pub id: Option<String>,
+}
+
+#[derive(clap::Args, Debug)]
+// 四个数据源参数互斥（缺省合法：进入交互选择或报错，由运行时处理）
+#[command(group(ArgGroup::new("source").args(&["port", "tcp", "tcp_listen", "udp"])))]
+pub struct MonitorArgs {
+    /// 数据源与串口参数
+    #[command(flatten)]
+    pub source: SourceArgs,
+    /// 录制文件路径/模板（缺省不录制；token 见帮助尾注）
+    #[arg(short = 'o', long, value_name = "PATH|TEMPLATE")]
+    pub record: Option<String>,
     /// 每行显示时间戳（默认关）
     #[arg(long)]
     pub ts: bool,
@@ -96,9 +117,32 @@ pub struct MonitorArgs {
     pub no_newline: bool,
 }
 
+/// run 子命令参数：执行场景（数据源必须显式给定，不进入交互选择）。
+#[derive(clap::Args, Debug)]
+// 数据源必须显式提供：clap 层直接报缺参（exit 2），与 monitor 的交互选择语义区分
+#[command(group(
+    ArgGroup::new("run_source")
+        .args(&["port", "tcp", "tcp_listen", "udp"])
+        .required(true)
+))]
+pub struct RunArgs {
+    /// 场景 JSON 文件路径
+    #[arg(short, long, value_name = "FILE")]
+    pub scenario: PathBuf,
+    /// 数据源与串口参数
+    #[command(flatten)]
+    pub source: SourceArgs,
+    /// 报告输出文件（"-" = stdout；缺省不写报告文件）
+    #[arg(long, value_name = "FILE")]
+    pub report: Option<String>,
+    /// 报告格式
+    #[arg(long, value_name = "FORMAT", default_value = "json", value_parser = ["json", "junit"])]
+    pub report_format: String,
+}
+
 /// 参数 → 数据源配置；Ok(None) 表示未指定（终端进入选择器，非终端报错）。
 /// 四源互斥由 clap group 保证；此处按串口 > tcp > tcp-listen > udp 的顺序取第一个。
-pub fn to_port_config(args: &MonitorArgs) -> Result<Option<PortConfig>, String> {
+pub fn to_port_config(args: &SourceArgs) -> Result<Option<PortConfig>, String> {
     if let Some(port) = args.port.as_deref() {
         return Ok(Some(serial_config(args, port)));
     }
@@ -135,7 +179,7 @@ pub fn to_port_config(args: &MonitorArgs) -> Result<Option<PortConfig>, String> 
 }
 
 /// 串口配置：name 固定为端口路径（录制模板 %H 即端口名），其余套 CLI 参数。
-pub fn serial_config(args: &MonitorArgs, port: &str) -> PortConfig {
+pub fn serial_config(args: &SourceArgs, port: &str) -> PortConfig {
     PortConfig {
         name: port.to_string(),
         baud_rate: args.baud,
@@ -174,17 +218,8 @@ mod tests {
 
     fn base() -> MonitorArgs {
         MonitorArgs {
-            port: None,
-            baud: 115200,
-            data: 8,
-            parity: "none".into(),
-            stop: "1".into(),
-            flow: "none".into(),
-            tcp: None,
-            tcp_listen: None,
-            udp: None,
+            source: source_base(),
             record: None,
-            id: None,
             ts: false,
             ts_format: None,
             json: false,
@@ -195,9 +230,24 @@ mod tests {
         }
     }
 
+    fn source_base() -> SourceArgs {
+        SourceArgs {
+            port: None,
+            baud: 115200,
+            data: 8,
+            parity: "none".into(),
+            stop: "1".into(),
+            flow: "none".into(),
+            tcp: None,
+            tcp_listen: None,
+            udp: None,
+            id: None,
+        }
+    }
+
     #[test]
     fn serial_defaults() {
-        let mut a = base();
+        let mut a = source_base();
         a.port = Some("COM3".into());
         let c = to_port_config(&a).unwrap().unwrap();
         assert_eq!(c.name, "COM3");
@@ -211,7 +261,7 @@ mod tests {
 
     #[test]
     fn serial_custom_params() {
-        let mut a = base();
+        let mut a = source_base();
         a.port = Some("/dev/ttyUSB0".into());
         a.baud = 9600;
         a.data = 7;
@@ -233,7 +283,7 @@ mod tests {
 
     #[test]
     fn tcp_client_mapping() {
-        let mut a = base();
+        let mut a = source_base();
         a.tcp = Some("192.168.1.10:9000".into());
         let c = to_port_config(&a).unwrap().unwrap();
         assert_eq!(c.transport.as_deref(), Some("tcp-client"));
@@ -246,7 +296,7 @@ mod tests {
 
     #[test]
     fn tcp_client_ipv6_and_invalid() {
-        let mut a = base();
+        let mut a = source_base();
         a.tcp = Some("[::1]:7000".into());
         let c = to_port_config(&a).unwrap().unwrap();
         assert_eq!(c.tcp_host.as_deref(), Some("::1"));
@@ -259,13 +309,13 @@ mod tests {
 
     #[test]
     fn tcp_server_and_udp_mapping() {
-        let mut a = base();
+        let mut a = source_base();
         a.tcp_listen = Some(9000);
         let c = to_port_config(&a).unwrap().unwrap();
         assert_eq!(c.transport.as_deref(), Some("tcp-server"));
         assert_eq!(c.tcp_port, Some(9000));
         assert_eq!(c.tcp_host, None); // 空 host -> core 绑 0.0.0.0
-        a = base();
+        a = source_base();
         a.udp = Some(5000);
         let c = to_port_config(&a).unwrap().unwrap();
         assert_eq!(c.transport.as_deref(), Some("udp"));
@@ -274,7 +324,7 @@ mod tests {
 
     #[test]
     fn no_source_returns_none() {
-        assert!(to_port_config(&base()).unwrap().is_none());
+        assert!(to_port_config(&source_base()).unwrap().is_none());
     }
 
     #[test]
@@ -296,8 +346,8 @@ mod tests {
         let Command::Monitor(a) = cli.command else {
             panic!("应为 monitor 子命令");
         };
-        assert_eq!(a.port.as_deref(), Some("COM3"));
-        assert_eq!(a.baud, 9600);
+        assert_eq!(a.source.port.as_deref(), Some("COM3"));
+        assert_eq!(a.source.baud, 9600);
         assert!(a.ts);
         assert_eq!(a.retry, 3);
     }
@@ -326,5 +376,97 @@ mod tests {
             Cli::try_parse_from(["bytetide", "monitor", "-p", "COM3", "--parity", "x"]).is_err()
         );
         assert!(Cli::try_parse_from(["bytetide", "monitor", "-p", "COM3", "--data", "9"]).is_err());
+    }
+
+    // ---------- run 子命令（Task 5） ----------
+
+    #[test]
+    fn clap_parses_run_flags() {
+        let cli = Cli::try_parse_from([
+            "bytetide",
+            "run",
+            "--scenario",
+            "s.json",
+            "-p",
+            "COM3",
+            "--baud",
+            "9600",
+            "--report",
+            "r.json",
+            "--report-format",
+            "junit",
+        ])
+        .unwrap();
+        let Command::Run(a) = cli.command else {
+            panic!("应为 run 子命令");
+        };
+        assert_eq!(a.scenario, PathBuf::from("s.json"));
+        assert_eq!(a.source.port.as_deref(), Some("COM3"));
+        assert_eq!(a.source.baud, 9600);
+        assert_eq!(a.report.as_deref(), Some("r.json"));
+        assert_eq!(a.report_format, "junit");
+    }
+
+    #[test]
+    fn clap_run_defaults() {
+        let cli = Cli::try_parse_from(["bytetide", "run", "-s", "s.json", "--tcp", "h:1"]).unwrap();
+        let Command::Run(a) = cli.command else {
+            panic!("应为 run 子命令");
+        };
+        assert_eq!(a.scenario, PathBuf::from("s.json"));
+        assert_eq!(a.source.tcp.as_deref(), Some("h:1"));
+        assert_eq!(a.report, None, "缺省不写报告文件");
+        assert_eq!(a.report_format, "json");
+    }
+
+    #[test]
+    fn clap_run_requires_scenario_and_source() {
+        // 缺 --scenario
+        assert!(Cli::try_parse_from(["bytetide", "run", "--tcp", "h:1"]).is_err());
+        // 缺数据源：run 必须显式给源（clap required group，exit 2）
+        assert!(Cli::try_parse_from(["bytetide", "run", "--scenario", "s.json"]).is_err());
+    }
+
+    #[test]
+    fn clap_run_sources_mutually_exclusive() {
+        assert!(Cli::try_parse_from([
+            "bytetide",
+            "run",
+            "--scenario",
+            "s.json",
+            "-p",
+            "COM3",
+            "--tcp",
+            "h:1"
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn clap_run_rejects_bad_report_format() {
+        assert!(Cli::try_parse_from([
+            "bytetide",
+            "run",
+            "--scenario",
+            "s.json",
+            "--tcp",
+            "h:1",
+            "--report-format",
+            "xml"
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn run_source_maps_to_port_config() {
+        let cli =
+            Cli::try_parse_from(["bytetide", "run", "-s", "s.json", "--tcp", "127.0.0.1:9000"])
+                .unwrap();
+        let Command::Run(a) = cli.command else {
+            panic!("应为 run 子命令");
+        };
+        let c = to_port_config(&a.source).unwrap().unwrap();
+        assert_eq!(c.transport.as_deref(), Some("tcp-client"));
+        assert_eq!(c.tcp_port, Some(9000));
     }
 }
