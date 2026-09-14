@@ -1,5 +1,5 @@
 use std::fs::OpenOptions;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use crate::serial::port::{Dir, LogLine};
@@ -15,7 +15,12 @@ impl SessionLog {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let file = OpenOptions::new().create(true).append(true).open(path)?;
+        // 用 write 权限打开并 seek 到末尾，而非 append 标志——Windows 的
+        // append 句柄只有 FILE_APPEND_DATA 权限，set_len（清屏截断）会
+        // Access Denied（macOS/Linux 的 O_APPEND 无此限制）；write+seek
+        // 保留「打开即续写」语义且截断可用。
+        let mut file = OpenOptions::new().create(true).write(true).open(path)?;
+        file.seek(SeekFrom::End(0))?;
         Ok(Self {
             writer: BufWriter::new(file),
             pending: 0,
@@ -46,8 +51,11 @@ impl SessionLog {
     }
 
     pub fn clear(&mut self) -> std::io::Result<()> {
-        let _ = self.writer.flush();
-        self.writer.get_ref().set_len(0)?;
+        self.writer.flush()?;
+        let file = self.writer.get_mut();
+        file.set_len(0)?;
+        // 游标归零：截断后旧游标越界，续写必须从 0 开始（否则留空洞/语义错位）
+        file.seek(SeekFrom::Start(0))?;
         self.pending = 0;
         Ok(())
     }

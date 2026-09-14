@@ -94,10 +94,11 @@ impl RecordingController {
         Ok(())
     }
 
-    /// 清屏截断当前文件（PortCmd::Clear；writer 不在位为 no-op，错误按既有行为静默）。
+    /// 清屏截断当前文件（PortCmd::Clear；writer 不在位为 no-op）。
+    /// 截断失败（如 Windows append 权限）必须传播——静默会让清屏语义失效。
     pub fn clear(&mut self) -> io::Result<()> {
         if let Some(w) = self.writer.as_mut() {
-            let _ = w.clear();
+            w.clear()?;
         }
         Ok(())
     }
@@ -382,6 +383,11 @@ mod tests {
         rec.clear().expect("clear");
         rec.flush().expect("flush");
         assert_eq!(read_file(&path), "");
+        // 复审 CI 回归：截断后续写必须从文件头开始（Windows append 句柄
+        // set_len 会 Access Denied，改 write+seek 后游标归零语义由此处钉死）
+        rec.write(&mk_line("after")).expect("write");
+        rec.flush().expect("flush");
+        assert_eq!(read_file(&path), "00:00:00.000\tRX\tafter\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
