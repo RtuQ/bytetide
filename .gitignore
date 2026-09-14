@@ -3,6 +3,8 @@ logs
 *.log
 # 演示样例日志是交付物，不随 *.log 忽略
 !sample-data/*.log
+# 测试黄金样本（Rust include_str! 与 TS useLogParser.test.ts 同源消费）
+!testdata/**/*.log
 # 跨特性验收规范输入（Stage 3 Task 8）：回放+场景共用 fixture 是交付物
 !tests/fixtures/*.log
 npm-debug.log*
