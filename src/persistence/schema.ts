@@ -8,6 +8,8 @@
  * read/migration——缺失/invalid 一律不落新值）。
  */
 
+import { parseScenarioLibraryEntry, type ScenarioLibraryEntry } from '../types/automation'
+
 /** 当前信封版本。未来引入 v2 时：+1，并在 migrations.ts 为每个 schema 注册 1→2 步。 */
 export const SCHEMA_VERSION = 1
 
@@ -54,3 +56,21 @@ export function isEnvelope(v: unknown): v is StoredEnvelope<unknown> {
     'data' in v
   )
 }
+
+// ---------------------------------------------------------------------------
+// 场景库 codec（Stage 3 Task 4）：localStorage 键 `serialtool.scenarios`，
+// 信封 schema 名 `bytetide.scenario-library`（plan 指定名，非「键去前缀」惯例），
+// v1 起步。形状校验委托 types/automation.ts 的结构守卫（与 JSON 导入共用）。
+// migrations 注册表未含此名——storage 层对未注册 schema 的 legacy 数据走
+// identity 链，行为等价（最终类型守门在本 codec.parse）。
+// ---------------------------------------------------------------------------
+
+export const SCENARIO_LIBRARY_SCHEMA = 'bytetide.scenario-library'
+
+export const scenarioLibraryCodec: Codec<ScenarioLibraryEntry[]> = makeCodec<ScenarioLibraryEntry[]>(
+  SCENARIO_LIBRARY_SCHEMA,
+  (raw) => {
+    if (!Array.isArray(raw)) throw new Error('invalid scenario library')
+    return raw.map(parseScenarioLibraryEntry)
+  },
+)

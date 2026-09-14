@@ -21,6 +21,27 @@ export type {
   StatusPayload,
 } from '../types'
 
+// 场景自动化域类型（Stage 3 Task 4）：单一事实来源在 types/automation.ts
+// （Rust serde 镜像），此处仅再导出供 ipc 层签名引用。
+export type {
+  CaptureSpec,
+  LineMatcher,
+  PinDef,
+  Scenario,
+  ScenarioErrorInfo,
+  ScenarioErrorCode,
+  ScenarioLibraryEntry,
+  ScenarioProgressPayload,
+  ScenarioProgressView,
+  ScenarioReportFormat,
+  ScenarioRunStatus,
+  ScenarioRunView,
+  ScenarioStep,
+  ScenarioStepKind,
+  ScenarioValidateSummary,
+  SendModeDef,
+} from '../types/automation'
+
 import type {
   AlertState,
   AutoReplyState,

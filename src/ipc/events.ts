@@ -10,6 +10,8 @@ import type {
   PlotConfig,
   PortInfo,
   ReplayView,
+  ScenarioProgressPayload,
+  ScenarioRunView,
   StatusPayload,
 } from './types'
 
@@ -54,6 +56,13 @@ export interface CaptureSavedPayload {
  *  EOF/Error 等无控制命令的变化由前端 replayStatus 轮询兜底） */
 export type ReplayStatePayload = ReplayView
 
+/** scenario-progress 载荷：每叶子步开始一条、稀疏（形状见 types/automation.ts）；
+ *  前端对未知/已逐出 runId 的迟到事件忽略 */
+export type ScenarioProgressEvent = ScenarioProgressPayload
+
+/** scenario-finished 载荷：恰一次，= ScenarioRunView */
+export type ScenarioFinishedEvent = ScenarioRunView
+
 /** 按业务域命名的事件订阅；工厂形式便于测试注入假 IpcClient */
 export function createEventSubscriptions(client: IpcClient) {
   return {
@@ -86,6 +95,12 @@ export function createEventSubscriptions(client: IpcClient) {
     onReplayState(handler: (payload: ReplayStatePayload) => void): Promise<Unlisten> {
       return client.listen<ReplayStatePayload>('replay-state', handler)
     },
+    onScenarioProgress(handler: (payload: ScenarioProgressEvent) => void): Promise<Unlisten> {
+      return client.listen<ScenarioProgressEvent>('scenario-progress', handler)
+    },
+    onScenarioFinished(handler: (payload: ScenarioFinishedEvent) => void): Promise<Unlisten> {
+      return client.listen<ScenarioFinishedEvent>('scenario-finished', handler)
+    },
   }
 }
 
@@ -102,6 +117,8 @@ export const onAlertHit = tauriEvents.onAlertHit
 export const onCaptureActive = tauriEvents.onCaptureActive
 export const onCaptureSaved = tauriEvents.onCaptureSaved
 export const onReplayState = tauriEvents.onReplayState
+export const onScenarioProgress = tauriEvents.onScenarioProgress
+export const onScenarioFinished = tauriEvents.onScenarioFinished
 
 /** 前端 → 后端单发事件；工厂形式便于测试注入 */
 export function createEmitter(client: IpcClient) {

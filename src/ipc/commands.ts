@@ -24,6 +24,10 @@ import type {
   ReplayOpenResult,
   ReplayView,
   RingBounds,
+  Scenario,
+  ScenarioReportFormat,
+  ScenarioRunView,
+  ScenarioValidateSummary,
   SendMode,
 } from './types'
 
@@ -98,6 +102,29 @@ export function createCommands(client: IpcClient) {
     /** 回放状态查询（前端轮询兜底：EOF/Error 等无控制命令的状态变化也可见） */
     replayStatus(sessionId: string): Promise<ReplayView> {
       return client.invoke<ReplayView>('replay_status_cmd', { sessionId })
+    },
+
+    // ---- 场景自动化（Stage 3 Task 3 / commands/automation.rs）----
+    /** 校验场景（不启动）：ok=false 时 error 携带稳定 code/path/message */
+    scenarioValidate(scenario: Scenario): Promise<ScenarioValidateSummary> {
+      return client.invoke<ScenarioValidateSummary>('scenario_validate_cmd', { scenario })
+    },
+    /** 启动场景：校验先行 → 会话守卫（缺失/离线/回放稳定文案）→ 返回 `run{N}`。
+     *  同一会话同时只允许一个运行中场景（后端拒绝，Err 带文案） */
+    scenarioStart(sessionId: string, scenario: Scenario): Promise<string> {
+      return client.invoke<string>('scenario_start_cmd', { sessionId, scenario })
+    },
+    /** 停止场景（幂等）：未知/已完成 runId no-op */
+    scenarioStop(runId: string): Promise<void> {
+      return client.invoke<void>('scenario_stop_cmd', { runId })
+    },
+    /** 运行状态查询（未知 runId 报「场景运行不存在」——前端对迟到/已逐出 run 的事件据此忽略） */
+    scenarioStatus(runId: string): Promise<ScenarioRunView> {
+      return client.invoke<ScenarioRunView>('scenario_status_cmd', { runId })
+    },
+    /** 报告获取：json=pretty JSON | junit=JUnit XML（未完成的 run 报「尚未完成」） */
+    scenarioReport(runId: string, format: ScenarioReportFormat): Promise<string> {
+      return client.invoke<string>('scenario_report_cmd', { runId, format })
     },
     setLiveRules(sessionId: string, rules: LiveRulesPayload): Promise<void> {
       return client.invoke<void>('set_live_rules_cmd', {

@@ -33,6 +33,7 @@ import KeywordPanel from './components/KeywordPanel.vue'
 import ParserPanel from './components/ParserPanel.vue'
 import AutoReplyPanel from './components/AutoReplyPanel.vue'
 import AlertPanel from './components/AlertPanel.vue'
+import ScenarioPanel from './components/ScenarioPanel.vue'
 import ConfigPresetsPanel from './components/ConfigPresetsPanel.vue'
 import PlotConfigPanel from './components/PlotConfigPanel.vue'
 import CapturePanel from './components/CapturePanel.vue'
@@ -323,6 +324,7 @@ function onPanelToggle(e: Event, id: string) {
         <ParserPanel :open="panel.isOpen('parser')" @toggle="onPanelToggle($event, 'parser')" />
         <AutoReplyPanel :open="panel.isOpen('autoreply')" @toggle="onPanelToggle($event, 'autoreply')" />
         <AlertPanel :open="panel.isOpen('alerts')" @toggle="onPanelToggle($event, 'alerts')" />
+        <ScenarioPanel :open="panel.isOpen('scenarios')" @toggle="onPanelToggle($event, 'scenarios')" />
 
         <div class="group-head">数据</div>
         <PlotConfigPanel :open="panel.isOpen('plot')" @toggle="onPanelToggle($event, 'plot')" />
