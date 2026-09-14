@@ -17,7 +17,7 @@
 pub mod model;
 pub mod runner;
 
-pub use model::{ReplayCmd, ReplayConfig, ReplayState};
+pub use model::{valid_speed, ReplayCmd, ReplayConfig, ReplayState};
 pub use runner::spawn_replay;
 
 #[cfg(test)]
@@ -30,7 +30,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use crate::replay::{ReplayCmd, ReplayConfig};
+    use crate::replay::{ReplayCmd, ReplayConfig, ReplayState};
     use crate::serial::manager::{PortManager, SendMode, SendRequest};
     use crate::serial::rules::{AlertCfg, AlertRuleCfg, AutoReplyCfg, CaptureCfg};
     use crate::sink::VecSink;
@@ -225,6 +225,44 @@ mod tests {
             .start_replay(&missing, fast_cfg(), sink, PathBuf::new())
             .is_err());
         assert!(m.bridge_list().is_empty(), "失败路径不留会话");
+    }
+
+    /// T7 控制面：replay_control 经 SessionHandle 持有的通道投递（命令层路径），
+    /// replay_view 返回状态 + 文件行号水位（ingest/seek 推进、暂停中 seek 只推水位）。
+    #[test]
+    fn manager_control_surface_replay_view_and_replay_control() {
+        let m = PortManager::new();
+        let sink = Arc::new(VecSink::default());
+        let (_g, path) = timed_log("surface");
+        let (id, _tx) = m
+            .start_replay(&path, fast_cfg(), sink, PathBuf::new())
+            .unwrap();
+        wait_until(2_000, || m.replay_state(&id) == Some(ReplayState::Running));
+        // 非回放会话 / 不存在：视图 None、控制拒绝
+        assert_eq!(m.replay_view("nope"), None);
+        assert_eq!(
+            m.replay_control("nope", ReplayCmd::Stop)
+                .unwrap_err()
+                .to_string(),
+            "会话不存在"
+        );
+        // 播到第 2 行（100ms 间隔）即暂停：控制面投递，非 start_replay 返回的 sender
+        wait_until(5_000, || matches!(m.replay_view(&id), Some((_, 2))));
+        m.replay_control(&id, ReplayCmd::Pause).unwrap();
+        wait_until(2_000, || m.replay_state(&id) == Some(ReplayState::Paused));
+        // 暂停中 seek(4)：水位=3（=目标-1，确定性——暂停中无 ingest 竞态）
+        m.replay_control(&id, ReplayCmd::SeekLine(4)).unwrap();
+        wait_until(2_000, || {
+            m.replay_view(&id) == Some((ReplayState::Paused, 3))
+        });
+        // 恢复 → 第 4 行立即入库（水位继续推进至 EOF=5）
+        m.replay_control(&id, ReplayCmd::Resume).unwrap();
+        wait_until(
+            5_000,
+            || matches!(m.replay_view(&id), Some((_, l)) if l >= 4),
+        );
+        m.disconnect(&id).unwrap();
+        assert_eq!(m.replay_view(&id), None, "会话移除后视图消失");
     }
 
     #[test]

@@ -126,6 +126,10 @@ pub struct SessionRuntime {
     /// 细粒度回放状态（仅回放会话：replay runner 写、manager 查询面读；
     /// 非回放会话恒 None，见 crate::replay::ReplayState）
     pub replay_state: Arc<RwLock<Option<ReplayState>>>,
+    /// 回放当前文件行号水位（最后已 ingest 的源文件行 no；seek 后未恢复=目标-1，
+    /// loop 回卷=0）。仅回放会话由 runner 写、manager 查询面读（T7 控制面进度），
+    /// 非回放会话恒 0。
+    pub replay_cursor: Arc<RwLock<u64>>,
     /// 告警窗口/冷却状态（每会话独占；原 stream_loop 栈上状态迁入——随会话生灭）
     alert_states: Mutex<HashMap<String, AlertWinState>>,
 }
@@ -145,6 +149,7 @@ impl SessionRuntime {
             alerts: Arc::new(RwLock::new(AlertCfg::default())),
             capture: Arc::new(RwLock::new(CaptureCfg::default())),
             replay_state: Arc::new(RwLock::new(None)),
+            replay_cursor: Arc::new(RwLock::new(0)),
             alert_states: Mutex::new(HashMap::new()),
         }
     }

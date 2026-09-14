@@ -233,6 +233,8 @@ impl ReplayRunner<'_> {
             // 结构性排除——见 SessionRuntime::ingest）
             let outcome = self.runtime.ingest(&line, IngestOrigin::Replay, self.sink);
             self.cursor += 1;
+            // 控制面进度水位（T7：manager 查询面 → ReplayView.line）
+            *self.runtime.replay_cursor.write() = self.cursor;
             self.page_idx += 1;
             self.prev_epoch = Some(line.epoch_millis);
             self.deadline = None;
@@ -260,6 +262,8 @@ impl ReplayRunner<'_> {
                 if self.looped {
                     self.runtime.ring.clear();
                     self.cursor = 0;
+                    // 控制面进度水位同步回卷（下一轮 ingest 再推进）
+                    *self.runtime.replay_cursor.write() = 0;
                     self.prev_epoch = None;
                     self.deadline = None;
                     self.clock.sleep_ms(SLICE_MS);
@@ -393,6 +397,8 @@ impl ReplayRunner<'_> {
             Ok(page) => {
                 self.runtime.ring.clear();
                 self.cursor = target - 1;
+                // 控制面进度水位=目标-1（恢复/运行中 ingest 下一行后再推进）
+                *self.runtime.replay_cursor.write() = self.cursor;
                 self.page = page;
                 self.page_idx = 0;
                 self.prev_epoch = None;
