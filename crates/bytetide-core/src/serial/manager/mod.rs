@@ -886,6 +886,5 @@ impl PortManager {
     }
 }
 
-
 #[cfg(test)]
 mod tests;
