@@ -50,7 +50,10 @@ use bytetide_core::sink::VecSink;
 // ============ 参数 ============
 
 fn env_u64(key: &str, default: u64) -> u64 {
-    std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 
 struct SoakParams {
@@ -225,7 +228,10 @@ fn replay_soak_rings_and_events_stay_bounded() {
     // 前面，scan 游标不能作锚）
     let pause_and_freeze = |tx: &std::sync::mpsc::Sender<ReplayCmd>| {
         tx.send(ReplayCmd::Pause).unwrap();
-        while m.replay_view(&id).is_none_or(|(s, _)| s != ReplayState::Paused) {
+        while m
+            .replay_view(&id)
+            .is_none_or(|(s, _)| s != ReplayState::Paused)
+        {
             assert!(t0.elapsed() < Duration::from_secs(5), "pause 未生效");
             std::thread::sleep(Duration::from_millis(1));
         }
@@ -334,7 +340,10 @@ fn replay_soak_rings_and_events_stay_bounded() {
         err(m.set_signal(&id, Pin::Dtr, true).unwrap_err()),
         "回放会话不支持信号线"
     );
-    assert_eq!(err(m.set_recording(&id, true).unwrap_err()), "回放会话不支持落盘");
+    assert_eq!(
+        err(m.set_recording(&id, true).unwrap_err()),
+        "回放会话不支持落盘"
+    );
     assert_eq!(err(m.rotate_log(&id).unwrap_err()), "回放会话不支持落盘");
 
     // 摘要（脚本采集：SOAK_SUMMARY {json}）
@@ -380,4 +389,3 @@ fn overheat_rule() -> AlertCfg {
         }],
     }
 }
-

@@ -259,8 +259,14 @@ fn canonical_pair_report_matches_shared_expectations_on_desktop() {
 
     let registry = AutomationRegistry::default();
     let events = EventLog::default();
-    let run = start_scenario(&registry, &m, &id, canonical_scenario(), recording_emit(events.clone()))
-        .expect("start scenario");
+    let run = start_scenario(
+        &registry,
+        &m,
+        &id,
+        canonical_scenario(),
+        recording_emit(events.clone()),
+    )
+    .expect("start scenario");
     // 放行门：首个 scenario-progress 事件意味着 runner 已取基线（baseline 先于
     // 首步执行）——首批行此后才入 ring，wait[0] 必然可见（零竞态）
     wait_until(5_000, || {
@@ -288,7 +294,10 @@ fn canonical_pair_report_matches_shared_expectations_on_desktop() {
     assert_eq!(normalized_report(&parsed), expected_live_report());
     // JUnit：7 用例全过、无 failure
     let junit = registry.report(&run, "junit").expect("junit report");
-    assert!(junit.contains(r#"<testsuite name="replay-validation""#), "{junit}");
+    assert!(
+        junit.contains(r#"<testsuite name="replay-validation""#),
+        "{junit}"
+    );
     assert_eq!(junit.matches("<testcase").count(), 7);
     assert!(!junit.contains("<failure"), "{junit}");
     // 完成事件恰一次
@@ -328,9 +337,7 @@ fn readonly_scenario_runs_against_replay_session_and_hits_replayed_lines() {
         )
         .expect("start replay");
     assert_eq!(index.line_count, 12);
-    wait_until(10_000, || {
-        m.replay_view(&id).is_some_and(|(_, w)| w >= 8)
-    });
+    wait_until(10_000, || m.replay_view(&id).is_some_and(|(_, w)| w >= 8));
 
     let scenario: Scenario =
         serde_json::from_str(replay_readonly_scenario_json()).expect("readonly scenario");
@@ -347,7 +354,10 @@ fn readonly_scenario_runs_against_replay_session_and_hits_replayed_lines() {
 
     let json = registry.report(&run, "json").expect("json report");
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("report json parses");
-    assert_eq!(normalized_report(&parsed), expected_replay_readonly_report());
+    assert_eq!(
+        normalized_report(&parsed),
+        expected_replay_readonly_report()
+    );
 
     m.disconnect(&id).expect("disconnect");
 }

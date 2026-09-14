@@ -32,8 +32,8 @@ use bytetide_core::automation::{
 use bytetide_core::replay::{ReplayCmd, ReplayConfig, ReplayState};
 use bytetide_core::serial::manager::{BridgeLine, Pin, SendMode, SendRequest};
 use bytetide_core::serial::port::Dir;
-use bytetide_core::serial::rules::{AlertCfg, AlertRuleCfg, AutoReplyCfg, CaptureCfg};
 use bytetide_core::serial::ring::RING_CAP;
+use bytetide_core::serial::rules::{AlertCfg, AlertRuleCfg, AutoReplyCfg, CaptureCfg};
 use bytetide_core::serial::PortManager;
 use bytetide_core::sink::VecSink;
 
@@ -102,7 +102,10 @@ fn normalized_report(v: &serde_json::Value) -> serde_json::Value {
     for k in ["started_epoch_ms", "finished_epoch_ms", "duration_ms"] {
         obj.remove(k);
     }
-    let steps = obj.get_mut("steps").and_then(|s| s.as_array_mut()).expect("steps");
+    let steps = obj
+        .get_mut("steps")
+        .and_then(|s| s.as_array_mut())
+        .expect("steps");
     for st in steps {
         if let Some(s) = st.as_object_mut() {
             s.remove("started_epoch_ms");
@@ -266,7 +269,11 @@ impl ScenarioHost for DialogueHost {
         Ok(())
     }
 
-    fn signal(&mut self, _pin: bytetide_core::automation::PinDef, _level: bool) -> Result<(), HostError> {
+    fn signal(
+        &mut self,
+        _pin: bytetide_core::automation::PinDef,
+        _level: bool,
+    ) -> Result<(), HostError> {
         Err(HostError::Transport("对话镜像无信号线".into()))
     }
 
@@ -302,12 +309,18 @@ fn canonical_pair_report_matches_shared_expectations_in_core() {
     let cancel = AtomicBool::new(false);
     let report = run_scenario(&scenario, &mut host, &cancel);
 
-    assert_eq!(report.status, bytetide_core::automation::ScenarioStatus::Passed);
+    assert_eq!(
+        report.status,
+        bytetide_core::automation::ScenarioStatus::Passed
+    );
     // send 步收到的实参：变量替换 + 换行追加（捕获→引用链路在 core 侧的直接证据）
     assert_eq!(host.sent, vec!["CAP?".to_string(), "SET 1234".to_string()]);
     // 类型化断言（路径序 / 命中行号 / 捕获变量）
     let kinds: Vec<&'static str> = report.steps.iter().map(|s| s.kind).collect();
-    assert_eq!(kinds, ["wait", "send", "wait", "send", "wait", "wait", "assert"]);
+    assert_eq!(
+        kinds,
+        ["wait", "send", "wait", "send", "wait", "wait", "assert"]
+    );
     let paths: Vec<&str> = report.steps.iter().map(|s| s.path.as_str()).collect();
     assert_eq!(
         paths,
@@ -318,15 +331,22 @@ fn canonical_pair_report_matches_shared_expectations_in_core() {
         matched,
         [Some(1), None, Some(5), None, Some(7), Some(11), Some(7)]
     );
-    assert_eq!(report.variables.get("value").map(String::as_str), Some("1234"));
+    assert_eq!(
+        report.variables.get("value").map(String::as_str),
+        Some("1234")
+    );
 
     // JSON 报告与三端同源期望归一化后逐字段一致
-    let json: serde_json::Value = serde_json::from_str(&report_json(&report).expect("json")).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&report_json(&report).expect("json")).unwrap();
     assert_eq!(normalized_report(&json), expected_live_report());
     // 假钟下报告确定性：同输入重跑逐字节相同
     let mut host2 = DialogueHost::new(load_fixture_lines());
     let report2 = run_scenario(&scenario, &mut host2, &cancel);
-    assert_eq!(report_json(&report).unwrap(), report_json(&report2).unwrap());
+    assert_eq!(
+        report_json(&report).unwrap(),
+        report_json(&report2).unwrap()
+    );
 }
 
 // ============ Step 3：回放管线（ingest → ring → 告警 → 守卫 → 只读场景） ============
@@ -362,9 +382,10 @@ fn replay_pipeline_ingests_fixture_raises_alerts_and_guards() {
     // 行 1..=8 在 ~35ms 内播完、行 7 前的累计仅 ~25ms——Pause 在起跑后数 ms 内
     // 落地，水位必 ≤8；若 CI 极端迟滞导致 >8 则这里先红（可见失败，不静默）
     tx.send(ReplayCmd::Pause).unwrap();
-    wait_until(2_000, || {
-        matches!(m.replay_view(&id), Some((ReplayState::Paused, w)) if w <= 8)
-    });
+    wait_until(
+        2_000,
+        || matches!(m.replay_view(&id), Some((ReplayState::Paused, w)) if w <= 8),
+    );
     m.set_live_rules(
         &id,
         AutoReplyCfg::default(),
@@ -392,12 +413,18 @@ fn replay_pipeline_ingests_fixture_raises_alerts_and_guards() {
     let lines = load_fixture_lines();
     wait_until(10_000, || m.bridge_last_no(&id) == Some(12));
     let ring = m.ring_lines_after_no(&id, 0, 100).unwrap();
-    assert_eq!(ring.iter().map(|l| l.no).collect::<Vec<_>>(), (1..=12).collect::<Vec<_>>());
+    assert_eq!(
+        ring.iter().map(|l| l.no).collect::<Vec<_>>(),
+        (1..=12).collect::<Vec<_>>()
+    );
     for (l, f) in ring.iter().zip(&lines) {
         assert_eq!(l.text, f.text, "行序保持原文件序");
         assert_eq!(l.dir, f.dir);
     }
-    assert_eq!(ring[8].ts, "00:00:25.000", ">10s gap 后行 ts 保原值（钳制只作用于睡眠）");
+    assert_eq!(
+        ring[8].ts, "00:00:25.000",
+        ">10s gap 后行 ts 保原值（钳制只作用于睡眠）"
+    );
     // 告警经 common ingest 评估并稀疏上报（fixture 行 7 = WARN temperature）
     wait_until(2_000, || {
         sink.0
@@ -424,8 +451,14 @@ fn replay_pipeline_ingests_fixture_raises_alerts_and_guards() {
         err(m.set_signal(&id, Pin::Dtr, true).unwrap_err()),
         "回放会话不支持信号线"
     );
-    assert_eq!(err(m.set_recording(&id, true).unwrap_err()), "回放会话不支持落盘");
-    assert_eq!(err(m.set_recording(&id, false).unwrap_err()), "回放会话不支持落盘");
+    assert_eq!(
+        err(m.set_recording(&id, true).unwrap_err()),
+        "回放会话不支持落盘"
+    );
+    assert_eq!(
+        err(m.set_recording(&id, false).unwrap_err()),
+        "回放会话不支持落盘"
+    );
     assert_eq!(err(m.rotate_log(&id).unwrap_err()), "回放会话不支持落盘");
 
     // ring 上限字段可达（soak 断言的同源口径）
@@ -446,7 +479,11 @@ impl ScenarioHost for ManagerHost<'_> {
     fn send(&mut self, _mode: SendModeDef, _text: &str) -> Result<(), HostError> {
         Err(HostError::Transport("回放会话不支持发送".into()))
     }
-    fn signal(&mut self, _pin: bytetide_core::automation::PinDef, _level: bool) -> Result<(), HostError> {
+    fn signal(
+        &mut self,
+        _pin: bytetide_core::automation::PinDef,
+        _level: bool,
+    ) -> Result<(), HostError> {
         Err(HostError::Transport("回放会话不支持信号线".into()))
     }
     fn last_no(&self) -> u64 {
@@ -496,14 +533,15 @@ fn readonly_scenario_waits_and_asserts_hit_replay_produced_lines() {
             PathBuf::new(),
         )
         .expect("start replay");
-    wait_until(10_000, || {
-        m.replay_view(&id).is_some_and(|(_, w)| w >= 8)
-    });
+    wait_until(10_000, || m.replay_view(&id).is_some_and(|(_, w)| w >= 8));
 
     let scenario: ValidatedScenario =
         validate_scenario(serde_json::from_str(replay_readonly_scenario()).expect("json"))
             .expect("validate");
-    let mut host = ManagerHost { m: &m, id: id.clone() };
+    let mut host = ManagerHost {
+        m: &m,
+        id: id.clone(),
+    };
     let cancel = AtomicBool::new(false);
     let report = run_scenario(&scenario, &mut host, &cancel);
 
@@ -513,7 +551,8 @@ fn readonly_scenario_waits_and_asserts_hit_replay_produced_lines() {
             m.bridge_last_no(&id)
         );
     }
-    let json: serde_json::Value = serde_json::from_str(&report_json(&report).expect("json")).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&report_json(&report).expect("json")).unwrap();
     assert_eq!(normalized_report(&json), expected_replay_readonly_report());
 
     m.disconnect(&id).expect("disconnect");

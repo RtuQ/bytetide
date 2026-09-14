@@ -158,13 +158,21 @@ fn canonical_pair_report_matches_shared_expectations_via_cli() {
         "--report",
         "-",
     ]);
-    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     // stdout = 报告（--report -）；进度只在 stderr
     let stdout = String::from_utf8(out.stdout).expect("stdout utf8");
     let stderr = String::from_utf8(out.stderr).expect("stderr utf8");
     assert!(!stderr.contains("FAILED"), "stderr: {stderr}");
-    assert!(stderr.contains("replay-validation"), "stderr 摘要: {stderr}");
+    assert!(
+        stderr.contains("replay-validation"),
+        "stderr 摘要: {stderr}"
+    );
     assert!(stderr.contains("[7/7] assert"), "stderr 进度: {stderr}");
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is report json");
     assert_eq!(
