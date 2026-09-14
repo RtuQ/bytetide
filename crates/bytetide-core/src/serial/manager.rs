@@ -292,11 +292,24 @@ impl PortManager {
         sink: Arc<dyn EventSink>,
         _sessions_dir: PathBuf,
     ) -> anyhow::Result<(String, mpsc::Sender<ReplayCmd>)> {
+        self.start_replay_indexed(path, replay_config, sink, _sessions_dir)
+            .map(|(id, tx, _)| (id, tx))
+    }
+
+    /// [`Self::start_replay`] 的完整版：同时返回离线索引摘要（行数与首末行 epoch
+    /// 毫秒——前端回放工具条的总行数/时长来源，T7 命令层入口）。
+    pub fn start_replay_indexed(
+        &self,
+        path: &Path,
+        replay_config: ReplayConfig,
+        sink: Arc<dyn EventSink>,
+        _sessions_dir: PathBuf,
+    ) -> anyhow::Result<(String, mpsc::Sender<ReplayCmd>, OfflineIndex)> {
         // 非法速度执行前失败（不建会话、不 spawn 线程）
         replay_config
             .validate()
             .map_err(|e| anyhow::anyhow!("回放配置非法: {e}"))?;
-        let (_, reader) = open_offline(path)?;
+        let (index, reader) = open_offline(path)?;
         let id = format!("r{}", self.next_id.fetch_add(1, Ordering::Relaxed));
         let runtime = Arc::new(SessionRuntime::new());
         // 回放线程起跑即置 Running/connected；Ready 只覆盖 spawn 前的瞬态
@@ -338,7 +351,42 @@ impl PortManager {
                 replay_tx: Some(cmd_tx.clone()),
             },
         );
-        Ok((id, cmd_tx))
+        Ok((id, cmd_tx, index))
+    }
+
+    /// 回放控制命令投递（仅 Replay 会话；非回放/不存在报稳定错误）。命令异步生效
+    /// （runner ≤50ms 排水），调用方经 [`Self::replay_view`] 轮询到位。
+    /// T7 命令层入口：SessionHandle 已持有控制通道（T6），此处只补公开路由面。
+    pub fn replay_control(&self, id: &str, cmd: ReplayCmd) -> anyhow::Result<()> {
+        let sessions = self.sessions.read();
+        let h = sessions
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        if !matches!(h.kind, SessionKind::Replay) {
+            return Err(anyhow::anyhow!("非回放会话"));
+        }
+        let tx = h
+            .replay_tx
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("回放控制通道不可用"))?;
+        drop(sessions);
+        tx.send(cmd)
+            .map_err(|_| anyhow::anyhow!("回放控制通道已关闭"))?;
+        Ok(())
+    }
+
+    /// 回放控制面视图：细粒度状态 + 当前文件行号水位（最后已 ingest 的源文件行；
+    /// seek 后未恢复=目标-1，loop 回卷=0）。非回放会话/不存在返回 None
+    /// （T7 命令层据此报「会话不存在或非回放会话」）。
+    pub fn replay_view(&self, id: &str) -> Option<(ReplayState, u64)> {
+        let sessions = self.sessions.read();
+        let h = sessions.get(id)?;
+        if !matches!(h.kind, SessionKind::Replay) {
+            return None;
+        }
+        let state = (*h.runtime.replay_state.read())?;
+        let line = *h.runtime.replay_cursor.read();
+        Some((state, line))
     }
 
     pub fn disconnect(&self, id: &str) -> anyhow::Result<()> {
@@ -438,6 +486,16 @@ impl PortManager {
                 (id.clone(), lag, len, h.runtime.ring.rx_lines())
             })
             .collect()
+    }
+
+    /// 会话模式（场景启动守卫用，Stage 3 Task 3）：live 可跑场景；offline/replay
+    /// 与不存在分别返回对应值——`None`=会话不存在。
+    pub fn session_mode(&self, id: &str) -> Option<&'static str> {
+        self.sessions.read().get(id).map(|h| match h.kind {
+            SessionKind::Live => "live",
+            SessionKind::Offline => "offline",
+            SessionKind::Replay => "replay",
+        })
     }
 
     /// 游标补拉：返回 ring 中 `no > since_no` 的行（前端视图拉模型的数据通道）。

@@ -150,8 +150,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(AppState {
-            manager: bytetide_core::serial::PortManager::new(),
+            manager: std::sync::Arc::new(bytetide_core::serial::PortManager::new()),
             replays: commands::ReplayRegistry::default(),
+            automation: commands::AutomationRegistry::default(),
         })
         .setup(|app| {
             let handle = app.handle().clone();
@@ -204,6 +205,11 @@ pub fn run() {
             commands::open_replay_session_cmd,
             commands::replay_control_cmd,
             commands::replay_status_cmd,
+            commands::scenario_validate_cmd,
+            commands::scenario_start_cmd,
+            commands::scenario_stop_cmd,
+            commands::scenario_status_cmd,
+            commands::scenario_report_cmd,
             commands::bridge_get_config_cmd,
             commands::bridge_set_config_cmd,
             commands::bridge_regen_token_cmd,

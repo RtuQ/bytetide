@@ -42,10 +42,10 @@ pub fn connect_cmd(
 
 #[tauri::command]
 pub fn disconnect_cmd(session_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let result = state
-        .manager
-        .disconnect(&session_id)
-        .map_err(|e| e.to_string());
+    // 先取消该会话运行中的场景（join 运行线程，cancelled 收场）再断开
+    //（共用路径见 commands/automation.rs，集成测试覆盖取消语义）
+    let result =
+        super::automation::cancel_and_disconnect(&state.automation, &state.manager, &session_id);
     // 回放会话镜像随会话移除（speed/looped 登记，见 commands/replay.rs）
     state.replays.forget(&session_id);
     result
