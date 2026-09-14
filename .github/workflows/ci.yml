@@ -47,6 +47,11 @@ jobs:
       - name: Bridge route tests
         run: cargo test -p serial_tool --test bridge_routes
 
+      # 回放 soak 快版（#[ignore] 虚拟时钟测试，只跑该文件的 ignored——真实 30
+      # 分钟 soak 走 scripts/soak-replay.mjs --real 本地显式跑，不进 CI）
+      - name: Replay soak (quick)
+        run: cargo test -p bytetide-core --test replay_soak -- --ignored
+
       - name: Rust check
         run: cargo check --workspace
 
@@ -65,3 +70,7 @@ jobs:
 
       - name: Frontend tests
         run: npm test
+
+      # 组件测试（jsdom + @vue/test-utils，独立 vitest project）
+      - name: Component tests
+        run: npm run test:components

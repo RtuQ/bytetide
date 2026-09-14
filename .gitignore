@@ -3,6 +3,8 @@ logs
 *.log
 # 演示样例日志是交付物，不随 *.log 忽略
 !sample-data/*.log
+# 跨特性验收规范输入（Stage 3 Task 8）：回放+场景共用 fixture 是交付物
+!tests/fixtures/*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

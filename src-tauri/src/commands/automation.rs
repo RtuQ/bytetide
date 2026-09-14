@@ -151,17 +151,32 @@ pub fn validate_summary(scenario: Scenario) -> ValidatedScenarioSummary {
     }
 }
 
-/// 场景启动会话守卫：仅 live 会话可跑（send/信号线可用）；缺失/离线/回放分别
-/// 报稳定文案（命令层与集成测试共用路径）。
-pub fn ensure_session_runnable(manager: &PortManager, session_id: &str) -> Result<(), String> {
+/// 场景启动会话守卫（Task 8 Step 3 放宽）：live 会话全步型可跑；offline 无条件
+/// 拒绝；replay 仅当场景含 send/signal 步（含 Repeat 体）时拒绝——回放只读，
+/// wait/assert/delay/repeat 对回放产生的行有效（plan Stage 3 里程碑「scenario
+/// wait/assert behavior works against replay」）。命令层与集成测试共用路径。
+pub fn ensure_session_runnable(
+    manager: &PortManager,
+    session_id: &str,
+    steps: &[ValidatedStep],
+) -> Result<(), String> {
     let Some(mode) = manager.session_mode(session_id) else {
         return Err("会话不存在".to_string());
     };
     match mode {
         "offline" => Err("离线会话不支持场景".to_string()),
-        "replay" => Err("回放会话不支持场景".to_string()),
+        "replay" if contains_device_steps(steps) => Err("回放会话不支持发送步骤".to_string()),
         _ => Ok(()),
     }
+}
+
+/// 场景是否含发送面步骤（send/signal，穿透 Repeat 体）——回放会话拒绝的唯一判据。
+fn contains_device_steps(steps: &[ValidatedStep]) -> bool {
+    steps.iter().any(|s| match s {
+        ValidatedStep::Send { .. } | ValidatedStep::Signal { .. } => true,
+        ValidatedStep::Repeat { steps, .. } => contains_device_steps(steps),
+        _ => false,
+    })
 }
 
 /// 断开会话：先取消该会话运行中的场景（join 运行线程，保证 cancelled 收场与
@@ -186,7 +201,7 @@ pub fn start_scenario(
     emit: EmitFn,
 ) -> Result<String, String> {
     let validated = validate_scenario(scenario).map_err(|e| format!("场景校验失败: {e}"))?;
-    ensure_session_runnable(manager, session_id)?;
+    ensure_session_runnable(manager, session_id, &validated.steps)?;
     registry.start(session_id, validated, manager.clone(), emit)
 }
 

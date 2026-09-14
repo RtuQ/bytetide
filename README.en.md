@@ -84,6 +84,8 @@ Built with Tauri 2 + Vue 3 + Rust. Capture and rule evaluation run in Rust, so r
 - **Line bookmarks**: `Ctrl+F2` / `Ctrl+B`, managed from the sidebar
 - **Config presets**: save filter chains / keywords / auto-replies / frame formats as named presets; import and export the whole library as JSON for team sharing
 - **Incident capture**: keywords, alerts, or disconnects trigger a flight-recorder archive containing configurable pre/post windows; repeated triggers extend the same capture
+- **Scenario automation**: versioned JSON scenarios (send / delay / signal / wait+capture / assert / repeat) drive the device and verify its responses; the desktop workbench and the CLI (`bytetide run`) share one engine with equivalent reports, and JSON / JUnit output plugs straight into CI — see [docs/automation-scenarios.md](./docs/automation-scenarios.md)
+- **Timed replay**: replay an offline log as a pseudo-live session at 0.1–100x speed with looping and seeking; parsing / plots / search / alerts / compare all work on the replayed stream while send-side operations are safely disabled — see [docs/replay.md](./docs/replay.md)
 
 ### Protocol parsing
 

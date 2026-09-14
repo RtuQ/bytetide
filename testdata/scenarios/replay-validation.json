@@ -1,0 +1,15 @@
+{
+  "schema": "bytetide.scenario",
+  "version": 1,
+  "name": "replay-validation",
+  "variables": {},
+  "steps": [
+    { "kind": "wait", "matcher": { "dir": "rx", "literal": "DEVICE READY" }, "timeoutMs": 10000 },
+    { "kind": "send", "mode": "ascii", "text": "CAP?", "appendNewline": true },
+    { "kind": "wait", "matcher": { "dir": "rx", "regex": "VALUE=([0-9]{4})" }, "timeoutMs": 10000, "save": { "variable": "value", "group": 1 } },
+    { "kind": "send", "mode": "ascii", "text": "SET ${value}", "appendNewline": true },
+    { "kind": "wait", "matcher": { "dir": "rx", "literal": "ACK SET" }, "timeoutMs": 10000 },
+    { "kind": "wait", "matcher": { "dir": "rx", "literal": "ALL CHECKS DONE" }, "timeoutMs": 10000 },
+    { "kind": "assert", "matcher": { "dir": "rx", "literal": "ACK SET 1234" }, "withinLast": 10, "message": "ack seen; captured VALUE=${value}" }
+  ]
+}

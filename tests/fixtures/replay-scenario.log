@@ -1,0 +1,42 @@
+# ByteTide 跨特性验收规范输入（Stage 3 Task 8 Step 1）——回放与场景自动化共用。
+# 格式：TSV `ts<tab>dir<tab>raw`（text 可含 tab，解析只按前两个 tab 切）；
+# `#` 头注释与空行被解析跳过、不占行号；无 tab 坏行不占行号。
+#
+# 二进制行说明：TSV 落盘是 lossy 文本（非法 UTF-8 落盘时已成 U+FFFD，原始字节
+# 不落盘），TSV 格式无法表达原始字节——故本 fixture 以「lossy 行」覆盖二进制
+# 语义（回放解析后 bytes=None，HEX 直发/字节匹配的原始 bytes 路径由实时行单测
+# 覆盖，见 offline::tests::classify_invalid_utf8_carries_text_column_bytes）。
+#
+# 绘图兼容：`AA 01 ...` / `55 02 ...` 为 ASCII-Hex 文本帧——前端 plot 二进制源
+# 用 ascii-hex 模式消费这类文本帧；core hex 匹配器对无 bytes 行回退
+# text.as_bytes()，本 fixture 的 hex 帧因此可直接被场景 hex matcher 命中。
+#
+# 时间 gap：数据行 9（00:00:25.000）与数据行 8（00:00:00.350）相差 24.65s
+# > 10s——回放 gap 钳制样本（默认钳到 10s 再按速度缩放）。
+#
+# 数据行共 12 行（按序占 ring no 1..=12；live 三端对话模式下另有 2 条 send 回显，
+# 见 cross_feature 测试注释）：
+#  1 RX DEVICE READY                     场景 wait[0] 目标（live/replay 通用）
+#  2 RX AA 01 4F 3D 7F 00 92             绘图 ASCII-Hex 帧 A
+#  3 RX binary lossy: <U+FFFD>...        二进制 lossy 行
+#  4 RX VALUE=1234                       变量捕获样本（live 端是 CAP? 探测的应答）
+#  5 TX SET 1234                         历史 TX 行（live 端由场景 send 回显天然重现）
+#  6 RX ACK SET 1234                     send 引用变量后的应答（wait[4]/assert 目标）
+#  7 RX WARN temperature 87C threshold   告警命中样本（回放管线 alert-hit）
+#  8 RX 55 02 10 99 4E                   绘图 ASCII-Hex 帧 B
+#  9 RX RESUME AFTER IDLE GAP            >10s gap 后首行（回放只读场景 wait 目标）
+# 10 RX ALL CHECKS DONE                  收尾检查点
+# 11 RX tail padding line A              断言回看窗口样本
+# 12 RX tail padding line B
+00:00:00.000	RX	DEVICE READY
+00:00:00.050	RX	AA 01 4F 3D 7F 00 92
+00:00:00.100	RX	binary lossy: ��frame-tail OK�
+00:00:00.150	RX	VALUE=1234
+00:00:00.200	TX	SET 1234
+00:00:00.250	RX	ACK SET 1234
+00:00:00.300	RX	WARN temperature 87C threshold
+00:00:00.350	RX	55 02 10 99 4E
+00:00:25.000	RX	RESUME AFTER IDLE GAP
+00:00:25.050	RX	ALL CHECKS DONE
+00:00:25.100	RX	tail padding line A
+00:00:25.150	RX	tail padding line B

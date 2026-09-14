@@ -234,7 +234,8 @@ fn start_rejects_invalid_scenario_and_forbidden_sessions() {
     let err = start_scenario(&registry, &m, &off, ping_pong_scenario(), noop_emit()).unwrap_err();
     assert_eq!(err, "离线会话不支持场景");
 
-    // 回放会话拒绝
+    // 回放会话 + 含 send 步场景拒绝（Task 8 Step 3 放宽后：只读场景可跑、
+    // 发送面步骤仍拒——语义见 tests/cross_feature.rs 的回放只读用例）
     let dir = temp_dir("replay-reject");
     let path = write_log(dir.0.as_path(), "r.log", 3);
     let (rid, _tx) = m
@@ -246,7 +247,7 @@ fn start_rejects_invalid_scenario_and_forbidden_sessions() {
         )
         .expect("start replay");
     let err = start_scenario(&registry, &m, &rid, ping_pong_scenario(), noop_emit()).unwrap_err();
-    assert_eq!(err, "回放会话不支持场景");
+    assert_eq!(err, "回放会话不支持发送步骤");
 
     // live 会话放行
     let live = start_echo_session(&m);
