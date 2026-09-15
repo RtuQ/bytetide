@@ -6,7 +6,9 @@ import { isPermissionGranted, requestPermission, sendNotification } from '@tauri
 import { recordBatch } from './usePerfWatch'
 import { setupBridgeSync } from './useBridgeSync'
 import { feedParser } from './useParserEngine'
-import { connectionErrorHint, toast } from './useToast'
+import { connectionErrorHint, dismissByTag, toast } from './useToast'
+import { useNotificationPrefs } from './useNotificationPrefs'
+import { consumePortDiff, describePort } from './usePortNotifications'
 import { commands } from '../ipc/commands'
 import {
   onAlertHit,
@@ -254,9 +256,11 @@ export async function setupEvents(): Promise<Unlisten[]> {
   }, PULL_INTERVAL_MS)
   unlistens.push(() => window.clearInterval(timer))
 
-  // 会话状态：live 的连接/断开 toast 提示；replay 的状态事件不打连接 toast
-  //（起跑 connected / EOF·停止 disconnected 对回放语义是「回放中/已播完」，
-  // 用 ReplayControls 的状态标签表达），断开时最终补拉收尾（丢尾批修复）
+  // 会话状态：live 的连接/断开 toast 提示（通知重设计 v2：断开升级 warning + 6s +
+  // 'disconnect' tag，重连成功时按 tag 收掉未过期的断开提示）；replay 的状态事件不打
+  // 连接 toast（起跑 connected / EOF·停止 disconnected 对回放语义是「回放中/已播完」，
+  // 用 ReplayControls 的状态标签表达），断开时最终补拉收尾（丢尾批修复，不受开关门控）
+  const notif = useNotificationPrefs().prefs
   unlistens.push(
     await onSessionStatus((p) => {
       store.setStatus(p.sessionId, p.status)
@@ -265,9 +269,14 @@ export async function setupEvents(): Promise<Unlisten[]> {
         if (p.status === 'disconnected') void drainSessionTail(p.sessionId)
         return
       }
-      if (p.status === 'connected') toast('连接成功', 'success', 2600, session?.config.name)
-      if (p.status === 'disconnected') toast('连接已断开', 'info', 2600, session?.config.name)
-      if (p.status === 'disconnected') void drainSessionTail(p.sessionId)
+      if (p.status === 'connected' && notif.enabled) {
+        dismissByTag('disconnect')
+        toast('连接成功', 'success', 2600, session?.config.name)
+      }
+      if (p.status === 'disconnected') {
+        if (notif.enabled) toast('连接已断开', 'warning', 6000, session?.config.name, 'disconnect')
+        void drainSessionTail(p.sessionId)
+      }
     }),
   )
   unlistens.push(
@@ -281,6 +290,13 @@ export async function setupEvents(): Promise<Unlisten[]> {
   unlistens.push(
     await onPortChanged((ports) => {
       store.setPorts(ports)
+      // 热插拔通知（通知重设计 v2）：后端轮询 diff 不带方向，前端对前后列表求差；
+      // 首帧只建基线（启动时已插着的端口不刷「已接入」），开关在设置弹层「通知」分组
+      const diff = consumePortDiff(ports)
+      if (!diff) return
+      if (!notif.enabled) return
+      for (const p of diff.arrived) toast(`串口已接入 · ${p.name}`, 'success', 3200, describePort(p))
+      for (const p of diff.removed) toast(`串口已移除 · ${p.name}`, 'warning', 4200, describePort(p))
     }),
   )
   // REST 桥写回绘图文法（POST /plot-config）：前端即时采纳，绘图面板与曲线同步刷新

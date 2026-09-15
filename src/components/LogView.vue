@@ -9,6 +9,7 @@ import { HIGHLIGHTER_KEY, buildTestMatcher, hlStyle } from '../composables/useHi
 import { parseAnsi, stripAnsi, type AnsiStyle } from '../composables/useAnsi'
 import { anchoredTop } from '../composables/useScrollAnchor'
 import { lineHexDump, lineHexLen } from '../composables/useHexDump'
+import { selectionTextWithin } from '../composables/selectionText'
 import { lineBytes } from '../parser/lineBytes'
 import { humanizeMs } from '../composables/useRate'
 import { requestBackfill } from '../composables/useTauriEvents'
@@ -52,7 +53,9 @@ function segStyle(seg: RowSeg) {
 const matchSet = computed(() => new Set(stats.value.matchLines))
 
 // ---------- 行右键菜单：重发此帧 / 复制 ----------
-const ctx = ref<{ x: number; y: number; line: LogLine } | null>(null)
+// selText：打开菜单瞬间的划选快照（点击菜单项时浏览器已清掉 DOM 选区）；
+// 有划选时「复制文本」= 所选片段（跨行拼接），否则回落整行
+const ctx = ref<{ x: number; y: number; line: LogLine; selText: string | null } | null>(null)
 const canSendCtx = computed(() => {
   const s = session.value
   return !!s && s.kind === 'live' && s.status === 'connected'
@@ -62,6 +65,7 @@ function openCtx(e: MouseEvent, line: LogLine) {
     x: Math.min(e.clientX, window.innerWidth - 170),
     y: Math.min(e.clientY, window.innerHeight - 120),
     line,
+    selText: selectionTextWithin(window.getSelection(), scroller.value?.el ?? null),
   }
 }
 function closeCtx() {
@@ -86,7 +90,7 @@ function resendLine() {
 async function copyCtx(kind: 'text' | 'hex') {
   const c = ctx.value
   if (!c) return
-  const t = kind === 'text' ? c.line.text : ctxLineHex(c.line)
+  const t = kind === 'text' ? (c.selText ?? c.line.text) : ctxLineHex(c.line)
   try {
     await navigator.clipboard.writeText(t)
   } catch {
@@ -547,11 +551,15 @@ onBeforeUnmount(() => {
             <span>重发此帧</span>
           </button>
           <div class="ctx-sep"></div>
-          <button class="ctx-item" @click="copyCtx('text')">
+          <button
+            class="ctx-item"
+            :title="ctx?.selText != null ? '复制划选中的文本（多行按行拼接）' : '复制该行完整文本'"
+            @click="copyCtx('text')"
+          >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
             <span>复制文本</span>
           </button>
-          <button class="ctx-item" @click="copyCtx('hex')">
+          <button class="ctx-item" title="复制该行原始字节的 HEX（按整行，不受划选影响）" @click="copyCtx('hex')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
             <span>复制 HEX</span>
           </button>

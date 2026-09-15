@@ -1046,6 +1046,22 @@ input[type="color"]:focus-visible {
   height: 1px;
   background: var(--border);
 }
+/* 菜单内的开关行（通知设置等）：文字左、.switch 右，hover 反馈与 .sm-item 一致 */
+.sm-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.sm-switch-row:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
 .sm-foot {
   display: flex;
   align-items: center;
@@ -3851,20 +3867,32 @@ body.app-dragging * { pointer-events: none !important; }
 .welcome-hints { display: flex; justify-content: center; gap: 8px; margin-top: 16px; color: var(--text-dim); font-size: 11px; flex-wrap: wrap; }
 .welcome-hints kbd { padding: 1px 4px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--bg-elevated); color: var(--text-muted); font-family: var(--font-mono); font-size: 10px; }
 
-/* 全局轻量通知：固定在右下角，短暂出现且不遮挡主要工具栏。 */
-.toast-host { position: fixed; right: 18px; bottom: 34px; z-index: 100; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; pointer-events: none; }
-.toast { min-width: 240px; max-width: min(420px, calc(100vw - 36px)); display: flex; align-items: flex-start; gap: 9px; padding: 10px 10px 10px 12px; border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--bg-surface); color: var(--text); box-shadow: var(--shadow-md); pointer-events: auto; animation: toast-in var(--t-fast) var(--ease); }
-.toast-mark { width: 8px; height: 8px; margin-top: 4px; border-radius: 50%; background: var(--accent); flex: none; }
-.toast-success .toast-mark { background: var(--ok); box-shadow: 0 0 7px var(--ok); }
-.toast-warning .toast-mark { background: var(--warn); box-shadow: 0 0 7px var(--warn); }
-.toast-error .toast-mark { background: var(--err); box-shadow: 0 0 7px var(--err); }
-.toast-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.toast-copy b { font-size: 12px; }
-.toast-copy small { color: var(--text-muted); font-size: 10.5px; line-height: 1.4; word-break: break-word; }
-.toast-close { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: auto; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text-dim); cursor: pointer; }
+/* 全局轻量通知（通知重设计 v2）：右上角卡片流（B 位）+ 左缘 4px 语义色条 + 图标徽标 +
+   底部倒计时条（A 的卡片语言）。滑入/滑出/堆叠补位走 Vue TransitionGroup 的
+   enter/leave/move 过渡类；关闭由 useToast 的 setTimeout 驱动
+   （动画只做视觉——窗口被遮挡冻结时 animationend 不可靠），悬停暂停与计时器同进退。 */
+.toast-host { position: fixed; top: 44px; right: 14px; z-index: 60; width: 380px; max-width: calc(100vw - 28px); display: flex; flex-direction: column; align-items: stretch; gap: 8px; pointer-events: none; }
+.toast { --kind: var(--accent); position: relative; overflow: hidden; display: flex; align-items: flex-start; gap: 10px; padding: 10px 10px 12px 12px; border: 1px solid var(--border-strong); border-left: 4px solid var(--kind); border-radius: var(--r-md); background: var(--bg-elevated); color: var(--text); box-shadow: var(--shadow-md); pointer-events: auto; }
+.toast-success { --kind: var(--ok); }
+.toast-warning { --kind: var(--warn); }
+.toast-error { --kind: var(--err); }
+.toast-chip { flex: none; width: 30px; height: 30px; margin-top: 1px; border-radius: 50%; display: grid; place-items: center; background: color-mix(in srgb, var(--kind) 16%, transparent); color: var(--kind); }
+.toast-chip svg { width: 16px; height: 16px; }
+.toast-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; padding-top: 4px; }
+.toast-copy b { font-size: 12.5px; }
+.toast-copy small { color: var(--text-muted); font-size: 10.5px; line-height: 1.4; word-break: break-word; font-family: var(--font-mono); }
+.toast-close { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin-top: 4px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text-dim); cursor: pointer; transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
 .toast-close:hover { background: var(--bg-hover); color: var(--text); }
 .toast-close svg { width: 13px; height: 13px; }
-@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+.toast-bar { position: absolute; left: 0; bottom: 0; width: 100%; height: 2px; background: var(--kind); opacity: .75; transform-origin: 0 50%; animation: toast-bar linear forwards; }
+@keyframes toast-bar { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+/* 入场：右侧滑入 28px+淡入（快出缓停）；离场：右滑淡出；补位：FLIP 200ms。
+   leave-active 脱流绝对定位（锚右上），让下方卡片平移补位而非瞬跳。 */
+.toast-enter-active { transition: opacity 240ms cubic-bezier(.16, 1, .3, 1), transform 240ms cubic-bezier(.16, 1, .3, 1); }
+.toast-enter-from { opacity: 0; transform: translateX(28px); }
+.toast-leave-active { position: absolute; right: 0; transition: opacity 160ms cubic-bezier(.4, 0, 1, 1), transform 160ms cubic-bezier(.4, 0, 1, 1); }
+.toast-leave-to { opacity: 0; transform: translateX(24px); }
+.toast-move { transition: transform var(--t) var(--ease); }
 
 .dock-empty { flex-direction: column; gap: 4px; }
 .dock-empty small { color: var(--text-dim); font-size: 11px; }

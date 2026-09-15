@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useSessionStore } from '../stores/session'
 import { theme, toggleTheme } from '../composables/useTheme'
+import { useNotificationPrefs } from '../composables/useNotificationPrefs'
 import { useBridgeStore } from '../stores/bridge'
 import LogSettingsPanel from './LogSettingsPanel.vue'
 import BridgeSettings from './BridgeSettings.vue'
@@ -15,6 +16,7 @@ const emit = defineEmits<{ 'open-log': []; 'apply-preset': [config: PortConfig] 
 
 const store = useSessionStore()
 const bridge = useBridgeStore()
+const notif = useNotificationPrefs()
 const open = ref(false)
 type View = 'menu' | 'log' | 'bridge' | 'presets'
 const view = ref<View>('menu')
@@ -45,6 +47,10 @@ function openLog() {
 }
 function toggleSplit() {
   store.splitMode ? store.exitSplit() : store.enterSplit()
+}
+/** 通知总开关（.switch 的 checkbox → 偏好回写） */
+function setNotif(ev: Event) {
+  notif.setEnabled((ev.target as HTMLInputElement).checked)
 }
 function applyPreset(c: PortConfig) {
   emit('apply-preset', c)
@@ -114,6 +120,16 @@ onBeforeUnmount(() => {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
         <span>连接配置预设<span class="sm-sub">端口参数快捷切换</span></span>
       </button>
+      <div class="sm-sep"></div>
+      <div class="sm-sec">通知</div>
+      <div class="sm-switch-row">
+        <span>启用通知<span class="sm-sub">连接状态 · 串口接入/移除</span></span>
+        <label class="switch">
+          <input type="checkbox" :checked="notif.prefs.enabled" @change="setNotif($event)" />
+          <span class="track"></span>
+          <span class="thumb"></span>
+        </label>
+      </div>
       <div class="sm-sep"></div>
       <div class="sm-sec">视图</div>
       <button class="sm-item" type="button" @click="toggleSplit">

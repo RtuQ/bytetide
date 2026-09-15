@@ -1,5 +1,13 @@
-import { describe, expect, it } from 'vitest'
-import { _resetToasts, connectionErrorHint, toast, toasts } from '../useToast'
+import { describe, expect, it, vi, afterEach } from 'vitest'
+import {
+  _resetToasts,
+  connectionErrorHint,
+  dismissByTag,
+  pauseToast,
+  resumeToast,
+  toast,
+  toasts,
+} from '../useToast'
 
 describe('useToast', () => {
   it('adds a toast and can dismiss it', () => {
@@ -32,6 +40,50 @@ describe('useToast', () => {
     // 不同文案不受节流影响
     expect(toast('other', 'info', 0)).toBeGreaterThan(0)
     expect(toasts.value).toHaveLength(2)
+  })
+
+  it('duration 记入 item；tag 可选', () => {
+    _resetToasts()
+    toast('带标记', 'warning', 6000, 'COM3', 'disconnect')
+    expect(toasts.value[0]).toMatchObject({ duration: 6000, tag: 'disconnect' })
+    toast('无时长', 'info', 0)
+    expect(toasts.value[1]).toMatchObject({ duration: 0, tag: undefined })
+  })
+
+  it('dismissByTag 只收同标记的通知', () => {
+    _resetToasts()
+    toast('断开A', 'warning', 0, undefined, 'disconnect')
+    toast('断开B', 'warning', 0, undefined, 'disconnect')
+    toast('别的', 'success', 0)
+    dismissByTag('disconnect')
+    expect(toasts.value.map((t) => t.message)).toEqual(['别的'])
+  })
+
+  it('pause/resume 推迟自动关闭（悬停暂停倒计时）', () => {
+    vi.useFakeTimers()
+    _resetToasts()
+    const id = toast('计时', 'info', 1000)
+    pauseToast(id)
+    vi.advanceTimersByTime(5000)
+    expect(toasts.value).toHaveLength(1)
+    resumeToast(id)
+    vi.advanceTimersByTime(900)
+    expect(toasts.value).toHaveLength(1)
+    vi.advanceTimersByTime(200)
+    expect(toasts.value).toHaveLength(0)
+  })
+
+  it('duration=0 不挂计时器（不自动关闭）', () => {
+    vi.useFakeTimers()
+    _resetToasts()
+    toast('常驻', 'info', 0)
+    vi.advanceTimersByTime(60000)
+    expect(toasts.value).toHaveLength(1)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    _resetToasts()
   })
 })
 
