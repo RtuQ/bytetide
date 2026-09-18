@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useSessionStore } from '../stores/session'
 import { theme, toggleTheme } from '../composables/useTheme'
+import { locale, setLocale, t } from '../i18n'
 import { useNotificationPrefs } from '../composables/useNotificationPrefs'
 import { useBridgeStore } from '../stores/bridge'
 import LogSettingsPanel from './LogSettingsPanel.vue'
@@ -51,6 +52,10 @@ function toggleSplit() {
 /** 通知总开关（.switch 的 checkbox → 偏好回写） */
 function setNotif(ev: Event) {
   notif.setEnabled((ev.target as HTMLInputElement).checked)
+}
+/** 语言切换（zh ↔ en 循环，与主题按钮同形态） */
+function toggleLocale() {
+  setLocale(locale.value === 'zh-CN' ? 'en' : 'zh-CN')
 }
 function applyPreset(c: PortConfig) {
   emit('apply-preset', c)
@@ -140,6 +145,10 @@ onBeforeUnmount(() => {
         <svg v-if="theme === 'dark'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
         <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         <span>{{ theme === 'dark' ? '切换到亮色主题' : '切换到深色主题' }}</span>
+      </button>
+      <button class="sm-item" type="button" @click="toggleLocale">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>
+        <span>{{ t('app.settings.langToggle') }}<span class="sm-sub">{{ t('app.settings.langSub') }}</span></span>
       </button>
     </div>
 
