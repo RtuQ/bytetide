@@ -10,6 +10,7 @@ import { connectionErrorHint, dismissByTag, toast } from './useToast'
 import { useNotificationPrefs } from './useNotificationPrefs'
 import { consumePortDiff, describePort } from './usePortNotifications'
 import { commands } from '../ipc/commands'
+import { PULL_CEIL_MS, PULL_FLOOR_MS, initialPacing, nextPullInterval, type PullOutcome } from './pullPacing'
 import {
   onAlertHit,
   onBridgeAnnotationsUpdated,
@@ -27,14 +28,17 @@ import type { AlertLevel } from '../types'
 
 /**
  * 拉模型视图通道：后端 ring 是唯一真相（`no` 游标单调递增、清屏不回退），
- * 前端按固定节奏拉 delta 入表。渲染进程不再需要"跟上"任何事件流——
- * 被节流/被调度饥饿时，醒来一次拉齐即收敛，滞后上限=一个拉取周期。
+ * 前端按会话自适应节奏（pullPacing.ts 控制律：活跃贴 25ms 地板、空闲回
+ * 200ms 天花板）拉 delta 入表。渲染进程不再需要"跟上"任何事件流——
+ * 被节流/被调度饥饿时，醒来一次拉齐即收敛，滞后上限=一个拉取周期；
+ * 节流期 setTimeout 自动晚触发即被动降频，零浪费，回前台首个数据拍贴地板。
  *
  * 历史：曾用 40ms 推事件流，WebView2 渲染进程被高频小事件挤占调度后，
  * 消费速率跌破生产速率形成死亡螺旋（实测积压 15 分钟、tick 饿到 48s），
- * 故整体倒转为拉（取证数据见 perf-frontend.log seg/tick 探针）。
+ * 故整体倒转为拉（取证数据见 perf-frontend.log seg/tick 探针）。拉的方向
+ * 自带背压：IPC 频率自限于渲染进程真实处理能力（忙则定时器晚触发、一次
+ * 拉齐），每次拉取是替换工作而非累积队列，不会重演积压形态。
  */
-const PULL_INTERVAL_MS = 200
 const PULL_PAGE_MAX = 5000
 /** 单次 drain 最多翻页数：24×5000=12 万行 ≥ ring 容量 10 万，一轮必收敛 */
 const PULL_MAX_PAGES = 24
@@ -42,8 +46,9 @@ const PULL_MAX_PAGES = 24
 const BACKFILL_PAGE_MAX = 2000
 
 /** 在途拉取表（会话 id → 完成 promise）：防同会话并发 drain 导致游标回退覆盖，
- *  且值可等待——最终补拉以此做所有权交接，不用固定等待时间猜在途何时结束 */
-const draining = new Map<string, Promise<void>>()
+ *  且值可等待——最终补拉以此做所有权交接，不用固定等待时间猜在途何时结束。
+ *  resolve 值为 PullOutcome，供自适应节奏控制律消费 */
+const draining = new Map<string, Promise<PullOutcome>>()
 /** 最终补拉挂起中的会话：常规拉取见之让路，保证 stopSession 的 release 只会
  *  发生在最终拉空真正完成之后 */
 const tailPending = new Set<string>()
@@ -109,8 +114,9 @@ export async function requestBackfill(sessionId: string): Promise<void> {
   }
 }
 
-async function pullUntilEmpty(sessionId: string, ignoreStatus: boolean): Promise<void> {
+async function pullUntilEmpty(sessionId: string, ignoreStatus: boolean): Promise<PullOutcome> {
   const store = useSessionStore()
+  let got = 0
   for (let page = 0; page < PULL_MAX_PAGES; page++) {
     const s = store.sessions[sessionId]
     // 会话没了/非拉模型会话（offline 初始装载后静态）就停。
@@ -118,20 +124,20 @@ async function pullUntilEmpty(sessionId: string, ignoreStatus: boolean): Promise
     // replay：后端会话常驻（Finished/Stopped 后仍可查询），只有控制面定格
     // stopped（用户停止/断开）或会话移除才停——EOF 事件后的最后一波仍要拉齐。
     // ignoreStatus（最终补拉）跳过状态守卫：停止/断开正是要拉这最后一批
-    if (!s || !isPullSession(s)) return
+    if (!s || !isPullSession(s)) return { got: 0, capped: false }
     if (
       !ignoreStatus &&
       ((s.kind === 'live' && s.status !== 'connected' && s.status !== 'connecting') ||
         (s.kind === 'replay' && s.replay?.state === 'stopped'))
     )
-      return
+      return { got, capped: false }
     let pulled: PulledLine[]
     try {
       pulled = await commands.ringLinesAfter(sessionId, s.pullNo, PULL_PAGE_MAX)
     } catch {
-      return // 无后端（浏览器冒烟）或会话已断开，静默
+      return { got, capped: false } // 无后端（浏览器冒烟）或会话已断开，静默
     }
-    if (pulled.length === 0) return
+    if (pulled.length === 0) return { got, capped: false }
     const t0 = performance.now()
     const fresh = store.appendPulled(
       sessionId,
@@ -144,7 +150,8 @@ async function pullUntilEmpty(sessionId: string, ignoreStatus: boolean): Promise
         ringNo: l.no,
       })),
     )
-    if (fresh.length === 0) return // 游标已到最新
+    if (fresh.length === 0) return { got, capped: false } // 游标已到最新
+    got += fresh.length
     store.tallyBytes(sessionId, fresh)
     // 性能哨兵：滞后=墙钟−最新行后端时间戳，批耗时=本处理段。
     // replay 跳过——行时间戳是源文件历史时刻，滞后恒为巨值（假阳性）；
@@ -181,13 +188,15 @@ async function pullUntilEmpty(sessionId: string, ignoreStatus: boolean): Promise
           .catch(() => {})
       })
     }
-    if (pulled.length < PULL_PAGE_MAX) return // 拉空，已到最新
+    if (pulled.length < PULL_PAGE_MAX) return { got, capped: false } // 拉空，已到最新
   }
+  // 翻满 PULL_MAX_PAGES 仍整页返回：明确落后于 ring 产能，控制律据此维持地板
+  return { got, capped: true }
 }
 
 /** 独占启动一次拉取：check+set 之间无 await（单线程 JS 原子），完成 promise
- *  登记在 draining 供最终补拉等待/交接 */
-function beginDrain(sessionId: string, ignoreStatus: boolean): Promise<void> | null {
+ *  登记在 draining 供最终补拉等待/交接。在途时返回 null（调用方合流跳过） */
+function beginDrain(sessionId: string, ignoreStatus: boolean): Promise<PullOutcome> | null {
   if (draining.has(sessionId)) return null
   const p = pullUntilEmpty(sessionId, ignoreStatus)
   const tracked = p.finally(() => {
@@ -197,8 +206,8 @@ function beginDrain(sessionId: string, ignoreStatus: boolean): Promise<void> | n
   return tracked
 }
 
-/** 常规拉取（200ms tick）：在途或最终补拉挂起时合流跳过。
- *  具名导出仅供测试构造「在途拉取」场景——生产入口只有拉取循环 */
+/** 常规拉取（拉取循环 tick 触发）：在途或最终补拉挂起时合流跳过。
+ *  具名导出仅供测试构造「在途拉取」场景——生产入口是 startPullLoop 的调度器 */
 export function drainSession(sessionId: string): void {
   if (tailPending.has(sessionId)) return
   beginDrain(sessionId, false)
@@ -231,7 +240,7 @@ export async function drainSessionTail(sessionId: string): Promise<void> {
   try {
     // 依次等待在途拉取真正结束（tailPending 已就位，不会再有新的常规拉取）。
     // last 哨兵防微任务时序下对同一 promise 重复等待
-    let last: Promise<void> | undefined
+    let last: Promise<PullOutcome> | undefined
     for (;;) {
       const inflight = draining.get(sessionId)
       if (!inflight || inflight === last) break
@@ -244,17 +253,92 @@ export async function drainSessionTail(sessionId: string): Promise<void> {
   }
 }
 
+// ── 自适应拉取调度器 ─────────────────────────────────────────────────────
+// 单链 setTimeout + 每会话 nextDue：唤醒只是 Map 扫描（零 IPC），各会话按
+// 自己的节奏到期才拉——活跃会话贴 25ms 地板不会拖着空闲会话陪跑，控制律
+// 见 pullPacing.ts。不设会话级定时器，无需感知会话增删（惰性建账+顺手剪除）。
+
+/** 每会话节奏条目：控制律状态 + 下次应拉时刻（performance.now 时基） */
+interface PacingEntry {
+  intervalMs: number
+  idleStreak: number
+  nextDue: number
+}
+
+const pacing = new Map<string, PacingEntry>()
+// ReturnType 而非 number：项目同时带 DOM/Node 类型，裸 setTimeout 命中 Node 重载；
+// 且调度器要在 node 环境的测试里真跑（window.setInterval 旧写法在 node 下不存在）
+let pullTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 到期会话各拉一次，再按最近的 nextDue 排下一跳 */
+function loopPulls(): void {
+  pullTimer = null
+  const store = useSessionStore()
+  const now = performance.now()
+  for (const id of Object.keys(store.sessions)) {
+    const s = store.sessions[id]
+    if (!s || !isPullSession(s)) continue
+    let entry = pacing.get(id)
+    if (!entry) {
+      entry = { ...initialPacing(), nextDue: now } // 新账首拉立即（重连新 id 亦然）
+      pacing.set(id, entry)
+    }
+    if (entry.nextDue <= now) void tickSession(id, now)
+  }
+  // 顺手剪除已移除/非拉模型（offline、closeTab 后）会话的节奏条目
+  for (const id of pacing.keys()) {
+    const s = store.sessions[id]
+    if (!s || !isPullSession(s)) pacing.delete(id)
+  }
+  let wait = PULL_CEIL_MS
+  for (const e of pacing.values()) {
+    wait = Math.min(wait, Math.max(0, e.nextDue - now))
+  }
+  pullTimer = setTimeout(loopPulls, wait)
+}
+
+async function tickSession(id: string, now: number): Promise<void> {
+  const entry = pacing.get(id)
+  if (!entry) return
+  if (tailPending.has(id)) {
+    // 最终补拉交接中：常规拉取让路（语义见 drainSessionTail），慢拍复查即可
+    entry.nextDue = now + PULL_CEIL_MS
+    return
+  }
+  // 暂定复查点：拉取在途时最快 25ms 后再看；outcome 到账后按控制律改写
+  entry.nextDue = now + PULL_FLOOR_MS
+  const outcome = await beginDrain(id, false)
+  const e = pacing.get(id)
+  if (!outcome || !e) return // 与在途拉取合流 / 条目已随会话剪除（暂定点兜底）
+  nextPullInterval(e, outcome)
+  e.nextDue = performance.now() + e.intervalMs
+}
+
+/** 启动自适应拉取循环（生产入口 setupEvents；具名导出供测试直接驱动） */
+export function startPullLoop(): void {
+  stopPullLoop()
+  loopPulls()
+}
+
+/** 停止循环并清空节奏账目（setupEvents 卸载 / 测试收尾用） */
+export function stopPullLoop(): void {
+  if (pullTimer !== null) {
+    clearTimeout(pullTimer)
+    pullTimer = null
+  }
+  pacing.clear()
+}
+
 /** 注册后端事件监听与拉取循环；返回取消函数列表 */
 export async function setupEvents(): Promise<Unlisten[]> {
   const store = useSessionStore()
   const unlistens: Unlisten[] = []
 
-  // 拉取循环：所有 live 会话按 PULL_INTERVAL_MS 拉自己的游标 delta。
-  // 低频 IPC（每会话 5 次/秒、空转返回空），渲染进程调度不再被事件洪水挤占。
-  const timer = window.setInterval(() => {
-    for (const id of Object.keys(store.sessions)) void drainSession(id)
-  }, PULL_INTERVAL_MS)
-  unlistens.push(() => window.clearInterval(timer))
+  // 拉取循环：自适应节奏（活跃贴 25ms 地板、空闲回 200ms 天花板），控制律在
+  // pullPacing.ts。低频 IPC（空拉为后端一次读锁+二分、空转返回空），渲染进程
+  // 调度不再被事件洪水挤占。
+  startPullLoop()
+  unlistens.push(stopPullLoop)
 
   // 会话状态：live 的连接/断开 toast 提示（通知重设计 v2：断开升级 warning + 6s +
   // 'disconnect' tag，重连成功时按 tag 收掉未过期的断开提示）；replay 的状态事件不打

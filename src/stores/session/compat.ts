@@ -474,7 +474,7 @@ export const useSessionStore = defineStore('session', {
       }
     },
     /** 追加日志并返回本次带行号的新行（供告警/回复等后续处理拿到 no）。
-     *  行 markRaw 纪律见 log.ts；200ms 拉取编排留在 useTauriEvents。 */
+     *  行 markRaw 纪律见 log.ts；自适应拉取编排留在 useTauriEvents。 */
     appendLines(id: string, raw: RawLogLine[]): LogLine[] {
       const s = this.sessions[id]
       if (!s || raw.length === 0) return []
