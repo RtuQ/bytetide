@@ -50,6 +50,7 @@ impl Transport for SerialTransport {
     }
 
     fn description(&self) -> String {
-        "串口".to_string()
+        // 与 describe_transport 同一技术记法体系（英文、不翻译）
+        "serial".to_string()
     }
 }

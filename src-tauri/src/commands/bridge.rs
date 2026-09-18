@@ -6,6 +6,8 @@ use tauri::State;
 use crate::bridge::{BridgeConfigPatch, BridgeController, BridgeView};
 use crate::state::AppState;
 
+use super::errors::cmd_err;
+
 #[tauri::command]
 pub fn bridge_get_config_cmd(bridge: State<'_, BridgeController>) -> BridgeView {
     bridge.get_view()
@@ -45,7 +47,7 @@ pub fn bridge_sync_bookmarks_cmd(
     if state.manager.bridge_set_bookmarks(&session_id, bookmarks) {
         Ok(())
     } else {
-        Err("会话不存在".into())
+        Err(cmd_err("session_not_found", ""))
     }
 }
 
@@ -59,7 +61,7 @@ pub fn bridge_sync_alerts_cmd(
     if state.manager.bridge_set_alerts(&session_id, alerts) {
         Ok(())
     } else {
-        Err("会话不存在".into())
+        Err(cmd_err("session_not_found", ""))
     }
 }
 
@@ -76,6 +78,6 @@ pub fn bridge_sync_annotations_cmd(
     {
         Ok(())
     } else {
-        Err("会话不存在".into())
+        Err(cmd_err("session_not_found", ""))
     }
 }

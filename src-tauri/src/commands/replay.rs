@@ -25,6 +25,8 @@ use tauri::{AppHandle, Emitter, State};
 use crate::gui_sink::GuiSink;
 use crate::state::AppState;
 
+use super::errors::cmd_err;
+
 /// 控制命令到位等待上限：runner 命令排水 ≤50ms（SLICE_MS），500ms 富余充足；
 /// 超时按当前真实状态返回视图，不报错（状态查询面是唯一真相）。
 const SETTLE_CAP: Duration = Duration::from_millis(500);
@@ -93,38 +95,39 @@ impl ReplayRegistry {
     }
 }
 
-/// 控制动作解析：action/value → ReplayCmd。非法 action/value 一律 Err 稳定中文
-/// 文案（speed 越界/NaN、seek 非「≥1 整数」、loop 非 0/1）。
+/// 控制动作解析：action/value → ReplayCmd。非法 action/value 一律 Err 稳定
+/// `code|detail`（speed 越界/NaN、seek 非「≥1 整数」、loop 非 0/1）；中文句子由
+/// 前端词典 `errors.<code>` 承担，detail 携带原值或 "missing value"。
 pub fn parse_replay_action(action: &str, value: Option<f64>) -> Result<ReplayCmd, String> {
     match action {
         "pause" => Ok(ReplayCmd::Pause),
         "resume" => Ok(ReplayCmd::Resume),
         "stop" => Ok(ReplayCmd::Stop),
         "seek" => {
-            let v = value.ok_or_else(|| "回放 seek 行号非法: 缺少 value".to_string())?;
+            let v = value.ok_or_else(|| cmd_err("replay_seek_invalid", "missing value"))?;
             if !v.is_finite() || v < 1.0 || v.fract() != 0.0 {
-                return Err(format!("回放 seek 行号非法: {v}"));
+                return Err(cmd_err("replay_seek_invalid", v));
             }
             Ok(ReplayCmd::SeekLine(v as u64))
         }
         "speed" => {
-            let v = value.ok_or_else(|| "回放速度非法: 缺少 value".to_string())?;
+            let v = value.ok_or_else(|| cmd_err("replay_speed_invalid", "missing value"))?;
             if !valid_speed(v) {
-                return Err(format!("回放速度必须为有限数值且在 0.1..=100: {v}"));
+                return Err(cmd_err("replay_speed_invalid", v));
             }
             Ok(ReplayCmd::SetSpeed(v))
         }
         "loop" => {
-            let v = value.ok_or_else(|| "回放循环开关非法: 缺少 value".to_string())?;
+            let v = value.ok_or_else(|| cmd_err("replay_loop_invalid", "missing value"))?;
             if v == 0.0 {
                 Ok(ReplayCmd::SetLoop(false))
             } else if v == 1.0 {
                 Ok(ReplayCmd::SetLoop(true))
             } else {
-                Err(format!("回放循环开关非法: {v}"))
+                Err(cmd_err("replay_loop_invalid", v))
             }
         }
-        other => Err(format!("未知回放控制: {other}")),
+        other => Err(cmd_err("unknown_replay_action", other)),
     }
 }
 
@@ -200,7 +203,8 @@ fn wait_seek_applied(manager: &PortManager, id: &str, target: u64, cap: Duration
 }
 
 /// 组装回放控制面视图：manager 查询面（状态+行号水位）+ 镜像（speed/looped）。
-/// 会话不存在 / 非回放会话 → Err 稳定文案（前端 status 轮询据此静默停拉）。
+/// 会话不存在 / 非回放会话 → Err `replay_session_not_found|`（前端 status 轮询据此
+/// 静默停拉）。
 pub fn build_view(
     manager: &PortManager,
     replays: &ReplayRegistry,
@@ -208,7 +212,7 @@ pub fn build_view(
 ) -> Result<ReplayView, String> {
     let (state, line) = manager
         .replay_view(id)
-        .ok_or_else(|| "会话不存在或非回放会话".to_string())?;
+        .ok_or_else(|| cmd_err("replay_session_not_found", ""))?;
     let meta = replays.get(id).unwrap_or(ReplayMeta {
         speed: 1.0,
         looped: false,

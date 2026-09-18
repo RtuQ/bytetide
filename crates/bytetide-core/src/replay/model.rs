@@ -35,10 +35,11 @@ impl Default for ReplayConfig {
 impl ReplayConfig {
     /// 执行前校验：speed 必须为有限数值且在 `MIN_SPEED..=MAX_SPEED`（含边界）。
     /// `max_gap_ms` 为 u64 无非法值（0 = 全程瞬放，交用户自担）。
+    /// 错误文本走英文技术细节（经 manager 的 `replay_config_invalid|{detail}` 透传）。
     pub fn validate(&self) -> Result<(), String> {
         if !valid_speed(self.speed) {
             return Err(format!(
-                "回放速度必须为有限数值且在 {MIN_SPEED}..={MAX_SPEED}: {}",
+                "speed must be a finite number within {MIN_SPEED}..={MAX_SPEED}: {}",
                 self.speed
             ));
         }
@@ -128,7 +129,7 @@ mod tests {
             }
             .validate()
             .expect_err("应拒绝");
-            assert!(err.contains("回放速度"), "{err}");
+            assert!(err.contains("speed must be"), "{err}");
         }
     }
 

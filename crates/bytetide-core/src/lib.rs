@@ -3,6 +3,7 @@
 //! 接收状态/错误/告警事件（GUI 实现转发为 Tauri emit，CLI 实现写 stderr/日志）。
 
 pub mod automation;
+mod errors;
 pub mod logfmt;
 pub mod offline;
 pub mod replay;

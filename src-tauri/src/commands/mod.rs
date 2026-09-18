@@ -9,6 +9,7 @@
 
 mod automation;
 mod bridge;
+mod errors;
 mod files;
 mod replay;
 mod sessions;

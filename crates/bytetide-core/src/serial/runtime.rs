@@ -28,6 +28,7 @@ use super::rules::{
 };
 use super::transport::{describe_transport, is_net_transport, open_transport, Transport};
 use super::{now_ms, BridgeAlert, PortCmd, SendMode, SendRequest};
+use crate::errors::err_msg;
 use crate::logfmt;
 use crate::replay::ReplayState;
 use crate::sink::EventSink;
@@ -275,9 +276,9 @@ pub(crate) fn session_thread(
         Err(e) => {
             // 错误且终止：状态置 Error 并保留（finish 不会被走到，也不得回落 disconnected）
             let msg = if net {
-                format!("建立 {desc} 失败: {e}")
+                err_msg("open_link_failed", format!("{desc}: {e}"))
             } else {
-                format!("打开串口 {} 失败: {}", config.name, e)
+                err_msg("open_port_failed", format!("{}: {}", config.name, e))
             };
             rt.state
                 .write()
@@ -290,14 +291,17 @@ pub(crate) fn session_thread(
         .set_status(&*sink, &session_id, SessionStatus::Connected);
 
     let (eof_msg, write_err_msg) = if net {
-        ("网络连接已断开", "网络写入失败")
+        (err_msg("net_disconnected", ""), err_msg("net_write_failed", ""))
     } else {
-        ("串口连接已断开", "写入串口失败")
+        (
+            err_msg("port_disconnected", ""),
+            err_msg("port_write_failed", ""),
+        )
     };
     stream_loop(
         transport.as_mut(),
-        eof_msg,
-        write_err_msg,
+        &eof_msg,
+        &write_err_msg,
         &*sink,
         &session_id,
         &rt,
@@ -342,7 +346,7 @@ fn open_recording(
                     state.write().set_error(
                         sink,
                         session_id,
-                        &format!("日志路径无效/不可写: {}: {}", log_path.display(), e),
+                        &err_msg("log_path_unwritable", format!("{}: {}", log_path.display(), e)),
                         None,
                     );
                 }
@@ -511,7 +515,7 @@ fn stream_loop(
                         rt.state.write().set_error(
                             sink,
                             session_id,
-                            &format!("另起新日志失败 {}: {}", path.display(), e),
+                            &err_msg("log_rotate_failed", format!("{}: {}", path.display(), e)),
                             None,
                         );
                     }
@@ -522,12 +526,9 @@ fn stream_loop(
                 PortCmd::Signal { pin, level } => {
                     if let Err(e) = io.set_signal(pin, level) {
                         // 置位失败连接不受影响：仅记 last_error
-                        rt.state.write().set_error(
-                            sink,
-                            session_id,
-                            &format!("设置信号线失败: {e}"),
-                            None,
-                        );
+                        rt.state
+                            .write()
+                            .set_error(sink, session_id, &err_msg("set_signal_failed", &e), None);
                     }
                 }
             }
@@ -541,7 +542,10 @@ fn stream_loop(
                 rt.state.write().set_error(
                     sink,
                     session_id,
-                    &format!("午夜另起新日志失败 {}: {}", fail.path.display(), fail.err),
+                    &err_msg(
+                        "midnight_rotate_failed",
+                        format!("{}: {}", fail.path.display(), fail.err),
+                    ),
                     None,
                 );
             }
@@ -609,12 +613,9 @@ fn stream_loop(
             }
             Err(e) => {
                 // 读硬错误且终止：状态置 Error，finish_loop 保留不覆盖
-                rt.state.write().set_error(
-                    sink,
-                    session_id,
-                    &format!("读取错误: {e}"),
-                    Some(SessionStatus::Error),
-                );
+                rt.state
+                    .write()
+                    .set_error(sink, session_id, &err_msg("read_failed", &e), Some(SessionStatus::Error));
                 break;
             }
         }
@@ -870,14 +871,14 @@ mod tests {
         let sink = VecSink::default();
         let mut st = SessionState::default();
         st.set_status(&sink, "s1", SessionStatus::Connected);
-        st.set_error(&sink, "s1", "写入串口失败", None);
+        st.set_error(&sink, "s1", "port_write_failed|", None);
         assert_eq!(st.status, SessionStatus::Connected);
-        assert_eq!(st.last_error.as_deref(), Some("写入串口失败"));
+        assert_eq!(st.last_error.as_deref(), Some("port_write_failed|"));
         assert_eq!(
             sink.0.lock().clone(),
             vec![
                 "status s1 connected".to_string(),
-                "error s1 写入串口失败".to_string(),
+                "error s1 port_write_failed|".to_string(),
             ]
         );
     }
@@ -888,9 +889,9 @@ mod tests {
         let sink = VecSink::default();
         let mut st = SessionState::default();
         st.set_status(&sink, "s1", SessionStatus::Connected);
-        st.set_error(&sink, "s1", "读取错误: boom", Some(SessionStatus::Error));
+        st.set_error(&sink, "s1", "read_failed|boom", Some(SessionStatus::Error));
         assert_eq!(st.status, SessionStatus::Error);
-        assert_eq!(st.last_error.as_deref(), Some("读取错误: boom"));
+        assert_eq!(st.last_error.as_deref(), Some("read_failed|boom"));
         let shared = RwLock::new(st);
         let mut rec = disabled_rec();
         finish_loop(&mut rec, &shared, &sink, "s1");
@@ -900,7 +901,7 @@ mod tests {
             sink.0.lock().clone(),
             vec![
                 "status s1 connected".to_string(),
-                "error s1 读取错误: boom".to_string(),
+                "error s1 read_failed|boom".to_string(),
                 "status s1 error".to_string(),
             ]
         );
@@ -1079,7 +1080,10 @@ mod tests {
             .expect("connect");
         let snap = wait_for_status(&m, &sink, &id, "error");
         let err = snap.last_error.as_deref().expect("应记录 last_error");
-        assert!(err.contains("建立"), "错误消息应说明建链失败: {err}");
+        assert!(
+            err.starts_with("open_link_failed|"),
+            "错误消息应为 code|detail 建链失败形状: {err}"
+        );
         assert_snap_matches_sink(&snap, &sink, &id);
         let _ = m.disconnect(&id);
     }
@@ -1105,12 +1109,12 @@ mod tests {
         drop(accepted);
         let snap = wait_for_status(&m, &sink, &id, "disconnected");
         // EOF 记 last_error（供 REST 观测）但状态走正常断开而非 error
-        assert_eq!(snap.last_error.as_deref(), Some("网络连接已断开"));
+        assert_eq!(snap.last_error.as_deref(), Some("net_disconnected|"));
         let events = sink.0.lock().clone();
         assert!(
             events
                 .iter()
-                .any(|e| *e == format!("error {id} 网络连接已断开")),
+                .any(|e| *e == format!("error {id} net_disconnected|")),
             "EOF 应有 error 事件: {events:?}"
         );
         assert!(

@@ -31,9 +31,10 @@ pub trait Transport: std::io::Read + std::io::Write + Send {
 /// 网络源读超时（空闲期靠 TimedOut/WouldBlock 驱动半行刷出与命令轮询）。
 pub(crate) const NET_READ_TIMEOUT: Duration = Duration::from_millis(200);
 
-/// 网络源没有信号线（报错文案与既有实现逐字一致）。
+/// 网络源没有信号线（io 错误文本走英文技术细节：经 runtime 的
+/// `set_signal_failed|{detail}` 到前端，中文句子由前端词典承担）。
 pub(crate) fn net_signal_error() -> io::Error {
-    io::Error::other("网络源无信号线")
+    io::Error::other("network transport has no signal line")
 }
 
 /// 按配置建立链路：串口与 TCP/UDP 源共用同一装配路径，读线程内调用。
@@ -68,7 +69,7 @@ fn open_net(config: &PortConfig) -> io::Result<Box<dyn Transport>> {
         )?)),
         other => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("未知传输类型: {other:?}"),
+            format!("unknown transport type: {other:?}"),
         )),
     }
 }
@@ -107,28 +108,29 @@ pub(crate) fn host_of(config: &PortConfig) -> String {
     }
 }
 
-/// 链路的人类可读描述（建链失败错误消息 + 已建链的 `description()`）。
+/// 链路的技术描述（建链失败错误消息的 detail 段 + 已建链的 `description()`）。
+/// 走英文技术记法（协议 类型 host:port），不翻译——前端词典承担用户文案。
 pub(crate) fn describe_transport(config: &PortConfig) -> String {
     match config.transport.as_deref() {
         Some("tcp-client") => format!(
-            "TCP 连接 {}:{}",
+            "tcp-client {}:{}",
             config.tcp_host.clone().unwrap_or_default(),
             config.tcp_port.map(|p| p.to_string()).unwrap_or_default()
         ),
         Some("tcp-server") => format!(
-            "TCP 服务 {}:{}",
+            "tcp-server {}:{}",
             bind_host_of(config),
             config.tcp_port.map(|p| p.to_string()).unwrap_or_default()
         ),
         Some("udp") => format!(
-            "UDP 监听 {}:{}",
+            "udp {}:{}",
             bind_host_of(config),
             config
                 .udp_local_port
                 .map(|p| p.to_string())
                 .unwrap_or_default()
         ),
-        _ => "串口".to_string(),
+        _ => "serial".to_string(),
     }
 }
 
@@ -219,7 +221,7 @@ mod tests {
             Ok(_) => panic!("未知传输必须报错"),
         };
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-        assert!(err.to_string().contains("未知传输类型"));
+        assert!(err.to_string().contains("unknown transport type"));
     }
 
     #[test]
@@ -232,9 +234,9 @@ mod tests {
             ..PortConfig::default()
         };
         let mut t = open_transport(&cfg).expect("udp bind");
-        assert!(t.description().starts_with("UDP 监听 127.0.0.1:"));
-        let err = t.set_signal(Pin::Dtr, true).expect_err("网络源无信号线");
-        assert_eq!(err.to_string(), "网络源无信号线");
+        assert!(t.description().starts_with("udp 127.0.0.1:"));
+        let err = t.set_signal(Pin::Dtr, true).expect_err("network no signal");
+        assert_eq!(err.to_string(), "network transport has no signal line");
     }
 
     #[test]
@@ -249,14 +251,14 @@ mod tests {
             ..PortConfig::default()
         };
         let mut client = open_transport(&cfg).expect("tcp-client 连接本机");
-        assert_eq!(client.description(), format!("TCP 连接 127.0.0.1:{port}"));
+        assert_eq!(client.description(), format!("tcp-client 127.0.0.1:{port}"));
         let (mut server, _) = listener.accept().expect("客户端已连入");
         client.write_all(b"hello").expect("write");
         let mut buf = [0u8; 5];
         server.read_exact(&mut buf).expect("server read");
         assert_eq!(&buf, b"hello");
-        let err = client.set_signal(Pin::Rts, true).expect_err("无信号线");
-        assert_eq!(err.to_string(), "网络源无信号线");
+        let err = client.set_signal(Pin::Rts, true).expect_err("network no signal");
+        assert_eq!(err.to_string(), "network transport has no signal line");
     }
 
     // ---------- 纯 helper（自 manager 迁移的既有断言） ----------
@@ -301,30 +303,30 @@ mod tests {
             tcp_port: Some(80),
             ..PortConfig::default()
         };
-        assert_eq!(describe_transport(&tcp), "TCP 连接 1.2.3.4:80");
+        assert_eq!(describe_transport(&tcp), "tcp-client 1.2.3.4:80");
         let srv = PortConfig {
             transport: Some("tcp-server".into()),
             tcp_port: Some(9000),
             ..PortConfig::default()
         };
-        assert_eq!(describe_transport(&srv), "TCP 服务 0.0.0.0:9000");
+        assert_eq!(describe_transport(&srv), "tcp-server 0.0.0.0:9000");
         let udp = PortConfig {
             transport: Some("udp".into()),
             udp_local_port: Some(5000),
             ..PortConfig::default()
         };
-        assert_eq!(describe_transport(&udp), "UDP 监听 0.0.0.0:5000");
+        assert_eq!(describe_transport(&udp), "udp 0.0.0.0:5000");
         let serial = PortConfig {
             name: "COM3".into(),
             ..PortConfig::default()
         };
-        assert_eq!(describe_transport(&serial), "串口");
-        // 未知类型同样落「串口」文案（错误消息体系与既有实现一致）
+        assert_eq!(describe_transport(&serial), "serial");
+        // 未知类型同样落 serial 文案（技术记法体系一致）
         let unknown = PortConfig {
             transport: Some("??".into()),
             ..PortConfig::default()
         };
-        assert_eq!(describe_transport(&unknown), "串口");
+        assert_eq!(describe_transport(&unknown), "serial");
     }
 
     #[test]

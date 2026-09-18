@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use tauri::{AppHandle, Manager};
 
+use super::errors::cmd_err;
+
 /// 现场档案目录（与 connect_cmd 的 sessions_dir 同源：app_data_dir()/sessions/captures）
 fn captures_dir_of(app: &AppHandle) -> PathBuf {
     app.path()
@@ -73,7 +75,7 @@ pub fn delete_capture_cmd(app: AppHandle, path: String) -> Result<(), String> {
         .canonicalize()
         .map_err(|e| e.to_string())?;
     if !p.starts_with(&dir) || p.extension().and_then(|x| x.to_str()) != Some("log") {
-        return Err("路径不在现场档案目录内".into());
+        return Err(cmd_err("path_outside_captures", ""));
     }
     std::fs::remove_file(&p).map_err(|e| e.to_string())
 }
