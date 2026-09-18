@@ -12,6 +12,8 @@ import {
 import DockDecode from './DockDecode.vue'
 import DockAlerts from './DockAlerts.vue'
 import DockMonitor from './DockMonitor.vue'
+import { t } from '../i18n'
+import type { MessageKey } from '../i18n'
 
 /** 底部 dock 容器（docs/plan-layout-v1.md §2-③）：
  *  页签（解码 / 告警历史 / 监控）+ 上缘拖高 + 收起；状态持久化到 serialtool.dock。
@@ -39,11 +41,16 @@ watch(
   { immediate: true },
 )
 
-const tabs = computed<{ key: DockTab; label: string }[]>(() => [
-  ...(ui.enabled ? [{ key: 'decode' as DockTab, label: '解码' }] : []),
-  { key: 'alerts', label: '告警历史' },
-  { key: 'monitor', label: '监控' },
-])
+// 页签标签存 MessageKey，渲染点 t() 求值（切语言即时刷新）
+const tabs = computed<{ key: DockTab; label: MessageKey }[]>(() => {
+  const list: { key: DockTab; label: MessageKey }[] = [
+    { key: 'alerts', label: 'dock.tabAlerts' },
+    { key: 'monitor', label: 'dock.tabMonitor' },
+  ]
+  // 解码页签仅在脚本启用时出现
+  if (ui.enabled) list.unshift({ key: 'decode', label: 'dock.tabDecode' })
+  return list
+})
 
 // 解析停用后解码页签消失：若正停留其上则回落到告警历史
 // （immediate：启动时记忆的页签是 decode 但解析未启用，同样回落）
@@ -84,11 +91,15 @@ function switchTab(key: DockTab) {
 
 /** 页签 tooltip 随收起态/是否停留变化，让「点页签开合」可被发现 */
 function tabTitle(key: DockTab) {
-  const label = tabs.value.find((t) => t.key === key)?.label ?? key
+  const labelKey = tabs.value.find((x) => x.key === key)?.label
+  if (!labelKey) return key
+  const label = t(labelKey)
   if (tab.value === key) {
-    return collapsed.value ? `${label}：点击展开面板` : `${label}：再次点击收起面板`
+    return collapsed.value
+      ? t('dock.tabExpandPanel', { label })
+      : t('dock.tabCollapsePanel', { label })
   }
-  return collapsed.value ? `${label}：点击展开并切换` : label
+  return collapsed.value ? t('dock.tabExpandSwitch', { label }) : label
 }
 
 function toggleCollapsed() {
@@ -129,32 +140,32 @@ function onResizeEnd() {
   <section ref="rootEl" class="dock" :class="{ collapsed }" :style="dockStyle">
     <div
       class="dock-resize"
-      title="拖动调整高度"
+      :title="t('dock.resizeTitle')"
       role="separator"
-      aria-label="调整底部面板高度"
+      :aria-label="t('dock.resizeAria')"
       aria-orientation="horizontal"
       @mousedown="onResizeStart"
     ></div>
     <div class="dock-tabs">
       <button
-        v-for="t in tabs"
-        :key="t.key"
+        v-for="tb in tabs"
+        :key="tb.key"
         class="dock-tab"
-        :class="{ active: tab === t.key }"
-        :title="tabTitle(t.key)"
-        :aria-pressed="tab === t.key"
-        @click="switchTab(t.key)"
+        :class="{ active: tab === tb.key }"
+        :title="tabTitle(tb.key)"
+        :aria-pressed="tab === tb.key"
+        @click="switchTab(tb.key)"
       >
-        {{ t.label }}
-        <span v-if="t.key === 'alerts' && alertBadge > 0" class="dock-tab-badge">{{
+        {{ t(tb.label) }}
+        <span v-if="tb.key === 'alerts' && alertBadge > 0" class="dock-tab-badge">{{
           alertBadge
         }}</span>
       </button>
       <span class="dock-tabs-spacer"></span>
       <button
         class="dock-toggle"
-        :title="collapsed ? '展开 dock' : '收起 dock'"
-        :aria-label="collapsed ? '展开底部面板' : '收起底部面板'"
+        :title="collapsed ? t('dock.expand') : t('dock.collapse')"
+        :aria-label="collapsed ? t('dock.expandAria') : t('dock.collapseAria')"
         :aria-expanded="!collapsed"
         @click="toggleCollapsed"
       >

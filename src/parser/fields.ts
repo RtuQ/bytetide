@@ -4,6 +4,7 @@
  * value = raw × scale + offset；map 命中显示映射值（raw 保留在位置标注里）。
  */
 import type { DecodedField, ParserEndian, ParserFmt, ValidatedField, ValidatedScript } from '../types/parser'
+import { t } from '../i18n'
 
 const FMT_SIZE: Record<ParserFmt, number> = { u8: 1, i8: 1, u16: 2, i16: 2, u32: 4, i32: 4, f32: 4 }
 
@@ -52,15 +53,15 @@ export function annotate(f: ValidatedField, raw: number): string {
   return s
 }
 
-/** type 类型名解析：无 type 声明 → meta.name；读数越界 → '未知'；map 未命中 → 0x.. */
+/** type 类型名解析：无 type 声明 → meta.name；读数越界 → 词条「未知」；map 未命中 → 0x.. */
 export function resolveTypeName(script: ValidatedScript, frame: Uint8Array): string {
-  const t = script.type
-  if (!t) return script.meta.name
-  const raw = readValue(frame, t.at, t.fmt, t.endian)
-  if (raw === null) return '未知'
-  const mapped = t.map[String(raw)]
+  const t2 = script.type
+  if (!t2) return script.meta.name
+  const raw = readValue(frame, t2.at, t2.fmt, t2.endian)
+  if (raw === null) return t('logic.parser.typeUnknown')
+  const mapped = t2.map[String(raw)]
   if (mapped !== undefined) return mapped
-  if (t.fmt === 'f32') return String(raw)
+  if (t2.fmt === 'f32') return String(raw)
   return `0x${(raw >>> 0).toString(16).toUpperCase()}`
 }
 
@@ -94,7 +95,7 @@ export function decodeDeclarative(script: ValidatedScript, frame: Uint8Array): D
   for (const f of script.fields ?? []) {
     const raw = readValue(frame, f.at, f.fmt, f.endian)
     if (raw === null) {
-      out.push({ label: f.label, value: '—', unit: f.unit || undefined, raw: `越界@${f.at}` })
+      out.push({ label: f.label, value: '—', unit: f.unit || undefined, raw: t('logic.parser.outOfRange', { at: f.at }) })
       continue
     }
     const mapped = f.map ? f.map[String(raw)] : undefined

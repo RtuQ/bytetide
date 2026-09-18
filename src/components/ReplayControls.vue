@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useSessionStore } from '../stores/session'
 import { commands } from '../ipc/commands'
 import { toast } from '../composables/useToast'
+import { t } from '../i18n'
+import type { MessageKey } from '../i18n'
 import type { ReplayAction, ReplayState, ReplayView } from '../ipc/types'
 
 /**
@@ -22,13 +24,14 @@ const state = computed<ReplayState>(() => replay.value?.state ?? 'ready')
 const dead = computed(() => state.value === 'stopped' || state.value === 'error')
 const playing = computed(() => state.value === 'running')
 
-const STATE_LABEL: Record<ReplayState, string> = {
-  ready: '准备中',
-  running: '回放中',
-  paused: '已暂停',
-  finished: '已播完',
-  stopped: '已停止',
-  error: '回放错误',
+// code→词条映射：值存 MessageKey，使用点 t() 求值（切语言即时刷新）
+const STATE_LABEL: Record<ReplayState, MessageKey> = {
+  ready: 'replay.stateReady',
+  running: 'replay.stateRunning',
+  paused: 'replay.statePaused',
+  finished: 'replay.stateFinished',
+  stopped: 'replay.stateStopped',
+  error: 'replay.stateError',
 }
 
 const SPEEDS = [0.1, 0.5, 1, 2, 5, 10, 50, 100]
@@ -45,7 +48,7 @@ async function control(action: ReplayAction, value?: number) {
   try {
     apply(await commands.replayControl(props.sessionId, action, value))
   } catch (e) {
-    toast('回放控制失败', 'error', 4000, String(e))
+    toast(t('replay.controlFailed'), 'error', 4000, String(e))
   }
 }
 
@@ -103,12 +106,12 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div v-if="session" class="replay-bar" role="toolbar" aria-label="回放控制">
+  <div v-if="session" class="replay-bar" role="toolbar" :aria-label="t('replay.toolbarAria')">
     <button
       class="btn btn-ghost btn-sm"
       :disabled="dead"
-      :title="playing ? '暂停回放' : state === 'finished' ? '从头重播' : '继续回放'"
-      :aria-label="playing ? '暂停回放' : '播放回放'"
+      :title="playing ? t('replay.pauseTitle') : state === 'finished' ? t('replay.replayFromStart') : t('replay.resumeTitle')"
+      :aria-label="playing ? t('replay.pauseTitle') : t('replay.playAria')"
       @click="togglePlay"
     >
       <svg
@@ -129,13 +132,13 @@ onBeforeUnmount(() => {
         stroke-linecap="round"
         stroke-linejoin="round"
       ><polygon points="6 3 20 12 6 21 6 3" /></svg>
-      <span>{{ playing ? '暂停' : state === 'paused' ? '继续' : '播放' }}</span>
+      <span>{{ playing ? t('replay.pause') : state === 'paused' ? t('replay.resume') : t('replay.play') }}</span>
     </button>
     <button
       class="btn btn-ghost btn-sm"
       :disabled="dead"
-      title="停止回放（已播行保留在视图中）"
-      aria-label="停止回放"
+      :title="t('replay.stopTitle')"
+      :aria-label="t('replay.stopAria')"
       @click="stop"
     >
       <svg
@@ -146,22 +149,22 @@ onBeforeUnmount(() => {
         stroke-linecap="round"
         stroke-linejoin="round"
       ><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
-      <span>停止</span>
+      <span>{{ t('replay.stop') }}</span>
     </button>
-    <span class="replay-state" :class="`is-${state}`">{{ STATE_LABEL[state] }}</span>
-    <label class="check" title="循环：到达文件尾后回到第 1 行继续回放">
+    <span class="replay-state" :class="`is-${state}`">{{ t(STATE_LABEL[state]) }}</span>
+    <label class="check" :title="t('replay.loopTitle')">
       <input type="checkbox" :checked="replay?.looped ?? false" :disabled="dead" @change="onLoop" />
       <span class="box">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
       </span>
-      <span>循环</span>
+      <span>{{ t('replay.loop') }}</span>
     </label>
     <select
       class="select replay-speed"
       :value="replay?.speed ?? 1"
       :disabled="dead"
-      title="回放倍速（缩放相邻行原始时间差）"
-      aria-label="回放倍速"
+      :title="t('replay.speedTitle')"
+      :aria-label="t('replay.speedAria')"
       @change="onSpeed"
     >
       <option v-for="v in SPEEDS" :key="v" :value="v">{{ v }}×</option>
@@ -173,12 +176,12 @@ onBeforeUnmount(() => {
       :max="sliderMax"
       :value="sliderValue"
       :disabled="dead || total === 0"
-      aria-label="跳转到指定行"
+      :aria-label="t('replay.seekAria')"
       @input="onSeekInput"
       @change="onSeekChange"
     />
     <span class="replay-pos">
-      {{ dragging ? `跳至 ${dragValue} 行` : `行 ${current} / ${total.toLocaleString()}` }}
+      {{ dragging ? t('replay.seekTo', { n: dragValue }) : t('replay.pos', { cur: current, total: total.toLocaleString() }) }}
     </span>
   </div>
 </template>

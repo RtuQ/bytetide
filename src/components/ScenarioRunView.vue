@@ -3,6 +3,8 @@ import { computed, ref } from 'vue'
 import { save } from '@tauri-apps/plugin-dialog'
 import { commands } from '../ipc/commands'
 import { useAutomationStore } from '../stores/automation'
+import { t } from '../i18n'
+import type { MessageKey } from '../i18n'
 import type { ScenarioReportFormat } from '../types/automation'
 
 /**
@@ -16,25 +18,35 @@ const automation = useAutomationStore()
 
 const run = computed(() => automation.runs[props.runId] ?? null)
 
-const STATUS_TEXT: Record<string, string> = {
-  running: '运行中',
-  passed: '通过',
-  failed: '失败',
-  cancelled: '已取消',
+// code→词条映射：值存 MessageKey，使用点 t() 求值（切语言即时刷新）；未知 code 回退原样
+const STATUS_TEXT: Record<string, MessageKey> = {
+  running: 'scen.stRunning',
+  passed: 'scen.stPassed',
+  failed: 'scen.stFailed',
+  cancelled: 'scen.stCancelled',
 }
 
-/** scenario-progress 的叶步种类 → 中文标签 */
-const KIND_TEXT: Record<string, string> = {
-  send: '发送',
-  signal: '信号',
-  delay: '延时',
-  wait: '等待',
-  assert: '断言',
+/** scenario-progress 的叶步种类 → 词条 */
+const KIND_TEXT: Record<string, MessageKey> = {
+  send: 'scen.kindSend',
+  signal: 'scen.kindSignal',
+  delay: 'scen.kindDelay',
+  wait: 'scen.kindWait',
+  assert: 'scen.kindAssert',
 }
+
+const statusText = computed(() => {
+  const s = run.value?.status
+  if (s === undefined) return ''
+  const k: MessageKey | undefined = STATUS_TEXT[s]
+  return k ? t(k) : s
+})
 
 const kindText = computed(() => {
   const k = run.value?.kind
-  return k ? (KIND_TEXT[k] ?? k) : ''
+  if (!k) return ''
+  const mk: MessageKey | undefined = KIND_TEXT[k]
+  return mk ? t(mk) : k
 })
 
 async function stopRun() {
@@ -56,7 +68,7 @@ async function saveReport(format: ScenarioReportFormat) {
     if (!path) return
     await commands.exportText(path, text)
   } catch (e) {
-    automation.lastError = `报告保存失败：${String(e instanceof Error ? e.message : e)}`
+    automation.lastError = t('scen.reportSaveFailed', { msg: String(e instanceof Error ? e.message : e) })
   } finally {
     savingReport.value = false
   }
@@ -65,26 +77,26 @@ async function saveReport(format: ScenarioReportFormat) {
 
 <template>
   <div class="sc-runview">
-    <div v-if="!run" class="sc-runview-empty panel-hint">无运行记录</div>
+    <div v-if="!run" class="sc-runview-empty panel-hint">{{ t('scen.noRun') }}</div>
     <template v-else>
       <div class="sc-runview-head">
-        <span class="sc-status" :class="`st-${run.status}`">{{ STATUS_TEXT[run.status] ?? run.status }}</span>
+        <span class="sc-status" :class="`st-${run.status}`">{{ statusText }}</span>
         <span class="sc-run-meta">{{ run.runId }}</span>
         <span class="sc-run-meta">{{ run.sessionId }}</span>
         <span v-if="run.durationMs !== undefined" class="sc-run-meta">{{ (run.durationMs / 1000).toFixed(1) }}s</span>
       </div>
       <div v-if="run.status === 'running'" class="sc-runview-progress">
         <span class="sc-progress" aria-live="polite">
-          {{ run.progress ? `${run.progress.currentStep} / ${run.progress.totalSteps} 步` : '启动中…' }}
+          {{ run.progress ? t('scen.progress', { cur: run.progress.currentStep, total: run.progress.totalSteps }) : t('scen.starting') }}
         </span>
-        <span v-if="kindText" class="sc-kind-now">当前：{{ kindText }}</span>
+        <span v-if="kindText" class="sc-kind-now">{{ t('scen.current', { kind: kindText }) }}</span>
         <span class="send-spacer"></span>
-        <button class="btn btn-danger btn-sm sc-stop" type="button" title="停止该场景运行" @click="stopRun">停止</button>
+        <button class="btn btn-danger btn-sm sc-stop" type="button" :title="t('scen.stopTitle')" @click="stopRun">{{ t('scen.stop') }}</button>
       </div>
       <div v-if="run.error" class="sc-run-err">{{ run.error }}</div>
       <div v-if="run.status !== 'running'" class="sc-runview-reports">
-        <button class="btn btn-sm sc-report-json" type="button" title="获取 JSON 报告并另存为文件" @click="saveReport('json')">保存 JSON 报告</button>
-        <button class="btn btn-sm sc-report-junit" type="button" title="获取 JUnit XML 报告并另存为文件" @click="saveReport('junit')">保存 JUnit 报告</button>
+        <button class="btn btn-sm sc-report-json" type="button" :title="t('scen.reportJsonTitle')" @click="saveReport('json')">{{ t('scen.reportJson') }}</button>
+        <button class="btn btn-sm sc-report-junit" type="button" :title="t('scen.reportJunitTitle')" @click="saveReport('junit')">{{ t('scen.reportJunit') }}</button>
       </div>
     </template>
   </div>

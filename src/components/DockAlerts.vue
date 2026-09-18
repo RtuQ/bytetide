@@ -2,16 +2,19 @@
 import { useSessionStore } from '../stores/session'
 import { useAlertStore } from '../stores/alerts'
 import type { AlertLevel } from '../types'
+import { t } from '../i18n'
+import type { MessageKey } from '../i18n'
 
 /** 告警历史（自 AlertPanel 迁出，数据源与行为照搬：告警事件监听 + REST mirror 的内存环形） */
 const store = useSessionStore()
 const alerts = useAlertStore()
 alerts.load()
 
-const LEVEL_LABEL: Record<AlertLevel, string> = {
-  info: '提示',
-  warn: '警告',
-  err: '错误',
+// code→词条映射：值存 MessageKey，使用点 t() 求值（切语言即时刷新）
+const LEVEL_LABEL: Record<AlertLevel, MessageKey> = {
+  info: 'alerth.levelInfo',
+  warn: 'alerth.levelWarn',
+  err: 'alerth.levelErr',
 }
 
 function fmtTime(at: number) {
@@ -32,20 +35,20 @@ function jumpToHit(sessionId: string, no: number) {
 <template>
   <div class="dock-alerts">
     <div class="dock-alerts-head">
-      <span class="dock-alerts-title">历史（{{ alerts.hits.length }}）</span>
+      <span class="dock-alerts-title">{{ t('alerth.title', { n: alerts.hits.length }) }}</span>
       <span class="dock-tabs-spacer"></span>
       <button
         class="btn btn-ghost btn-sm"
         :disabled="!alerts.hits.length"
-        title="清空全部告警历史"
+        :title="t('alerth.clearTitle')"
         @click="alerts.clear()"
       >
-        清空
+        {{ t('alerth.clear') }}
       </button>
     </div>
     <div v-if="!alerts.hits.length" class="dock-empty">
-      <span>暂无告警</span>
-      <small>连接设备后，命中的告警会显示在这里</small>
+      <span>{{ t('alerth.empty') }}</span>
+      <small>{{ t('alerth.emptyHint') }}</small>
     </div>
     <div v-else class="dock-alerts-list">
       <div
@@ -53,9 +56,9 @@ function jumpToHit(sessionId: string, no: number) {
         :key="h.id"
         class="dock-alert-row"
         @click="jumpToHit(h.sessionId, h.no)"
-        :title="h.sessionName + ' #' + h.no + '，点击跳转'"
+        :title="t('alerth.rowTitle', { name: h.sessionName, no: h.no })"
       >
-        <span class="dock-lvl" :class="'lv-' + h.level">{{ LEVEL_LABEL[h.level] }}</span>
+        <span class="dock-lvl" :class="'lv-' + h.level">{{ t(LEVEL_LABEL[h.level]) }}</span>
         <span class="dock-alert-time">{{ fmtTime(h.at) }}</span>
         <span class="dock-alert-name">{{ h.sessionName }}</span>
         <span class="dock-alert-text">{{ h.text }}</span>

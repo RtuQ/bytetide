@@ -3,6 +3,7 @@ import { computed, inject } from 'vue'
 import { useSessionStore } from '../stores/session'
 import { HIGHLIGHTER_KEY, hlStyle } from '../composables/useHighlighter'
 import type { LogLine } from '../types'
+import { t } from '../i18n'
 
 const store = useSessionStore()
 const active = computed(() => store.active)
@@ -26,7 +27,7 @@ function jump(no: number) {
   <details class="panel">
     <summary class="panel-head">
       <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
-      <span class="panel-title">书签</span>
+      <span class="panel-title">{{ t('lv.bm.title') }}</span>
       <span v-if="active" class="badge">{{ live.length }}</span>
       <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
     </summary>
@@ -51,15 +52,15 @@ function jump(no: number) {
           </span>
         </div>
         <div v-if="!live.length" class="ms-empty">
-          无书签。点击日志行选中后，按 Ctrl+F2 或工具栏“书签”按钮添加；行可能随缓冲上限（{{ store.logConfig.viewBufCap.toLocaleString() }} 行）滚动淘汰
+          {{ t('lv.bm.empty', { n: store.logConfig.viewBufCap.toLocaleString() }) }}
         </div>
       </div>
       <div class="bm-foot" v-if="live.length">
         <button class="btn btn-ghost btn-sm" @click="store.clearBookmarks(active.id)">
-          清空全部
+          {{ t('lv.bm.clearAll') }}
         </button>
       </div>
     </div>
-    <div v-else class="panel-empty">无活动会话</div>
+    <div v-else class="panel-empty">{{ t('lv.noSession') }}</div>
   </details>
 </template>

@@ -7,6 +7,8 @@ import { useLineStats } from '../composables/useLineStats'
 import { usePerfWatch } from '../composables/usePerfWatch'
 import { humanizeBytes, useRate } from '../composables/useRate'
 import MiniChart from './MiniChart.vue'
+import { t } from '../i18n'
+import type { MessageKey } from '../i18n'
 
 /** 监控页签（自 MatchStats 整体迁入，计算逻辑原样搬运；跟随活动会话） */
 const store = useSessionStore()
@@ -21,13 +23,16 @@ function fmtT(at: number) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
 }
 
-// 导出状态反馈：'idle' | 'pending' | 'ok' | 'err'，3s 后自动清回 idle
-const exportStatus = ref<{ kind: 'idle' | 'pending' | 'ok' | 'err'; msg?: string }>({
-  kind: 'idle',
-})
+// 导出状态反馈：'idle' | 'pending' | 'ok' | 'err'，3s 后自动清回 idle。
+// titleKey 存完整提示语的 MessageKey（切语言即时刷新），detail 为路径/错误原文
+const exportStatus = ref<{
+  kind: 'idle' | 'pending' | 'ok' | 'err'
+  titleKey?: MessageKey
+  detail?: string
+}>({ kind: 'idle' })
 let exportTimer: ReturnType<typeof setTimeout> | null = null
-function setExportStatus(kind: 'ok' | 'err', msg: string) {
-  exportStatus.value = { kind, msg }
+function setExportStatus(kind: 'ok' | 'err', titleKey: MessageKey, detail = '') {
+  exportStatus.value = { kind, titleKey, detail }
   if (exportTimer) clearTimeout(exportTimer)
   exportTimer = setTimeout(() => {
     exportStatus.value = { kind: 'idle' }
@@ -44,16 +49,16 @@ async function exportDiag() {
       filters: [{ name: 'JSON', extensions: ['json'] }],
     })
   } catch (e) {
-    setExportStatus('err', `对话框失败：${String(e)}`)
+    setExportStatus('err', 'mon.dialogFailed', String(e))
     return
   }
   if (!path) return
   exportStatus.value = { kind: 'pending' }
   try {
     await commands.exportText(path, JSON.stringify({ exportedAt: Date.now(), entries: perf.entries.value }, null, 2))
-    setExportStatus('ok', path)
+    setExportStatus('ok', 'mon.exportedTitle', path)
   } catch (e) {
-    setExportStatus('err', String(e))
+    setExportStatus('err', 'mon.exportFailedTitle', String(e))
   }
 }
 
@@ -81,20 +86,20 @@ const lastByteRate = computed(() =>
 <template>
   <div class="dock-monitor">
     <template v-if="active">
-      <div class="perf-line" :class="perfCls" title="显示滞后=当前墙钟−最新行后端时间戳；批均=单批次处理耗时">
+      <div class="perf-line" :class="perfCls" :title="t('mon.lagTitle')">
         <span class="perf-dot"></span>
-        处理延迟 <b>{{ perf.lagMs.value }}</b>ms · 批均 {{ perf.batchCostMs.value }}ms
+        {{ t('mon.lag') }} <b>{{ perf.lagMs.value }}</b>ms · {{ t('mon.batchAvg') }} {{ perf.batchCostMs.value }}ms
         <span
           v-if="perf.entries.value.length"
           class="perf-exp"
           :class="`s-${exportStatus.kind}`"
           role="button"
-          :title="exportStatus.kind === 'pending' ? '导出中…' : exportStatus.kind === 'ok' ? `已导出：${exportStatus.msg}` : exportStatus.kind === 'err' ? `导出失败：${exportStatus.msg}` : '导出诊断记录 JSON'"
+          :title="exportStatus.kind === 'pending' ? t('mon.exporting') : exportStatus.titleKey ? t(exportStatus.titleKey, { msg: exportStatus.detail ?? '' }) : t('mon.exportDiagTitle')"
           @click.stop="exportDiag"
-        >{{ exportStatus.kind === 'pending' ? '导出中…' : exportStatus.kind === 'ok' ? '已导出' : exportStatus.kind === 'err' ? '导出失败' : '导出诊断' }}</span>
+        >{{ exportStatus.kind === 'pending' ? t('mon.exporting') : exportStatus.kind === 'ok' ? t('mon.exported') : exportStatus.kind === 'err' ? t('mon.exportFailed') : t('mon.exportDiag') }}</span>
       </div>
       <details v-if="perf.entries.value.length" class="perf-detail">
-        <summary>诊断记录（{{ perf.entries.value.length }}）</summary>
+        <summary>{{ t('mon.diagCount', { n: perf.entries.value.length }) }}</summary>
         <div class="perf-rows">
           <div v-for="(d, i) in perf.entries.value.slice(0, 80)" :key="d.at + '-' + i" :class="{ 'perf-row-hidden': d.vis === 'hidden' }">
             {{ fmtT(d.at) }} {{ d.kind }} lag={{ d.lagMs }}ms batch={{ d.batchMs }}ms n={{ d.lines }} vis={{ d.vis }} [{{ d.sessionId }}]
@@ -103,20 +108,20 @@ const lastByteRate = computed(() =>
       </details>
       <div class="dock-mon-body">
         <div class="dock-mon-cards">
-          <div class="dock-mon-card" title="最近 1 秒接收字节数">
-            <div class="dock-mon-k">RX 速率</div>
+          <div class="dock-mon-card" :title="t('mon.rxTitle')">
+            <div class="dock-mon-k">{{ t('mon.rx') }}</div>
             <div class="dock-mon-v rx">{{ humanizeBytes(rxBps) }}<small>/s</small></div>
           </div>
-          <div class="dock-mon-card" title="最近 1 秒发送字节数">
-            <div class="dock-mon-k">TX 速率</div>
+          <div class="dock-mon-card" :title="t('mon.txTitle')">
+            <div class="dock-mon-k">{{ t('mon.tx') }}</div>
             <div class="dock-mon-v tx">{{ humanizeBytes(txBps) }}<small>/s</small></div>
           </div>
-          <div class="dock-mon-card" :title="`缓冲行数 ${active.lines.length.toLocaleString()}`">
-            <div class="dock-mon-k">RX / TX 行数</div>
+          <div class="dock-mon-card" :title="t('mon.bufTitle', { n: active.lines.length.toLocaleString() })">
+            <div class="dock-mon-k">{{ t('mon.lines') }}</div>
             <div class="dock-mon-v">{{ active.rxLines.toLocaleString() }} / {{ active.txLines.toLocaleString() }}</div>
           </div>
-          <div class="dock-mon-card" title="前端缓冲上限（50k 行）裁剪掉的行数累计">
-            <div class="dock-mon-k">丢行</div>
+          <div class="dock-mon-card" :title="t('mon.droppedTitle')">
+            <div class="dock-mon-k">{{ t('mon.dropped') }}</div>
             <div class="dock-mon-v" :class="{ bad: active.droppedLines > 0 }">{{
               active.droppedLines.toLocaleString()
             }}</div>
@@ -124,20 +129,20 @@ const lastByteRate = computed(() =>
         </div>
         <div class="dock-mon-charts">
           <div class="dock-mon-chart">
-            <div class="dock-mon-cl"><span>行速率（60s）</span><span>峰值 <b>{{ maxLineRate }}</b>/s</span></div>
+            <div class="dock-mon-cl"><span>{{ t('mon.lineRate') }}</span><span>{{ t('mon.peak') }} <b>{{ maxLineRate }}</b>/s</span></div>
             <div class="dock-mon-canvas">
               <MiniChart :values="lineVals" color="var(--accent)" />
             </div>
           </div>
           <div class="dock-mon-chart">
-            <div class="dock-mon-cl"><span>字节速率（60s）</span><span>当前 <b>{{ humanizeBytes(lastByteRate) }}</b>/s</span></div>
+            <div class="dock-mon-cl"><span>{{ t('mon.byteRate') }}</span><span>{{ t('mon.current') }} <b>{{ humanizeBytes(lastByteRate) }}</b>/s</span></div>
             <div class="dock-mon-canvas">
               <MiniChart :values="byteHist" color="var(--rx)" />
             </div>
           </div>
           <div class="dock-mon-chart">
             <div class="dock-mon-cl">
-              <span>RX Δ间隔（{{ gaps.count }} 对）</span>
+              <span>{{ t('mon.gapTitle', { n: gaps.count }) }}</span>
               <span>min {{ gaps.min }} · avg {{ gaps.avg }} · p95 <b>{{ gaps.p95 }}</b> · max {{ gaps.max }} ms</span>
             </div>
             <div class="dock-mon-canvas">
@@ -147,6 +152,6 @@ const lastByteRate = computed(() =>
         </div>
       </div>
     </template>
-    <div v-else class="dock-empty">无活动会话</div>
+    <div v-else class="dock-empty">{{ t('mon.noSession') }}</div>
   </div>
 </template>

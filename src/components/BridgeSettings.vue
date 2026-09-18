@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useBridgeStore } from '../stores/bridge'
+import { t } from '../i18n'
 import type { BridgeConfig } from '../types'
 
 // 内容组件：由 SettingsPopover 承载（自身不带触发按钮与浮层壳）
@@ -14,13 +15,13 @@ const pendingRemote = ref(false)
 const statusLabel = computed(() => {
   switch (bridge.runtime.state) {
     case 'running':
-      return '运行中'
+      return t('bridge.running')
     case 'starting':
-      return '启动中'
+      return t('bridge.starting')
     case 'error':
-      return '桥服务启动失败'
+      return t('bridge.startFailed')
     default:
-      return '已停止'
+      return t('bridge.stopped')
   }
 })
 /** 绑定失败详情（后端 last_error，仅描述故障，不含令牌） */
@@ -62,28 +63,28 @@ function onPort(e: Event) {
     <span class="box">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
     </span>
-    <span>启用桥服务（外部 AI 经 Bearer 令牌读取/分析日志）</span>
+    <span>{{ t('bridge.enable') }}</span>
   </label>
 
   <div class="field">
-    <span class="field-label">绑定地址</span>
+    <span class="field-label">{{ t('bridge.bind') }}</span>
     <div class="seg">
-      <button class="seg-item" :class="{ active: cfg.bind === '127.0.0.1' }" @click="onBind('127.0.0.1')">仅本机</button>
-      <button class="seg-item" :class="{ active: cfg.bind === '0.0.0.0' }" @click="onBind('0.0.0.0')">全部（远程可达）</button>
+      <button class="seg-item" :class="{ active: cfg.bind === '127.0.0.1' }" @click="onBind('127.0.0.1')">{{ t('bridge.bindLocal') }}</button>
+      <button class="seg-item" :class="{ active: cfg.bind === '0.0.0.0' }" @click="onBind('0.0.0.0')">{{ t('bridge.bindAll') }}</button>
     </div>
   </div>
 
-  <p v-if="pendingRemote" class="panel-hint hint-warn" role="alertdialog" aria-label="远程绑定确认">
-    「全部（远程可达）」会把桥服务暴露到局域网：任何拿到地址与令牌的机器都能读取日志（允许发送时还能操作设备）。仅在受信任的网络中使用。
+  <p v-if="pendingRemote" class="panel-hint hint-warn" role="alertdialog" :aria-label="t('bridge.remoteConfirmAria')">
+    {{ t('bridge.remoteWarning', { mode: t('bridge.bindAll') }) }}
     <span class="row2" style="margin-top: 6px;">
-      <button class="btn btn-sm" @click="confirmRemoteBind">确认远程绑定</button>
-      <button class="btn btn-sm btn-ghost" @click="pendingRemote = false">取消</button>
+      <button class="btn btn-sm" @click="confirmRemoteBind">{{ t('bridge.confirmRemote') }}</button>
+      <button class="btn btn-sm btn-ghost" @click="pendingRemote = false">{{ t('bridge.cancel') }}</button>
     </span>
   </p>
 
   <div class="row2">
     <div class="field">
-      <span class="field-label">端口</span>
+      <span class="field-label">{{ t('bridge.port') }}</span>
       <input
         class="input"
         type="number"
@@ -94,14 +95,14 @@ function onPort(e: Event) {
       />
     </div>
     <div class="field">
-      <span class="field-label">令牌</span>
-      <input class="input input-mono" :value="cfg.token || '（未设置，启用时自动生成）'" readonly />
+      <span class="field-label">{{ t('bridge.token') }}</span>
+      <input class="input input-mono" :value="cfg.token || t('bridge.tokenEmpty')" readonly />
     </div>
   </div>
 
   <div class="row2">
-    <button class="btn btn-sm" @click="bridge.regenToken()" :disabled="bridge.busy">重置令牌</button>
-    <button class="btn btn-sm btn-ghost" @click="bridge.copyToken()" :disabled="!cfg.token">复制令牌</button>
+    <button class="btn btn-sm" @click="bridge.regenToken()" :disabled="bridge.busy">{{ t('bridge.regenToken') }}</button>
+    <button class="btn btn-sm btn-ghost" @click="bridge.copyToken()" :disabled="!cfg.token">{{ t('bridge.copyToken') }}</button>
   </div>
 
   <label class="check">
@@ -109,14 +110,12 @@ function onPort(e: Event) {
     <span class="box">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
     </span>
-    <span>允许 AI 发送 / 交换（命令-响应探测）</span>
+    <span>{{ t('bridge.allowSend') }}</span>
   </label>
-  <p v-if="cfg.allowSend" class="panel-hint hint-warn">
-    注意：开启后 AI 可向设备发送数据。仅在你确需命令-响应探测、且理解发送内容时启用。
-  </p>
+  <p v-if="cfg.allowSend" class="panel-hint hint-warn">{{ t('bridge.allowSendWarn') }}</p>
 
   <div class="row2">
-    <button class="btn btn-sm" @click="bridge.copyUrl()">复制地址</button>
+    <button class="btn btn-sm" @click="bridge.copyUrl()">{{ t('bridge.copyUrl') }}</button>
     <span class="bridge-url">{{ bridge.baseUrl }}</span>
   </div>
 
@@ -127,11 +126,11 @@ function onPort(e: Event) {
       :style="bridge.runtime.state === 'error' ? { color: 'var(--err)' } : undefined"
       role="status"
     >{{ statusLabel }}</span>
-    <template v-if="bridge.runtime.state === 'running' && bridge.runtime.bound">监听 {{ bridge.runtime.bound }}，</template>
-    远程/虚拟机：把地址与令牌复制到 AI 机器，设置环境变量 SERIALTOOL_URL / SERIALTOOL_TOKEN。
+    <template v-if="bridge.runtime.state === 'running' && bridge.runtime.bound">{{ t('bridge.listening', { addr: bridge.runtime.bound }) }}</template>
+    {{ t('bridge.remoteHint') }}
   </p>
   <p v-if="runtimeError" class="panel-hint" :style="{ color: 'var(--err)' }">
-    {{ runtimeError }}（可在上方修改绑定地址/端口后重试，或关闭桥服务）
+    {{ runtimeError }}{{ t('bridge.runtimeErrorHint') }}
   </p>
   <p v-if="bridge.lastError" class="panel-hint hint-warn">{{ bridge.lastError }}</p>
 </template>

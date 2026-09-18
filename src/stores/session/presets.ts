@@ -15,6 +15,7 @@ import {
 } from '../../types'
 import { makeCodec } from '../../persistence/schema'
 import { loadValue, saveStored } from '../../persistence/storage'
+import { t } from '../../i18n'
 import { newKeywordId, newRuleId } from './rules'
 import type { Session } from './model'
 
@@ -380,7 +381,7 @@ export function insertConfigPreset(
 ): ConfigPreset[] {
   const next: ConfigPreset = {
     id: newPresetId('cp'),
-    name: name.trim() || `${category} 预设`,
+    name: name.trim() || t('logic.preset.defaultName', { category }),
     category,
     createdAt: Date.now(),
     data,
@@ -420,7 +421,7 @@ export function mergeConfigPresetImport(
     ids.add(id)
     merged.push({
       id,
-      name: typeof p.name === 'string' ? p.name : `${p.category} 预设`,
+      name: typeof p.name === 'string' ? p.name : t('logic.preset.defaultName', { category: p.category }),
       category: p.category,
       createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now(),
       data: p.data,

@@ -9,6 +9,7 @@ import { feedParser } from './useParserEngine'
 import { connectionErrorHint, dismissByTag, toast } from './useToast'
 import { useNotificationPrefs } from './useNotificationPrefs'
 import { consumePortDiff, describePort } from './usePortNotifications'
+import { t, type MessageKey } from '../i18n'
 import { commands } from '../ipc/commands'
 import {
   onAlertHit,
@@ -271,10 +272,12 @@ export async function setupEvents(): Promise<Unlisten[]> {
       }
       if (p.status === 'connected' && notif.enabled) {
         dismissByTag('disconnect')
-        toast('连接成功', 'success', 2600, session?.config.name)
+        toast(t('logic.toast.connected'), 'success', 2600, session?.config.name)
       }
       if (p.status === 'disconnected') {
-        if (notif.enabled) toast('连接已断开', 'warning', 6000, session?.config.name, 'disconnect')
+        if (notif.enabled) {
+          toast(t('logic.toast.disconnected'), 'warning', 6000, session?.config.name, 'disconnect')
+        }
         void drainSessionTail(p.sessionId)
       }
     }),
@@ -282,7 +285,7 @@ export async function setupEvents(): Promise<Unlisten[]> {
   unlistens.push(
     await onSessionError((p) => {
       store.setError(p.sessionId, p.error)
-      // 正常断连（eof「已断开」文案）hint 返回 null：由 disconnected 状态提示负责，不报 error
+      // 正常断连（port_disconnected/net_disconnected 码）hint 返回 null：由 disconnected 状态提示负责，不报 error
       const hint = connectionErrorHint(p.error)
       if (hint) toast(hint.title, 'error', 4500, hint.action)
     }),
@@ -295,8 +298,12 @@ export async function setupEvents(): Promise<Unlisten[]> {
       const diff = consumePortDiff(ports)
       if (!diff) return
       if (!notif.enabled) return
-      for (const p of diff.arrived) toast(`串口已接入 · ${p.name}`, 'success', 3200, describePort(p))
-      for (const p of diff.removed) toast(`串口已移除 · ${p.name}`, 'warning', 4200, describePort(p))
+      for (const p of diff.arrived) {
+        toast(t('logic.toast.portArrived', { name: p.name }), 'success', 3200, describePort(p))
+      }
+      for (const p of diff.removed) {
+        toast(t('logic.toast.portRemoved', { name: p.name }), 'warning', 4200, describePort(p))
+      }
     }),
   )
   // REST 桥写回绘图文法（POST /plot-config）：前端即时采纳，绘图面板与曲线同步刷新
@@ -323,7 +330,8 @@ export async function setupEvents(): Promise<Unlisten[]> {
         // ring no -> UI 行号（拉模型下两者不同；rn 由 appendPulled 携带）
         const s = store.sessions[p.sessionId]
         const uiNo = s?.lines.find((l) => l.rn === h.no)?.no ?? null
-        const title = `${ALERT_LEVEL_LABEL[h.level] ?? h.level} · ${s?.config.name ?? p.sessionId}`
+        const levelKey = ALERT_LEVEL_LABEL[h.level]
+        const title = `${levelKey ? t(levelKey) : h.level} · ${s?.config.name ?? p.sessionId}`
         const body = `[${h.pattern}] ${alertSnippet(h.text)}`
         void ensureNotify(title, body)
         toast(title, 'warning', 4200, body)
@@ -352,7 +360,7 @@ export async function setupEvents(): Promise<Unlisten[]> {
   unlistens.push(
     await onCaptureSaved((p) => {
       store.setCaptureActive(p.sessionId, null)
-      toast('现场捕获已保存', 'success', 3200)
+      toast(t('logic.capture.saved'), 'success', 3200)
       void store.loadCaptures()
     }),
   )
@@ -368,15 +376,16 @@ export async function setupEvents(): Promise<Unlisten[]> {
   return unlistens
 }
 
-const ALERT_LEVEL_LABEL: Record<string, string> = {
-  info: '提示',
-  warn: '警告',
-  err: '错误',
+/** 告警级别 → 词条键（使用点 t() 求值；未知级别回退原码展示） */
+const ALERT_LEVEL_LABEL: Record<string, MessageKey> = {
+  info: 'logic.alert.levelInfo',
+  warn: 'logic.alert.levelWarn',
+  err: 'logic.alert.levelErr',
 }
 
 function alertSnippet(text: string): string {
-  const t = text.replace(/\s+/g, ' ').trim()
-  return t.length > 100 ? `${t.slice(0, 100)}…` : t || '(空行)'
+  const s = text.replace(/\s+/g, ' ').trim()
+  return s.length > 100 ? `${s.slice(0, 100)}…` : s || t('logic.alert.emptyLine')
 }
 
 async function ensureNotify(title: string, body: string) {

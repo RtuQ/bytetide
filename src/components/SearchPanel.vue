@@ -3,6 +3,7 @@ import { computed, inject, ref, shallowRef, watchEffect } from 'vue'
 import { useSessionStore } from '../stores/session'
 import { HIGHLIGHTER_KEY, hlStyle } from '../composables/useHighlighter'
 import type { FilterDir, FilterStage, LogLine } from '../types'
+import { t } from '../i18n'
 
 const store = useSessionStore()
 const active = computed(() => store.active)
@@ -109,7 +110,7 @@ const filteredHist = computed(() => {
   <details class="panel">
     <summary class="panel-head">
       <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-      <span class="panel-title">搜索</span>
+      <span class="panel-title">{{ t('lv.search.title') }}</span>
       <span v-if="active && stats.matchLines.length" class="badge">{{ stats.matchLines.length }}</span>
       <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
     </summary>
@@ -124,7 +125,7 @@ const filteredHist = computed(() => {
           @blur="onBlur"
           @keydown.enter.prevent="onEnter"
           @keydown.esc="showHist = false"
-          placeholder="关键词 / 正则表达式"
+          :placeholder="t('lv.search.placeholder')"
         />
         <div v-if="showHist && filteredHist.length" class="search-hist">
           <div
@@ -138,8 +139,8 @@ const filteredHist = computed(() => {
             <button
               class="search-hist-del"
               type="button"
-              title="删除该历史"
-              aria-label="删除该历史"
+              :title="t('lv.search.delHist')"
+              :aria-label="t('lv.search.delHist')"
               @mousedown.prevent.stop="delHist(h)"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
@@ -157,7 +158,7 @@ const filteredHist = computed(() => {
           <span class="box">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </span>
-          <span>正则</span>
+          <span>{{ t('lv.search.regex') }}</span>
         </label>
         <label class="check">
           <input
@@ -168,7 +169,7 @@ const filteredHist = computed(() => {
           <span class="box">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </span>
-          <span>区分大小写</span>
+          <span>{{ t('lv.search.caseSensitive') }}</span>
         </label>
         <label class="check">
           <input
@@ -179,15 +180,15 @@ const filteredHist = computed(() => {
           <span class="box">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </span>
-          <span>整词</span>
+          <span>{{ t('lv.search.wholeWord') }}</span>
         </label>
       </div>
 
       <!-- 命中结果：紧贴搜索输入；折叠即停算，展开由用户控制 -->
       <details class="sh-wrap" open @toggle="syncHitsOpen">
-        <summary class="sh-head" title="点击折叠/展开命中列表">
+        <summary class="sh-head" :title="t('lv.search.hitsToggleTitle')">
           <svg class="sh-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-          命中 <b>{{ stats.total }}</b> 次 / {{ stats.matchLines.length }} 行
+          <b>{{ stats.total }}</b> {{ t('lv.search.hitsUnit', { n: stats.matchLines.length }) }}
         </summary>
         <div v-if="hitsOpen" class="sh-list">
           <div
@@ -208,20 +209,20 @@ const filteredHist = computed(() => {
               >
             </span>
           </div>
-          <div v-if="!matchedLines.length" class="ms-empty">无命中行</div>
+          <div v-if="!matchedLines.length" class="ms-empty">{{ t('lv.search.noHits') }}</div>
         </div>
       </details>
 
       <div class="fl-head">
-        <span class="fl-title">过滤链（{{ active.filters.length }}）</span>
+        <span class="fl-title">{{ t('lv.search.filterChain', { n: active.filters.length }) }}</span>
         <span class="send-spacer"></span>
         <button class="btn btn-ghost btn-sm" @click="addStage">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
-          <span>加条件</span>
+          <span>{{ t('lv.search.addStage') }}</span>
         </button>
       </div>
       <div v-if="!active.filters.length" class="panel-hint">
-        多条包含/排除串联缩小显示范围；与上方搜索独立，预设库可保存整组
+        {{ t('lv.search.chainHint') }}
       </div>
       <div
         v-for="f in active.filters"
@@ -234,27 +235,27 @@ const filteredHist = computed(() => {
             <button
               class="seg-item"
               :class="{ active: f.mode === 'include' }"
-              title="只显示命中行"
+              :title="t('lv.search.includeTitle')"
               @click="updStage(f.id, { mode: 'include' })"
             >
-              含
+              {{ t('lv.search.include') }}
             </button>
             <button
               class="seg-item"
               :class="{ active: f.mode === 'exclude' }"
-              title="排除命中行"
+              :title="t('lv.search.excludeTitle')"
               @click="updStage(f.id, { mode: 'exclude' })"
             >
-              排
+              {{ t('lv.search.exclude') }}
             </button>
           </div>
           <input
             class="ar-reply"
             :value="f.text"
             @input="updStage(f.id, { text: ($event.target as HTMLInputElement).value })"
-            placeholder="条件内容"
+            :placeholder="t('lv.search.stagePlaceholder')"
           />
-          <button class="ar-x" @click="delStage(f.id)" title="删除" aria-label="删除该过滤条件">
+          <button class="ar-x" @click="delStage(f.id)" :title="t('lv.search.delStageTitle')" :aria-label="t('lv.search.delStageAria')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
           </button>
         </div>
@@ -264,12 +265,12 @@ const filteredHist = computed(() => {
               type="checkbox"
               :checked="f.enabled"
               @change="updStage(f.id, { enabled: ($event.target as HTMLInputElement).checked })"
-              title="启用该级"
+              :title="t('lv.search.enableTitle')"
             />
             <span class="box">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             </span>
-            <span>启用</span>
+            <span>{{ t('lv.search.enable') }}</span>
           </label>
           <label class="check">
             <input
@@ -280,7 +281,7 @@ const filteredHist = computed(() => {
             <span class="box">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             </span>
-            <span>正则</span>
+            <span>{{ t('lv.search.regex') }}</span>
           </label>
           <label class="check">
             <input
@@ -291,7 +292,7 @@ const filteredHist = computed(() => {
             <span class="box">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             </span>
-            <span>大小写</span>
+            <span>{{ t('lv.search.caseShort') }}</span>
           </label>
           <label class="check">
             <input
@@ -302,21 +303,21 @@ const filteredHist = computed(() => {
             <span class="box">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             </span>
-            <span>整词</span>
+            <span>{{ t('lv.search.wholeWord') }}</span>
           </label>
           <select
             class="select select-sm"
             :value="f.dir"
-            title="限定收发方向"
+            :title="t('lv.search.dirTitle')"
             @change="updStage(f.id, { dir: ($event.target as HTMLSelectElement).value as FilterDir })"
           >
-            <option value="any">方向不限</option>
-            <option value="rx">仅 RX</option>
-            <option value="tx">仅 TX</option>
+            <option value="any">{{ t('lv.search.dirAny') }}</option>
+            <option value="rx">{{ t('lv.search.dirRx') }}</option>
+            <option value="tx">{{ t('lv.search.dirTx') }}</option>
           </select>
         </div>
       </div>
     </div>
-    <div v-else class="panel-empty">无活动会话</div>
+    <div v-else class="panel-empty">{{ t('lv.noSession') }}</div>
   </details>
 </template>

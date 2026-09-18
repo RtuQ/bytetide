@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useSessionStore } from '../stores/session'
 import { DEFAULT_LOG_CONFIG } from '../types'
+import { t } from '../i18n'
 
 // 内容组件：由 SettingsPopover 承载（自身不带触发按钮与浮层壳）
 const store = useSessionStore()
@@ -24,7 +25,7 @@ function resetDefaults() {
 
 <template>
   <div class="field">
-    <span class="field-label">日志路径模板</span>
+    <span class="field-label">{{ t('lv.logset.pathLabel') }}</span>
     <input
       class="input input-mono"
       :value="store.logConfig.logPathTemplate"
@@ -32,10 +33,10 @@ function resetDefaults() {
       placeholder="D:\log\%H\%Y-%M-%D_%h%m%s.log"
       spellcheck="false"
     />
-    <span class="panel-hint">留空 = 默认路径。支持 %H 端口名、%Y-%M-%D 日期等</span>
+    <span class="panel-hint">{{ t('lv.logset.pathHint') }}</span>
   </div>
   <div class="field">
-    <span class="field-label">时间戳格式</span>
+    <span class="field-label">{{ t('lv.logset.tsLabel') }}</span>
     <input
       class="input input-mono"
       :value="store.logConfig.lineTsFormat"
@@ -43,29 +44,29 @@ function resetDefaults() {
       placeholder="[%Y-%M-%D %h:%m:%s.%t]"
       spellcheck="false"
     />
-    <span class="panel-hint">留空 = %h:%m:%s.%t（默认）</span>
+    <span class="panel-hint">{{ t('lv.logset.tsHint') }}</span>
   </div>
   <div class="logcfg-tokens">
-    <span class="tk">%Y</span>年
-    <span class="tk">%M</span>月
-    <span class="tk">%D</span>日
-    <span class="tk">%H</span>端口
-    <span class="tk">%S</span>主机
-    <span class="tk">%h</span>时
-    <span class="tk">%m</span>分
-    <span class="tk">%s</span>秒
-    <span class="tk">%t</span>毫秒
+    <span class="tk">%Y</span>{{ t('lv.logset.tokYear') }}
+    <span class="tk">%M</span>{{ t('lv.logset.tokMonth') }}
+    <span class="tk">%D</span>{{ t('lv.logset.tokDay') }}
+    <span class="tk">%H</span>{{ t('lv.logset.tokPort') }}
+    <span class="tk">%S</span>{{ t('lv.logset.tokHost') }}
+    <span class="tk">%h</span>{{ t('lv.logset.tokHour') }}
+    <span class="tk">%m</span>{{ t('lv.logset.tokMin') }}
+    <span class="tk">%s</span>{{ t('lv.logset.tokSec') }}
+    <span class="tk">%t</span>{{ t('lv.logset.tokMs') }}
     <span class="tk">%%</span>%
   </div>
   <div class="field">
-    <span class="field-label">视图缓冲上限</span>
+    <span class="field-label">{{ t('lv.logset.bufLabel') }}</span>
     <select class="select" :value="store.logConfig.viewBufCap" @change="onBufCap">
-      <option :value="50000">5 万行</option>
-      <option :value="100000">10 万行</option>
-      <option :value="200000">20 万行（默认）</option>
-      <option :value="500000">50 万行</option>
+      <option :value="50000">{{ t('lv.logset.buf50k') }}</option>
+      <option :value="100000">{{ t('lv.logset.buf100k') }}</option>
+      <option :value="200000">{{ t('lv.logset.buf200k') }}</option>
+      <option :value="500000">{{ t('lv.logset.buf500k') }}</option>
     </select>
-    <span class="panel-hint">超出上限即从最旧行开始裁剪；调大只对之后的行生效，不找回已裁剪的行</span>
+    <span class="panel-hint">{{ t('lv.logset.bufHint') }}</span>
   </div>
   <label class="check">
     <input
@@ -76,12 +77,12 @@ function resetDefaults() {
     <span class="box">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
     </span>
-    <span>午夜自动分段</span>
+    <span>{{ t('lv.logset.midnight') }}</span>
   </label>
-  <span class="panel-hint">连接/重连时生效；录制开启时跨天自动另起新分段文件</span>
-  <span class="panel-hint">日志文件按连接追加写入：静态模板路径不会被覆盖，只有清屏会截断当前文件</span>
+  <span class="panel-hint">{{ t('lv.logset.midnightHint') }}</span>
+  <span class="panel-hint">{{ t('lv.logset.appendHint') }}</span>
   <div class="sm-foot">
-    <span class="panel-hint">新建 / 重连会话时生效</span>
-    <button class="btn btn-sm btn-ghost" type="button" @click="resetDefaults">恢复默认</button>
+    <span class="panel-hint">{{ t('lv.logset.newSessionHint') }}</span>
+    <button class="btn btn-sm btn-ghost" type="button" @click="resetDefaults">{{ t('lv.logset.reset') }}</button>
   </div>
 </template>

@@ -107,3 +107,55 @@ describe('connectionErrorHint', () => {
     })
   })
 })
+
+describe('connectionErrorHint 错误码分派（code|detail 新格式）', () => {
+  it('port_disconnected / net_disconnected → null（断开状态提示负责）', () => {
+    expect(connectionErrorHint('port_disconnected|COM3: EOF')).toBeNull()
+    expect(connectionErrorHint('net_disconnected|connection reset by peer')).toBeNull()
+  })
+
+  it('open_port_failed + 占用类 detail（busy / access denied / permission）→ 占用提示', () => {
+    const busy = connectionErrorHint('open_port_failed|COM3: Access is denied (os error 5)')
+    expect(busy).toEqual({ title: '端口可能已被占用', action: '请关闭其他串口工具后重试' })
+    expect(connectionErrorHint('open_port_failed|COM3: The device is busy')!.title).toBe('端口可能已被占用')
+    expect(connectionErrorHint('open_link_failed|tcp-client 1.2.3.4:80: Permission denied')!.title).toBe(
+      '端口可能已被占用',
+    )
+  })
+
+  it('open_port_failed + 不存在类 detail（not found / no such file）→ 端口已不可用', () => {
+    const miss = connectionErrorHint('open_port_failed|COM9: not found')
+    expect(miss).toEqual({ title: '端口已不可用', action: '刷新端口列表后重新选择' })
+    expect(connectionErrorHint('open_port_failed|No such file or directory (os error 2)')!.action).toBe(
+      '刷新端口列表后重新选择',
+    )
+  })
+
+  it('open_link_failed + timeout detail → 连接没有建立', () => {
+    const timeout = connectionErrorHint('open_link_failed|tcp-client 1.2.3.4:80: Connection timed out')
+    expect(timeout).toEqual({ title: '连接没有建立', action: '检查设备、电缆或网络地址后重试' })
+  })
+
+  it('open_* detail 关键词未命中 → 通用连接失败', () => {
+    expect(connectionErrorHint('open_port_failed|COM3: Broken pipe (os error 32)')).toEqual({
+      title: '连接失败',
+      action: '检查参数后重试',
+    })
+  })
+
+  it('其余未知 code → 通用连接失败', () => {
+    expect(connectionErrorHint('some_unknown_code|whatever happened')).toEqual({
+      title: '连接失败',
+      action: '检查参数后重试',
+    })
+    expect(connectionErrorHint('read_failed|input/output error')!.title).toBe('连接失败')
+  })
+
+  it('非 open_* 的连接面 code 不再做文本细分，直接通用', () => {
+    // detail 里含 disconneced 之类关键词也不再返回 null（只有断连码才返回 null）
+    expect(connectionErrorHint('port_write_failed|device disconnected mid-write')).toEqual({
+      title: '连接失败',
+      action: '检查参数后重试',
+    })
+  })
+})

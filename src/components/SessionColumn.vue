@@ -4,9 +4,21 @@ import { useSessionStore } from '../stores/session'
 import { HIGHLIGHTER_KEY, useHighlighter } from '../composables/useHighlighter'
 import { DEFAULT_SEARCH } from '../types'
 import LogView from './LogView.vue'
+import { t } from '../i18n'
+import type { MessageKey } from '../i18n'
+import type { SessionStatus } from '../types'
 
 const props = defineProps<{ columnIndex: number }>()
 const store = useSessionStore()
+
+// 下拉项状态后缀：code→词条映射（值存 MessageKey，使用点 t() 求值）
+const STATUS_KEY: Record<SessionStatus, MessageKey> = {
+  connected: 'app.status.connected',
+  connecting: 'app.status.connecting',
+  disconnected: 'app.status.disconnected',
+  error: 'app.status.error',
+  offline: 'app.status.offline',
+}
 
 const sessionId = computed(() => store.columns[props.columnIndex] ?? '')
 const session = computed(() => (sessionId.value ? store.sessions[sessionId.value] : null) ?? null)
@@ -78,11 +90,11 @@ function activate() {
         class="select scol-select"
         :value="sessionId"
         @change="onPickSession"
-        title="选择该列显示的会话"
+        :title="t('app.col.pickTitle')"
       >
-        <option value="">选择会话</option>
+        <option value="">{{ t('app.col.pick') }}</option>
         <option v-for="s in store.sessionList" :key="s.id" :value="s.id">
-          {{ s.config.name }}{{ s.status === 'connected' ? '' : ' · ' + s.status }}
+          {{ s.config.name }}{{ s.status === 'connected' ? '' : ' · ' + t(STATUS_KEY[s.status]) }}
         </option>
       </select>
       <span v-if="session" class="col-dot" :class="session.status"></span>
@@ -90,7 +102,8 @@ function activate() {
       <button
         v-if="store.columns.length > 2"
         class="scol-x"
-        title="删除该列"
+        :title="t('app.col.remove')"
+        :aria-label="t('app.col.remove')"
         @click="store.removeColumn(props.columnIndex)"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
@@ -105,14 +118,14 @@ function activate() {
           class="mini-input input-mono"
           :value="session.search.pattern"
           @input="onSearch"
-          placeholder="搜索…"
+          :placeholder="t('app.col.searchPlaceholder')"
         />
         <label class="check">
           <input type="checkbox" :checked="session.search.useRegex" @change="toggleRegex" />
           <span class="box">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </span>
-          <span>正则</span>
+          <span>{{ t('app.col.regex') }}</span>
         </label>
       </div>
 
@@ -127,7 +140,7 @@ function activate() {
             <span class="box">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             </span>
-            <span>换行</span>
+            <span>{{ t('app.col.newline') }}</span>
           </label>
           <span class="mini-spacer"></span>
           <button
@@ -136,19 +149,19 @@ function activate() {
             @click="send"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
-            <span>发送</span>
+            <span>{{ t('app.col.send') }}</span>
           </button>
         </div>
         <textarea
           class="mini-text input-mono"
           v-model="text"
-          :placeholder="mode === 'hex' ? 'Hex，如 41 42 43' : '发送内容（Ctrl+Enter 发送）'"
+          :placeholder="mode === 'hex' ? t('app.col.hexPlaceholder') : t('app.col.textPlaceholder')"
           @keydown.ctrl.enter.prevent="send"
         />
         <details class="hist mini-hist">
           <summary>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-            发送历史 ({{ session.sendHistory.length }})
+            {{ t('app.col.history', { count: session.sendHistory.length }) }}
           </summary>
           <div v-for="(h, i) in session.sendHistory" :key="i" class="hist-item" @click="pick(h)">
             {{ h }}
@@ -159,7 +172,7 @@ function activate() {
 
     <div v-else class="scol-empty">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h0a4 4 0 0 1-4-4V8Z"/></svg>
-      <span>在顶部选择一个会话</span>
+      <span>{{ t('app.col.empty') }}</span>
     </div>
   </div>
 </template>

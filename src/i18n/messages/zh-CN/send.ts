@@ -1,5 +1,101 @@
 /**
- * 中文词典 · send 域：发送区四页签（SendPanel）。i18n 作业占位文件——词条由
- * 对应批次填充，键前缀 send.。
+ * 中文词典 · send 域：发送区四页签 + DTR/RTS 拨杆（SendPanel）。键前缀 send.，
+ * 按页签分 send.single.*（单发）/ send.quick.*（快捷帧）/ send.seq.*（序列）/
+ * send.crc.*（校验）/ send.pin.*（信号线拨杆）。
  */
-export const send = {} as const
+export const send = {
+  // ---- 发送区折叠条 + 页签行 ----
+  'send.title': '发送',
+  'send.tab.group': '发送功能区',
+  'send.tab.single': '单发',
+  'send.tab.quick': '快捷帧',
+  'send.tab.seq': '序列',
+  'send.tab.ck': '校验',
+  'send.mode.group': '发送模式',
+
+  // ---- DTR/RTS 信号线拨杆（页签行右侧）----
+  'send.pin.label': '信号线',
+  'send.pin.dtrTitle': 'DTR（数据终端就绪）电平切换',
+  'send.pin.rtsTitle': 'RTS（请求发送）电平切换',
+  'send.pin.dtrAria': '切换 DTR 电平',
+  'send.pin.rtsAria': '切换 RTS 电平',
+  'send.pin.serialOnly': '仅串口源已连接时可用',
+
+  // ---- 单发 ----
+  'send.single.appendNewline': '追加换行',
+  'send.single.hexPlaceholder': 'Hex，如 41 42 43',
+  'send.single.textPlaceholder': '发送内容（Ctrl+Enter 发送）',
+  'send.single.timed': '定时',
+  'send.single.send': '发送',
+  'send.single.cannotSend': '无法发送：{reason}',
+  'send.single.notConnected': '未连接',
+  'send.single.readOnly': '回放/离线会话只读，不支持发送',
+  'send.single.history': '发送历史 ({count})',
+
+  // ---- 快捷帧 ----
+  'send.quick.save': '存当前文本',
+  'send.quick.saveTitle': '把单发输入框当前内容存为快捷帧',
+  'send.quick.manage': '管理',
+  'send.quick.manageHint': '管理模式：用右侧按钮编辑/删除',
+  'send.quick.clickToSend': '点击发送',
+  'send.quick.rename': '重命名 {name}',
+  'send.quick.delete': '删除 {name}',
+  'send.quick.empty': '还没有快捷帧——在「单发」输入内容后点上方「存当前文本」',
+  'send.quick.namePrompt': '快捷帧名称',
+  'send.quick.nameDefault': '快捷帧',
+
+  // ---- 序列 ----
+  'send.seq.label': '序列',
+  'send.seq.selectAria': '选择序列',
+  'send.seq.option': '{name}（{count} 步）',
+  'send.seq.new': '＋新建',
+  'send.seq.delete': '删除',
+  'send.seq.loop': '循环',
+  'send.seq.intervalTitle': '循环轮间隔',
+  'send.seq.intervalAria': '循环轮间隔毫秒',
+  'send.seq.runTitle': '按步骤顺序执行（发送/延时/信号）',
+  'send.seq.run': '运行',
+  'send.seq.stopTitle': '中止当前序列',
+  'send.seq.stop': '停止',
+  'send.seq.stepSend': '发送',
+  'send.seq.stepDelay': '延时',
+  'send.seq.stepSignal': '信号',
+  'send.seq.payloadPlaceholder': '发送内容',
+  'send.seq.newline': '换行',
+  'send.seq.delayAria': '延时毫秒',
+  'send.seq.levelAria': '电平',
+  'send.seq.levelHigh': '拉高',
+  'send.seq.levelLow': '拉低',
+  'send.seq.moveUp': '上移',
+  'send.seq.moveUpAria': '上移该步骤',
+  'send.seq.moveDown': '下移',
+  'send.seq.moveDownAria': '下移该步骤',
+  'send.seq.delStep': '删除该步骤',
+  'send.seq.addSend': '＋发送',
+  'send.seq.addDelay': '＋延时',
+  'send.seq.addSignal': '＋信号',
+  'send.seq.signalHint': '信号步骤 = DTR/RTS 拉高/拉低（bootloader 复位进 ISP 用）',
+  'send.seq.empty': '还没有序列——点上方「＋新建」创建',
+  'send.seq.defaultName': '序列 {seq}',
+  'send.seq.running': '运行中',
+  'send.seq.progress': '· 轮次 {round} · 步骤 {step}/{total}',
+  'send.seq.runningElsewhere': '其他会话正在运行序列',
+  'send.seq.ready': '就绪',
+
+  // ---- 校验（七算法并排实时算）----
+  'send.crc.hexPlaceholder': '输入 HEX，如 01 03 00 00 00 02',
+  'send.crc.asciiPlaceholder': '输入 ASCII 文本',
+  'send.crc.modeGroup': '校验输入模式',
+  'send.crc.endianTitle': '多字节校验的字节序',
+  'send.crc.endianAria': '校验字节序',
+  'send.crc.bigEndian': '大端 AB',
+  'send.crc.littleEndian': '小端 BA',
+  'send.crc.bytes': '{count} 字节',
+  'send.crc.appendTitle': '把 {algo} 校验字节追加到单发输入框',
+  'send.crc.append': '＋追加',
+  'send.crc.empty': '输入为空——输入 HEX 或 ASCII 后实时计算',
+  'send.crc.appendHint': '「＋追加」把校验字节拼到「单发」输入框尾部',
+  'send.crc.saveTitle': '把 modbus 校验结果存为快捷帧',
+  'send.crc.save': '存为快捷帧',
+  'send.crc.presetDefault': '带校验帧',
+} as const

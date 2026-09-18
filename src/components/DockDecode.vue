@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useSessionStore } from '../stores/session'
 import { useParserEngine } from '../composables/useParserEngine'
 import type { DecodedFrame } from '../types/parser'
+import { t } from '../i18n'
 
 /** 底部 dock「解码」页签（plan-parser-v1 §3）：解码帧倒序列表（最新在上），
  *  行头 ts/类型 chip/RX-TX 徽标 + 定位日志原文按钮，点击行展开字段表；
@@ -63,9 +64,9 @@ function clearDecoded() {
     >
       <path d="m8 7-5 5 5 5m8-10 5 5-5 5M14 4l-4 16" />
     </svg>
-    <div class="dock-decode-title">协议解析未启用</div>
+    <div class="dock-decode-title">{{ t('decode.notEnabledTitle') }}</div>
     <div class="dock-decode-desc">
-      在侧栏「协议解析」导入脚本并启用后，解码帧将实时显示在这里
+      {{ t('decode.notEnabledDesc') }}
     </div>
   </div>
 
@@ -73,18 +74,22 @@ function clearDecoded() {
   <div v-else class="dd-wrap">
     <div class="dd-head">
       <span class="dd-title">
-        {{ active ? `${active.config.name} · ${decoded.length} 帧` : `共 ${decoded.length} 帧` }}
+        {{
+          active
+            ? t('decode.countWithSession', { name: active.config.name, n: decoded.length })
+            : t('decode.countAll', { n: decoded.length })
+        }}
       </span>
       <span class="dd-spacer"></span>
-      <button class="dd-mini" :class="{ on: follow }" title="新帧到达时滚动到最新" @click="follow = !follow">
-        跟随
+      <button class="dd-mini" :class="{ on: follow }" :title="t('decode.followTitle')" @click="follow = !follow">
+        {{ t('decode.follow') }}
       </button>
-      <button class="dd-mini" :disabled="!active" title="清空当前会话的解码帧" @click="clearDecoded">
-        清空
+      <button class="dd-mini" :disabled="!active" :title="t('decode.clearTitle')" @click="clearDecoded">
+        {{ t('decode.clear') }}
       </button>
     </div>
     <div ref="listEl" class="dd-list">
-      <div v-if="!decoded.length" class="dd-none">暂无解码帧，等待 RX 数据…</div>
+      <div v-if="!decoded.length" class="dd-none">{{ t('decode.empty') }}</div>
       <div
         v-for="d in reversed"
         :key="d.no"
@@ -97,7 +102,7 @@ function clearDecoded() {
           <span class="dd-type">{{ d.type }}</span>
           <span class="dd-dir" :class="d.dir">{{ d.dir === 'rx' ? 'RX' : 'TX' }}</span>
           <span class="dd-spacer"></span>
-          <button class="dd-jump" title="定位日志原文" aria-label="定位日志原文" @click.stop="jumpTo(d)">
+          <button class="dd-jump" :title="t('decode.jumpTitle')" :aria-label="t('decode.jumpTitle')" @click.stop="jumpTo(d)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3" /><path d="M12 2v3" /><path d="M12 19v3" /><path d="M2 12h3" /><path d="M19 12h3" /></svg>
           </button>
         </div>

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useAutomationStore } from '../stores/automation'
+import { t } from '../i18n'
+import type { MessageKey } from '../i18n'
 import {
   cloneScenario,
   makeDefaultStep,
@@ -29,13 +31,14 @@ const entry = computed(() => automation.entries.find((e) => e.id === props.entry
 /** 本地草稿（深拷贝，保存时整包送预检+落库） */
 const draft = ref<Scenario | null>(entry.value ? cloneScenario(entry.value.scenario) : null)
 
-const KIND_LABELS: Record<ScenarioStepKind, string> = {
-  send: '发送',
-  delay: '延时',
-  signal: '信号',
-  wait: '等待',
-  assert: '断言',
-  repeat: '循环',
+// code→词条映射：值存 MessageKey，使用点 t(KIND_LABELS[kind]) 求值（切语言即时刷新）
+const KIND_LABELS: Record<ScenarioStepKind, MessageKey> = {
+  send: 'scen.kindSend',
+  delay: 'scen.kindDelay',
+  signal: 'scen.kindSignal',
+  wait: 'scen.kindWait',
+  assert: 'scen.kindAssert',
+  repeat: 'scen.kindRepeat',
 }
 
 // ===================== 扁平行模型（depth = Repeat 包裹层数） =====================
@@ -127,11 +130,18 @@ function canAddRepeat(container: number[]): boolean {
 // ===================== matcher 编辑（四选一 pattern + 方向） =====================
 
 type MatcherKind = 'literal' | 'regex' | 'hex' | 'mask'
-const MATCHER_KIND_LABELS: Record<MatcherKind, string> = {
-  literal: '文本',
-  regex: '正则',
-  hex: 'HEX',
-  mask: '掩码',
+const MATCHER_KIND_LABELS: Record<MatcherKind, MessageKey> = {
+  literal: 'scen.matLiteral',
+  regex: 'scen.matRegex',
+  hex: 'scen.matHex',
+  mask: 'scen.matMask',
+}
+// 各匹配方式的输入框 placeholder 词条
+const MATCHER_PAT_PH: Record<MatcherKind, MessageKey> = {
+  literal: 'scen.patLiteral',
+  regex: 'scen.patRegex',
+  hex: 'scen.patHex',
+  mask: 'scen.patMask',
 }
 
 function matcherKind(m: LineMatcher): MatcherKind {
@@ -240,52 +250,52 @@ function close(): void {
 
 <template>
   <div class="sc-editor">
-    <div v-if="!draft" class="panel-hint">场景不存在（可能已被删除）</div>
+    <div v-if="!draft" class="panel-hint">{{ t('scen.missing') }}</div>
     <template v-else>
       <div class="sc-line">
         <input
           class="input sc-name-input"
           :value="draft.name"
-          aria-label="场景名称"
-          placeholder="场景名称"
+          :aria-label="t('scen.nameAria')"
+          :placeholder="t('scen.nameAria')"
           @change="draft.name = ($event.target as HTMLInputElement).value"
         />
       </div>
 
       <div v-if="valError" class="sc-val-error">
-        校验失败（{{ valError.code }} @ {{ valError.path }}）：{{ valError.message }}
+        {{ t('scen.validateFailed', { code: valError.code, path: valError.path, message: valError.message }) }}
       </div>
 
       <div class="sc-vars">
-        <div class="sc-sub">变量（发送/断言文本里以 ${name} 引用）</div>
+        <div class="sc-sub">{{ t('scen.varsSub') }}</div>
         <div v-for="[k, v] in varRows" :key="k" class="sc-var-row">
           <input
             class="input input-mono sc-var-key"
             :value="k"
-            aria-label="变量名"
+            :aria-label="t('scen.varNameAria')"
             @change="renameVar(k, ($event.target as HTMLInputElement).value)"
           />
           <input
             class="input input-mono sc-var-val"
             :value="v"
-            aria-label="变量值"
-            placeholder="初始值"
+            :aria-label="t('scen.varValueAria')"
+            :placeholder="t('scen.varValuePh')"
             @change="setVar(k, ($event.target as HTMLInputElement).value)"
           />
           <button
             class="btn btn-ghost btn-sm sc-var-del"
             type="button"
-            :title="`删除变量 ${k}`"
-            :aria-label="`删除变量 ${k}`"
+            :title="t('scen.delVar', { name: k })"
+            :aria-label="t('scen.delVar', { name: k })"
             @click="delVar(k)"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
           </button>
         </div>
-        <button class="btn btn-ghost btn-sm sc-var-add" type="button" @click="addVar">＋添加变量</button>
+        <button class="btn btn-ghost btn-sm sc-var-add" type="button" @click="addVar">{{ t('scen.addVar') }}</button>
       </div>
 
-      <div class="sc-sub">步骤</div>
+      <div class="sc-sub">{{ t('scen.stepsSub') }}</div>
       <div class="sc-steps">
         <template v-for="(row, ri) in rows" :key="row.type === 'step' ? row.chain.join('.') : `add${ri}`">
           <div
@@ -296,13 +306,13 @@ function close(): void {
             :style="{ paddingInlineStart: `${row.depth * 14 + 6}px` }"
           >
             <div class="sc-row-head">
-              <span class="sc-kind" :class="`k-${row.step.kind}`">{{ KIND_LABELS[row.step.kind] }}</span>
+              <span class="sc-kind" :class="`k-${row.step.kind}`">{{ t(KIND_LABELS[row.step.kind]) }}</span>
               <span class="send-spacer"></span>
               <button
                 class="btn btn-ghost btn-sm sc-up"
                 type="button"
-                :title="row.index === 0 ? undefined : '上移该步骤'"
-                :aria-label="`上移步骤 ${row.index}（${KIND_LABELS[row.step.kind]}）`"
+                :title="row.index === 0 ? undefined : t('scen.moveUpTitle')"
+                :aria-label="t('scen.moveUpAria', { n: row.index, kind: t(KIND_LABELS[row.step.kind]) })"
                 :disabled="row.index === 0"
                 @click="moveStep(row.chain, -1)"
               >
@@ -311,7 +321,7 @@ function close(): void {
               <button
                 class="btn btn-ghost btn-sm sc-down"
                 type="button"
-                :aria-label="`下移步骤 ${row.index}（${KIND_LABELS[row.step.kind]}）`"
+                :aria-label="t('scen.moveDownAria', { n: row.index, kind: t(KIND_LABELS[row.step.kind]) })"
                 @click="moveStep(row.chain, 1)"
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
@@ -319,8 +329,8 @@ function close(): void {
               <button
                 class="btn btn-ghost btn-sm sc-del"
                 type="button"
-                :title="`删除该步骤（${KIND_LABELS[row.step.kind]}）`"
-                :aria-label="`删除步骤 ${row.index}（${KIND_LABELS[row.step.kind]}）`"
+                :title="t('scen.delStepTitle', { kind: t(KIND_LABELS[row.step.kind]) })"
+                :aria-label="t('scen.delStepAria', { n: row.index, kind: t(KIND_LABELS[row.step.kind]) })"
                 @click="removeStep(row.chain)"
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
@@ -333,7 +343,7 @@ function close(): void {
               <select
                 class="select sc-f-mode"
                 :value="row.step.mode"
-                aria-label="发送模式"
+                :aria-label="t('scen.sendModeAria')"
                 @change="patchStep(row.chain, { mode: ($event.target as HTMLSelectElement).value })"
               >
                 <option value="ascii">ASCII</option>
@@ -342,8 +352,8 @@ function close(): void {
               <input
                 class="input input-mono sc-f-text"
                 :value="row.step.text"
-                placeholder="发送文本，支持 ${name} 变量"
-                aria-label="发送文本"
+                :placeholder="t('scen.sendTextPh')"
+                :aria-label="t('scen.sendTextAria')"
                 @change="patchStep(row.chain, { text: ($event.target as HTMLInputElement).value })"
               />
               <label class="check sc-f-nl">
@@ -353,7 +363,7 @@ function close(): void {
                   @change="patchStep(row.chain, { appendNewline: ($event.target as HTMLInputElement).checked })"
                 />
                 <span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
-                <span>换行</span>
+                <span>{{ t('scen.newline') }}</span>
               </label>
             </div>
 
@@ -364,10 +374,10 @@ function close(): void {
                 type="number"
                 min="0"
                 :value="row.step.ms"
-                aria-label="延时毫秒"
+                :aria-label="t('scen.delayAria')"
                 @change="patchStep(row.chain, { ms: Math.max(0, Number(($event.target as HTMLInputElement).value) || 0) })"
               />
-              <span class="sc-unit">ms（≤600000）</span>
+              <span class="sc-unit">{{ t('scen.delayUnit') }}</span>
             </div>
 
             <!-- signal -->
@@ -375,25 +385,25 @@ function close(): void {
               <select
                 class="select sc-f-pin"
                 :value="row.step.pin"
-                aria-label="信号线引脚"
+                :aria-label="t('scen.pinAria')"
                 @change="patchStep(row.chain, { pin: ($event.target as HTMLSelectElement).value })"
               >
                 <option value="dtr">DTR</option>
                 <option value="rts">RTS</option>
               </select>
-              <div class="seg" role="group" aria-label="信号电平">
+              <div class="seg" role="group" :aria-label="t('scen.levelAria')">
                 <button
                   class="seg-item"
                   :class="{ active: row.step.level }"
                   type="button"
                   @click="patchStep(row.chain, { level: true })"
-                >高</button>
+                >{{ t('scen.high') }}</button>
                 <button
                   class="seg-item"
                   :class="{ active: !row.step.level }"
                   type="button"
                   @click="patchStep(row.chain, { level: false })"
-                >低</button>
+                >{{ t('scen.low') }}</button>
               </div>
             </div>
 
@@ -403,14 +413,14 @@ function close(): void {
                 <select
                   class="select sc-f-dir"
                   :value="row.step.matcher.dir ?? ''"
-                  aria-label="匹配方向"
+                  :aria-label="t('scen.dirAria')"
                   @change="setMatcherDir(row.chain, ($event.target as HTMLSelectElement).value as '' | 'rx' | 'tx')"
                 >
-                  <option value="">任意方向</option>
+                  <option value="">{{ t('scen.dirAny') }}</option>
                   <option value="rx">RX</option>
                   <option value="tx">TX</option>
                 </select>
-                <div class="seg" role="group" aria-label="匹配方式">
+                <div class="seg" role="group" :aria-label="t('scen.matcherAria')">
                   <button
                     v-for="mk in (['literal', 'regex', 'hex', 'mask'] as const)"
                     :key="mk"
@@ -418,13 +428,13 @@ function close(): void {
                     :class="{ active: matcherKind(row.step.matcher) === mk }"
                     type="button"
                     @click="setMatcherKind(row.chain, mk)"
-                  >{{ MATCHER_KIND_LABELS[mk] }}</button>
+                  >{{ t(MATCHER_KIND_LABELS[mk]) }}</button>
                 </div>
                 <input
                   class="input input-mono sc-f-pattern"
                   :value="row.step.matcher[matcherKind(row.step.matcher)] ?? ''"
-                  :placeholder="matcherKind(row.step.matcher) === 'literal' ? '匹配文本' : matcherKind(row.step.matcher) === 'regex' ? '正则表达式' : matcherKind(row.step.matcher) === 'hex' ? '十六进制字节（如 50 4f）' : '掩码（?? 为通配，如 5a ?? 4f）'"
-                  aria-label="匹配模式"
+                  :placeholder="t(MATCHER_PAT_PH[matcherKind(row.step.matcher)])"
+                  :aria-label="t('scen.patternAria')"
                   @change="setMatcherValue(row.chain, ($event.target as HTMLInputElement).value)"
                 />
               </div>
@@ -435,10 +445,10 @@ function close(): void {
                     type="number"
                     min="0"
                     :value="row.step.timeoutMs"
-                    aria-label="等待超时毫秒"
+                    :aria-label="t('scen.timeoutAria')"
                     @change="patchStep(row.chain, { timeoutMs: Math.max(0, Number(($event.target as HTMLInputElement).value) || 0) })"
                   />
-                  <span class="sc-unit">ms 超时</span>
+                  <span class="sc-unit">{{ t('scen.timeoutUnit') }}</span>
                   <label class="check sc-f-save">
                     <input
                       type="checkbox"
@@ -446,13 +456,13 @@ function close(): void {
                       @change="patchStep(row.chain, { save: ($event.target as HTMLInputElement).checked ? { variable: 'value', group: 0 } : undefined })"
                     />
                     <span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
-                    <span>捕获到变量</span>
+                    <span>{{ t('scen.captureVar') }}</span>
                   </label>
                   <template v-if="row.step.save">
                     <input
                       class="input input-mono sc-f-var"
                       :value="row.step.save.variable"
-                      aria-label="捕获变量名"
+                      :aria-label="t('scen.capVarAria')"
                       @change="row.step.save && patchStep(row.chain, { save: { ...row.step.save, variable: ($event.target as HTMLInputElement).value } })"
                     />
                     <input
@@ -460,10 +470,10 @@ function close(): void {
                       type="number"
                       min="0"
                       :value="row.step.save.group"
-                      aria-label="捕获组号"
+                      :aria-label="t('scen.capGroupAria')"
                       @change="row.step.save && patchStep(row.chain, { save: { ...row.step.save, group: Math.max(0, Number(($event.target as HTMLInputElement).value) || 0) } })"
                     />
-                    <span class="sc-unit">组（0=整匹配）</span>
+                    <span class="sc-unit">{{ t('scen.capGroupUnit') }}</span>
                   </template>
                 </template>
                 <template v-else>
@@ -472,15 +482,15 @@ function close(): void {
                     type="number"
                     min="0"
                     :value="row.step.withinLast"
-                    aria-label="在最近 N 行内"
+                    :aria-label="t('scen.withinAria')"
                     @change="patchStep(row.chain, { withinLast: Math.max(0, Number(($event.target as HTMLInputElement).value) || 0) })"
                   />
-                  <span class="sc-unit">行内</span>
+                  <span class="sc-unit">{{ t('scen.withinUnit') }}</span>
                   <input
                     class="input input-mono sc-f-msg"
                     :value="row.step.message"
-                    placeholder="断言失败提示，支持 ${name} 变量"
-                    aria-label="断言失败提示"
+                    :placeholder="t('scen.assertMsgPh')"
+                    :aria-label="t('scen.assertMsgAria')"
                     @change="patchStep(row.chain, { message: ($event.target as HTMLInputElement).value })"
                   />
                 </template>
@@ -489,16 +499,16 @@ function close(): void {
 
             <!-- repeat -->
             <div v-else-if="row.step.kind === 'repeat'" class="sc-fields">
-              <span class="sc-unit">重复</span>
+              <span class="sc-unit">{{ t('scen.repeatPrefix') }}</span>
               <input
                 class="input input-mono sc-f-num"
                 type="number"
                 min="0"
                 :value="row.step.times"
-                aria-label="重复次数"
+                :aria-label="t('scen.timesAria')"
                 @change="patchStep(row.chain, { times: Math.max(0, Number(($event.target as HTMLInputElement).value) || 0) })"
               />
-              <span class="sc-unit">次（≤10000）</span>
+              <span class="sc-unit">{{ t('scen.timesUnit') }}</span>
             </div>
           </div>
 
@@ -515,19 +525,19 @@ function close(): void {
               type="button"
               :disabled="k === 'repeat' && !canAddRepeat(row.container)"
               :title="k === 'repeat' && !canAddRepeat(row.container)
-                ? `已达最大嵌套深度（${MAX_NESTING_DEPTH} 层循环）`
-                : `在此层级添加「${KIND_LABELS[k]}」步骤`"
+                ? t('scen.maxDepthTitle', { n: MAX_NESTING_DEPTH })
+                : t('scen.addStepTitle', { kind: t(KIND_LABELS[k]) })"
               @click="addStep(row.container, k)"
-            >＋{{ KIND_LABELS[k] }}</button>
+            >＋{{ t(KIND_LABELS[k]) }}</button>
           </div>
         </template>
       </div>
 
       <div class="sc-actions">
         <button class="btn btn-primary btn-sm sc-save" type="button" :disabled="saving" @click="save">
-          {{ saving ? '校验中…' : '保存' }}
+          {{ saving ? t('scen.saving') : t('scen.save') }}
         </button>
-        <button class="btn btn-ghost btn-sm sc-close" type="button" @click="close">返回列表</button>
+        <button class="btn btn-ghost btn-sm sc-close" type="button" @click="close">{{ t('scen.backToList') }}</button>
       </div>
     </template>
   </div>

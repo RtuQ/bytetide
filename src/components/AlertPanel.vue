@@ -3,16 +3,19 @@ import { computed } from 'vue'
 import { useSessionStore } from '../stores/session'
 import { useAlertStore } from '../stores/alerts'
 import type { AlertLevel, AlertRule } from '../types'
+import { t } from '../i18n'
+import type { MessageKey } from '../i18n'
 
 const store = useSessionStore()
 const alerts = useAlertStore()
 const active = computed(() => store.active)
 alerts.load()
 
-const LEVELS: { key: AlertLevel; label: string }[] = [
-  { key: 'info', label: '提示' },
-  { key: 'warn', label: '警告' },
-  { key: 'err', label: '错误' },
+// code→词条映射：值存 MessageKey，使用点 t(lv.label) 求值（切语言即时刷新）
+const LEVELS: { key: AlertLevel; label: MessageKey }[] = [
+  { key: 'info', label: 'alert.levelInfo' },
+  { key: 'warn', label: 'alert.levelWarn' },
+  { key: 'err', label: 'alert.levelErr' },
 ]
 
 function add() {
@@ -30,7 +33,7 @@ function del(rid: string) {
   <details class="panel">
     <summary class="panel-head">
       <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
-      <span class="panel-title">告警规则</span>
+      <span class="panel-title">{{ t('alert.title') }}</span>
       <span v-if="active" class="badge">{{ active.alerts.rules.length }}</span>
       <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
     </summary>
@@ -45,10 +48,10 @@ function del(rid: string) {
           <span class="box">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </span>
-          <span>启用告警</span>
+          <span>{{ t('alert.enableAll') }}</span>
         </label>
         <span class="send-spacer"></span>
-        <label class="check" title="触发时播放提示音">
+        <label class="check" :title="t('alert.soundTitle')">
           <input
             type="checkbox"
             :checked="alerts.sound"
@@ -57,15 +60,15 @@ function del(rid: string) {
           <span class="box">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </span>
-          <span>提示音</span>
+          <span>{{ t('alert.sound') }}</span>
         </label>
         <button class="btn btn-ghost btn-sm" @click="add">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
-          <span>添加规则</span>
+          <span>{{ t('alert.add') }}</span>
         </button>
       </div>
       <div v-if="!active.alerts.rules.length" class="panel-hint">
-        RX 行命中规则时弹系统通知并记入历史；可设次数窗口与冷却防刷屏。仅对实时接收生效。
+        {{ t('alert.hint') }}
       </div>
 
       <div v-for="r in active.alerts.rules" :key="r.id" class="ar-card" :class="{ off: !r.enabled }">
@@ -75,7 +78,7 @@ function del(rid: string) {
               type="checkbox"
               :checked="r.enabled"
               @change="upd(r.id, { enabled: ($event.target as HTMLInputElement).checked })"
-              title="启用该规则"
+              :title="t('alert.ruleEnableTitle')"
             />
             <span class="box">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
@@ -85,9 +88,9 @@ function del(rid: string) {
             class="ar-reply"
             :value="r.pattern"
             @input="upd(r.id, { pattern: ($event.target as HTMLInputElement).value })"
-            placeholder="匹配内容，如 ERROR|ASSERT"
+            :placeholder="t('alert.patternPh')"
           />
-          <button class="ar-x" @click="del(r.id)" title="删除" aria-label="删除规则">
+          <button class="ar-x" @click="del(r.id)" :title="t('alert.del')" :aria-label="t('alert.delAria')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
           </button>
         </div>
@@ -100,7 +103,7 @@ function del(rid: string) {
               :class="{ active: r.level === lv.key }"
               @click="upd(r.id, { level: lv.key })"
             >
-              {{ lv.label }}
+              {{ t(lv.label) }}
             </button>
           </div>
           <label class="check">
@@ -112,7 +115,7 @@ function del(rid: string) {
             <span class="box">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             </span>
-            <span>正则</span>
+            <span>{{ t('alert.regex') }}</span>
           </label>
           <label class="check">
             <input
@@ -123,7 +126,7 @@ function del(rid: string) {
             <span class="box">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             </span>
-            <span>大小写</span>
+            <span>{{ t('alert.case') }}</span>
           </label>
           <label class="check">
             <input
@@ -134,7 +137,7 @@ function del(rid: string) {
             <span class="box">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             </span>
-            <span>整词</span>
+            <span>{{ t('alert.whole') }}</span>
           </label>
         </div>
         <div class="ar-opts al-nums">
@@ -146,7 +149,7 @@ function del(rid: string) {
               :value="r.minCount"
               @change="upd(r.id, { minCount: Math.max(1, Number(($event.target as HTMLInputElement).value) || 1) })"
             />
-            次<span title="窗口内达到该次数才触发">≥</span>
+            {{ t('alert.minCount') }}<span :title="t('alert.minCountTitle')">≥</span>
           </span>
           <span class="al-num-field">
             <input
@@ -157,7 +160,7 @@ function del(rid: string) {
               :value="r.windowSec"
               @change="upd(r.id, { windowSec: Math.max(0, Number(($event.target as HTMLInputElement).value) || 0) })"
             />
-            s 窗口
+            {{ t('alert.window') }}
           </span>
           <span class="al-num-field">
             <input
@@ -168,11 +171,11 @@ function del(rid: string) {
               :value="r.cooldownSec"
               @change="upd(r.id, { cooldownSec: Math.max(0, Number(($event.target as HTMLInputElement).value) || 0) })"
             />
-            s 冷却
+            {{ t('alert.cooldown') }}
           </span>
         </div>
       </div>
     </div>
-    <div v-else class="panel-empty">无活动会话</div>
+    <div v-else class="panel-empty">{{ t('alert.noSession') }}</div>
   </details>
 </template>
