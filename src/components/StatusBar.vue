@@ -4,6 +4,8 @@ import { useSessionStore } from '../stores/session'
 import { useRate, humanizeBytes } from '../composables/useRate'
 import { usePerfWatch } from '../composables/usePerfWatch'
 import type { SessionStatus } from '../types'
+import { t } from '../i18n'
+import type { MessageKey } from '../i18n'
 
 // 底部状态栏（布局重构 V1）：连接状态/速率/丢行/渲染健康常驻可见，跟随活动会话。
 // 纯展示组件，数据全部来自现有 store/composable；解析器状态位待 plan-parser-v1 落地后点亮。
@@ -17,12 +19,13 @@ const perfCls = computed(() =>
   perf.lagMs.value >= 2000 ? 'sb-bad' : perf.lagMs.value >= 300 ? 'sb-warn' : '',
 )
 
-const STATUS_TEXT: Record<SessionStatus, string> = {
-  connected: '已连接',
-  connecting: '连接中',
-  disconnected: '已断开',
-  error: '错误',
-  offline: '离线',
+// code→词条映射：值存 MessageKey，使用点 t(STATUS_KEY[status]) 求值（切语言即时刷新）
+const STATUS_KEY: Record<SessionStatus, MessageKey> = {
+  connected: 'app.status.connected',
+  connecting: 'app.status.connecting',
+  disconnected: 'app.status.disconnected',
+  error: 'app.status.error',
+  offline: 'app.status.offline',
 }
 
 /** 现场捕获 armed：活动会话正在写后续窗口（呼吸指示；capture-saved 解除） */
@@ -46,36 +49,36 @@ const linkText = computed(() => {
 <template>
   <footer class="statusbar" v-if="active">
     <span class="sb-sect">
-      <span class="sb-dot" :class="active.status" :title="STATUS_TEXT[active.status]"></span>
+      <span class="sb-dot" :class="active.status" :title="t(STATUS_KEY[active.status])"></span>
       <b class="sb-name">{{ active.config.name || active.id }}</b>
-      <span class="sb-status">{{ STATUS_TEXT[active.status] }}</span>
+      <span class="sb-status">{{ t(STATUS_KEY[active.status]) }}</span>
       <span class="sb-dim">{{ linkText }}</span>
     </span>
     <span class="sb-sect sb-mono">
-      <span class="sb-rx" title="接收速率">↓ {{ humanizeBytes(rxBps) }}/s</span>
-      <span class="sb-tx" title="发送速率">↑ {{ humanizeBytes(txBps) }}/s</span>
+      <span class="sb-rx" :title="t('app.status.rxRate')">↓ {{ humanizeBytes(rxBps) }}/s</span>
+      <span class="sb-tx" :title="t('app.status.txRate')">↑ {{ humanizeBytes(txBps) }}/s</span>
     </span>
     <span v-if="active.droppedLines > 0" class="sb-sect">
-      <span class="sb-bad" title="前端缓冲裁剪掉的行数（重连迁移保留）">丢行 {{ active.droppedLines }}</span>
+      <span class="sb-bad" :title="t('app.status.droppedTitle')">{{ t('app.status.dropped', { count: active.droppedLines }) }}</span>
     </span>
     <span v-if="active.ringDropped > 0" class="sb-sect">
-      <span class="sb-bad" title="后端 ring 容量窗口内未来得及拉取就被覆盖的行（前端停顿过长时发生）">Ring 丢 {{ active.ringDropped }}</span>
+      <span class="sb-bad" :title="t('app.status.ringDroppedTitle')">{{ t('app.status.ringDropped', { count: active.ringDropped }) }}</span>
     </span>
     <span
       v-if="capActive"
       class="sb-sect sb-cap"
-      :title="`现场捕获进行中：命中「${capActive}」，正在写后续窗口，完成后自动存档`"
+      :title="t('app.status.capturingTitle', { pattern: capActive })"
     >
-      <span class="sb-cap-dot"></span>捕获中
+      <span class="sb-cap-dot"></span>{{ t('app.status.capturing') }}
     </span>
-    <span class="sb-sect sb-dim" :class="perfCls" title="显示滞后=当前墙钟−最新行后端时间戳；批均=单批次处理耗时">
-      滞后 {{ perf.lagMs.value }}ms · 批均 {{ perf.batchCostMs.value }}ms
+    <span class="sb-sect sb-dim" :class="perfCls" :title="t('app.status.lagTitle')">
+      {{ t('app.status.lag', { lag: perf.lagMs.value, batch: perf.batchCostMs.value }) }}
     </span>
     <span class="sb-spacer"></span>
-    <span class="sb-sect sb-mono sb-dim">RX {{ active.rxLines.toLocaleString() }} · TX {{ active.txLines.toLocaleString() }} 行</span>
+    <span class="sb-sect sb-mono sb-dim">{{ t('app.status.lines', { rx: active.rxLines.toLocaleString(), tx: active.txLines.toLocaleString() }) }}</span>
   </footer>
   <footer v-else class="statusbar">
-    <span class="sb-sect sb-dim">无活动会话</span>
+    <span class="sb-sect sb-dim">{{ t('app.status.noSession') }}</span>
     <span class="sb-spacer"></span>
   </footer>
 </template>

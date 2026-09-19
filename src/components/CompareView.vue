@@ -9,6 +9,7 @@ import {
   type ComparePair,
 } from '../composables/useCompare'
 import type { LogLine } from '../types'
+import { t } from '../i18n'
 
 const store = useSessionStore()
 
@@ -86,10 +87,10 @@ const shown = computed(() => {
 })
 
 const emptyMsg = computed(() => {
-  if (sessionsList.value.length < 2) return '需要至少两个打开的会话才能对比——先新建连接或打开另一个日志'
-  if (!aId.value || !bId.value) return '选择会话 A 与 B，两路日志将按时间轴 ± 容差配对显示'
-  if (aId.value === bId.value) return '会话 A 与 B 不能是同一个会话'
-  if (!pairs.value.length) return '容差内没有可配对的行——可尝试增大容差或切换 RX / 全部'
+  if (sessionsList.value.length < 2) return t('cmp.needTwo')
+  if (!aId.value || !bId.value) return t('cmp.pickSides')
+  if (aId.value === bId.value) return t('cmp.sameSession')
+  if (!pairs.value.length) return t('cmp.noPairs')
   return ''
 })
 
@@ -119,50 +120,50 @@ function jump(side: 'a' | 'b', l: LogLine | null) {
       >
         <rect x="2" y="5" width="9" height="14" rx="1" /><rect x="13" y="5" width="9" height="14" rx="1" /><path d="M11 12h2" />
       </svg>
-      <span class="cmp-v-title">对比</span>
+      <span class="cmp-v-title">{{ t('cmp.title') }}</span>
       <div class="cmp-v-pick">
         <span class="cmp-v-pick-label">A</span>
-        <select class="select cmp-v-select" v-model="aId" title="会话 A" aria-label="会话 A">
-          <option value="" disabled>选择会话 A</option>
+        <select class="select cmp-v-select" v-model="aId" :title="t('cmp.sessionA')" :aria-label="t('cmp.sessionA')">
+          <option value="" disabled>{{ t('cmp.pickA') }}</option>
           <option v-for="s in sessionsList" :key="s.id" :value="s.id">{{ s.name }}</option>
         </select>
       </div>
       <div class="cmp-v-pick">
         <span class="cmp-v-pick-label">B</span>
-        <select class="select cmp-v-select" v-model="bId" title="会话 B" aria-label="会话 B">
-          <option value="" disabled>选择会话 B</option>
+        <select class="select cmp-v-select" v-model="bId" :title="t('cmp.sessionB')" :aria-label="t('cmp.sessionB')">
+          <option value="" disabled>{{ t('cmp.pickB') }}</option>
           <option v-for="s in sessionsList" :key="s.id" :value="s.id">{{ s.name }}</option>
         </select>
       </div>
-      <label class="cmp-v-tol" title="配对时间容差（毫秒）">
+      <label class="cmp-v-tol" :title="t('cmp.tolTitle')">
         ±<input
           class="al-num"
           type="number"
           min="0"
           step="10"
           v-model.number="tolMs"
-          aria-label="配对时间容差（毫秒）"
-        />ms 容差
+          :aria-label="t('cmp.tolTitle')"
+        />{{ t('cmp.tolerance') }}
       </label>
-      <label class="cmp-v-tol" title="B 侧时钟偏移（毫秒）：B 时间 = 原时间 + 偏移，用于实时↔离线会话对表">
+      <label class="cmp-v-tol" :title="t('cmp.offsetTitle')">
         <input
           class="al-num"
           type="number"
           step="100"
           v-model.number="offsetMs"
-          aria-label="B 侧时钟偏移（毫秒）"
-        />ms 偏移
+          :aria-label="t('cmp.offsetAria')"
+        />{{ t('cmp.offset') }}
       </label>
-      <div class="seg" role="group" aria-label="对比行范围">
-        <button class="seg-item" :class="{ active: dirScope === 'rx' }" title="仅比对接收行" @click="dirScope = 'rx'">RX</button>
-        <button class="seg-item" :class="{ active: dirScope === 'all' }" title="比对全部收发行" @click="dirScope = 'all'">全部</button>
+      <div class="seg" role="group" :aria-label="t('cmp.scopeAria')">
+        <button class="seg-item" :class="{ active: dirScope === 'rx' }" :title="t('cmp.scopeRxTitle')" @click="dirScope = 'rx'">RX</button>
+        <button class="seg-item" :class="{ active: dirScope === 'all' }" :title="t('cmp.scopeAllTitle')" @click="dirScope = 'all'">{{ t('cmp.scopeAll') }}</button>
       </div>
-      <label class="check cmp-v-onlydiff" title="隐藏内容完全一致的锚点行，只看差异与落单行">
+      <label class="check cmp-v-onlydiff" :title="t('cmp.onlyDiffTitle')">
         <input type="checkbox" v-model="onlyDiff" />
         <span class="box">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
         </span>
-        只看差异
+        {{ t('cmp.onlyDiff') }}
       </label>
     </div>
 
@@ -183,21 +184,21 @@ function jump(side: 'a' | 'b', l: LogLine | null) {
 
     <div v-else class="cmp-v-table-wrap">
       <div class="cmp-v-stats" role="status">
-        <span class="cmp-v-stat-ok">相同 {{ stats.equal.toLocaleString() }}</span>
-        <span class="cmp-v-stat-chg">差异 {{ stats.changed.toLocaleString() }}</span>
-        <span>仅 A {{ stats.onlyA.toLocaleString() }}</span>
-        <span>仅 B {{ stats.onlyB.toLocaleString() }}</span>
-        <span v-if="scaleMismatch" class="cmp-v-stat-warn" title="两侧 epochMillis 量级悬殊（实时会话为绝对纪元毫秒，离线会话为当天毫秒）">
-          时间基准不同——请设置偏移或改用同类会话对比
+        <span class="cmp-v-stat-ok">{{ t('cmp.statEqual', { n: stats.equal.toLocaleString() }) }}</span>
+        <span class="cmp-v-stat-chg">{{ t('cmp.statChanged', { n: stats.changed.toLocaleString() }) }}</span>
+        <span>{{ t('cmp.statOnlyA', { n: stats.onlyA.toLocaleString() }) }}</span>
+        <span>{{ t('cmp.statOnlyB', { n: stats.onlyB.toLocaleString() }) }}</span>
+        <span v-if="scaleMismatch" class="cmp-v-stat-warn" :title="t('cmp.scaleWarnTitle')">
+          {{ t('cmp.scaleWarn') }}
         </span>
       </div>
       <div class="cmp-v-table">
         <table>
           <thead>
             <tr>
-              <th class="cmp-v-th-time">时间 / Δ</th>
-              <th class="cmp-v-th-side" :title="'会话 A：' + nameOf(aId)">A · {{ nameOf(aId) }}</th>
-              <th class="cmp-v-th-side" :title="'会话 B：' + nameOf(bId)">B · {{ nameOf(bId) }}</th>
+              <th class="cmp-v-th-time">{{ t('cmp.headTime') }}</th>
+              <th class="cmp-v-th-side" :title="t('cmp.colATitle', { name: nameOf(aId) })">A · {{ nameOf(aId) }}</th>
+              <th class="cmp-v-th-side" :title="t('cmp.colBTitle', { name: nameOf(bId) })">B · {{ nameOf(bId) }}</th>
             </tr>
           </thead>
           <tbody>
@@ -211,15 +212,15 @@ function jump(side: 'a' | 'b', l: LogLine | null) {
               <span class="cmp-v-delta" :class="{ hot: pr.delta != null && pr.delta > tolMs }">
                 {{ pr.delta != null ? `Δ${pr.delta}ms` : '—' }}
               </span>
-              <span v-if="pr.op === 'insert-a'" class="cmp-v-badge" title="该行在 B 侧无对应行">仅A</span>
-              <span v-else-if="pr.op === 'insert-b'" class="cmp-v-badge" title="该行在 A 侧无对应行">仅B</span>
+              <span v-if="pr.op === 'insert-a'" class="cmp-v-badge" :title="t('cmp.badgeOnlyATitle')">{{ t('cmp.badgeOnlyA') }}</span>
+              <span v-else-if="pr.op === 'insert-b'" class="cmp-v-badge" :title="t('cmp.badgeOnlyBTitle')">{{ t('cmp.badgeOnlyB') }}</span>
             </td>
             <td class="cmp-v-td-side">
               <div v-if="pr.a" class="cmp-v-cell">
                 <button
                   class="cmp-v-jump"
-                  :title="`跳转到 ${nameOf(aId)} 第 ${pr.a.no} 行`"
-                  :aria-label="`跳转到 ${nameOf(aId)} 第 ${pr.a.no} 行`"
+                  :title="t('cmp.jumpTitle', { name: nameOf(aId), no: pr.a.no })"
+                  :aria-label="t('cmp.jumpTitle', { name: nameOf(aId), no: pr.a.no })"
                   @click="jump('a', pr.a)"
                 >#{{ pr.a.no }}</button>
                 <span class="cmp-v-txt">
@@ -232,8 +233,8 @@ function jump(side: 'a' | 'b', l: LogLine | null) {
               <div v-if="pr.b" class="cmp-v-cell">
                 <button
                   class="cmp-v-jump"
-                  :title="`跳转到 ${nameOf(bId)} 第 ${pr.b.no} 行`"
-                  :aria-label="`跳转到 ${nameOf(bId)} 第 ${pr.b.no} 行`"
+                  :title="t('cmp.jumpTitle', { name: nameOf(bId), no: pr.b.no })"
+                  :aria-label="t('cmp.jumpTitle', { name: nameOf(bId), no: pr.b.no })"
                   @click="jump('b', pr.b)"
                 >#{{ pr.b.no }}</button>
                 <span class="cmp-v-txt">
@@ -246,7 +247,7 @@ function jump(side: 'a' | 'b', l: LogLine | null) {
           </tbody>
         </table>
         <div v-if="pairs.length > SHOW_CAP" class="cmp-v-cap">
-          已显示前 {{ SHOW_CAP }} 行，共 {{ pairs.length }} 对
+          {{ t('cmp.capNote', { n: SHOW_CAP, total: pairs.length }) }}
         </div>
       </div>
     </div>

@@ -1,4 +1,6 @@
 import { shallowRef } from 'vue'
+import { parseCmdError } from '../ipc/errors'
+import { t, type MessageKey } from '../i18n'
 
 export type ToastKind = 'info' | 'success' | 'warning' | 'error'
 export interface ToastItem {
@@ -96,25 +98,59 @@ export function _resetToasts() {
   lastAt = 0
 }
 
-/** 连接报错 → 人话标题 + 建议动作。正常断连返回 null（由 disconnected 状态提示负责，避免误报）。 */
+/** 连接报错的四类标题/动作组（词典 logic.toast.err*Title/Action） */
+interface HintPair {
+  title: MessageKey
+  action: MessageKey
+}
+const HINTS: Record<'busy' | 'notFound' | 'timeout' | 'generic', HintPair> = {
+  busy: { title: 'logic.toast.errBusyTitle', action: 'logic.toast.errBusyAction' },
+  notFound: { title: 'logic.toast.errNotFoundTitle', action: 'logic.toast.errNotFoundAction' },
+  timeout: { title: 'logic.toast.errTimeoutTitle', action: 'logic.toast.errTimeoutAction' },
+  generic: { title: 'logic.toast.errConnTitle', action: 'logic.toast.errConnAction' },
+}
+
+function hintOf(pair: HintPair): { title: string; action: string } {
+  return { title: t(pair.title), action: t(pair.action) }
+}
+
+/**
+ * 连接报错 → 人话标题 + 建议动作。正常断连返回 null（由 disconnected 状态提示负责，避免误报）。
+ * i18n 起：后端错误为 "{code}|{detail}"（code 全集见 src/ipc/errorCodes.ts），按 code 分派；
+ * open_port_failed/open_link_failed 再按 detail 的英文 OS 文本关键词细分（detail 不翻译）。
+ * 无合法前缀的旧格式（generic）保留原文本关键词兜底，向后兼容。
+ */
 export function connectionErrorHint(message: string): { title: string; action: string } | null {
-  const text = message.toLowerCase()
-  if (text.includes('断开') || text.includes('disconnected')) {
-    return null
+  const { code, detail } = parseCmdError(message)
+  // 正常断连（EOF）：断开状态 toast 已负责提示，这里不再报 error
+  if (code === 'port_disconnected' || code === 'net_disconnected') return null
+  if (code === 'open_port_failed' || code === 'open_link_failed') {
+    const d = detail.toLowerCase()
+    // 'denied' 同时命中 "Access is denied" / "Access denied"；permission 同类
+    if (d.includes('busy') || d.includes('denied') || d.includes('permission')) return hintOf(HINTS.busy)
+    if (d.includes('not found') || d.includes('no such file')) return hintOf(HINTS.notFound)
+    // 'timed out' 兜住 "Connection timed out" 这类 OS 文本
+    if (d.includes('timeout') || d.includes('timed out')) return hintOf(HINTS.timeout)
+    return hintOf(HINTS.generic)
   }
-  if (
-    text.includes('占用') ||
-    text.includes('busy') ||
-    text.includes('access is denied') ||
-    text.includes('拒绝访问')
-  ) {
-    return { title: '端口可能已被占用', action: '请关闭其他串口工具后重试' }
+  if (code === 'generic') {
+    // 旧格式/异常对象（无 code|detail 前缀）：按原文关键词兜底（含正常断连识别）
+    const text = message.toLowerCase()
+    if (text.includes('断开') || text.includes('disconnected')) return null
+    if (
+      text.includes('占用') ||
+      text.includes('busy') ||
+      text.includes('access is denied') ||
+      text.includes('拒绝访问')
+    ) {
+      return hintOf(HINTS.busy)
+    }
+    if (text.includes('不存在') || text.includes('not found') || text.includes('no such file')) {
+      return hintOf(HINTS.notFound)
+    }
+    if (text.includes('timeout') || text.includes('超时') || text.includes('连接失败')) {
+      return hintOf(HINTS.timeout)
+    }
   }
-  if (text.includes('不存在') || text.includes('not found') || text.includes('no such file')) {
-    return { title: '端口已不可用', action: '刷新端口列表后重新选择' }
-  }
-  if (text.includes('timeout') || text.includes('超时') || text.includes('连接失败')) {
-    return { title: '连接没有建立', action: '检查设备、电缆或网络地址后重试' }
-  }
-  return { title: '连接失败', action: '检查参数后重试' }
+  return hintOf(HINTS.generic)
 }

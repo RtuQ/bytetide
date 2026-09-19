@@ -341,17 +341,17 @@ fn replay_soak_rings_and_events_stay_bounded() {
                 }
             )
             .unwrap_err()),
-        "回放会话不支持发送"
+        "replay_no_send|"
     );
     assert_eq!(
         err(m.set_signal(&id, Pin::Dtr, true).unwrap_err()),
-        "回放会话不支持信号线"
+        "replay_no_signal|"
     );
     assert_eq!(
         err(m.set_recording(&id, true).unwrap_err()),
-        "回放会话不支持落盘"
+        "replay_no_recording|"
     );
-    assert_eq!(err(m.rotate_log(&id).unwrap_err()), "回放会话不支持落盘");
+    assert_eq!(err(m.rotate_log(&id).unwrap_err()), "replay_no_recording|");
 
     // 摘要（脚本采集：SOAK_SUMMARY {json}）
     let summary = serde_json::json!({

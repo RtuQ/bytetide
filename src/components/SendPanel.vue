@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useSessionStore } from '../stores/session'
 import type { SendPreset, SendSequence, SeqStep } from '../types'
 import { checksumResults, type ChecksumRow } from '../composables/useChecksum'
+import { t } from '../i18n'
+import type { MessageKey } from '../i18n'
 
 const store = useSessionStore()
 const active = computed(() => store.active)
@@ -16,8 +18,8 @@ const busy = ref(false)
 const canSend = computed(
   () => active.value?.kind === 'live' && active.value.status === 'connected',
 )
-const cannotSendReason = computed(() =>
-  active.value?.kind === 'live' ? '未连接' : '回放/离线会话只读，不支持发送',
+const cannotSendReasonKey = computed<MessageKey>(() =>
+  active.value?.kind === 'live' ? 'send.single.notConnected' : 'send.single.readOnly',
 )
 
 /** 功能页签：单发=原发送框；快捷帧/序列/校验为发送区升级新增 */
@@ -116,7 +118,7 @@ const qpManage = ref(false)
 function saveCurrentAsPreset() {
   const payload = text.value.trim()
   if (!payload) return
-  const name = prompt('快捷帧名称', '快捷帧')
+  const name = prompt(t('send.quick.namePrompt'), t('send.quick.nameDefault'))
   if (!name) return
   store.saveSendPreset({ name, payload, mode: mode.value })
 }
@@ -126,7 +128,7 @@ function sendPreset(p: SendPreset) {
   store.send(s.id, p.payload, p.mode).catch((e: unknown) => alert(String(e)))
 }
 function renamePreset(p: SendPreset) {
-  const name = prompt('快捷帧名称', p.name)
+  const name = prompt(t('send.quick.namePrompt'), p.name)
   if (!name || !name.trim()) return
   store.saveSendPreset({ id: p.id, name, payload: p.payload, mode: p.mode })
 }
@@ -161,7 +163,7 @@ function newSeq() {
   seqLocal += 1
   const seq: SendSequence = {
     id: `sq${Date.now().toString(36)}${seqLocal}`,
-    name: `序列 ${seqLocal}`,
+    name: t('send.seq.defaultName', { seq: seqLocal }),
     steps: [{ kind: 'send', payload: '', mode: 'ascii', appendNewline: true }],
     loop: false,
     intervalMs: 1000,
@@ -243,7 +245,7 @@ function saveCkPreset() {
   const rows = ckRows.value
   if (!rows.length) return
   const row = rows.find((r) => r.algo === 'crc16-modbus') ?? rows[0]
-  const name = prompt('快捷帧名称', '带校验帧')
+  const name = prompt(t('send.quick.namePrompt'), t('send.crc.presetDefault'))
   if (!name) return
   store.saveSendPreset({ name, payload: row.hexBytes, mode: 'hex' })
 }
@@ -254,31 +256,31 @@ function saveCkPreset() {
     <summary class="send-toggle">
       <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
       <svg class="send-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
-      <span>发送</span>
+      <span>{{ t('send.title') }}</span>
       <span class="send-mode">{{ mode === 'hex' ? 'HEX' : 'ASCII' }}</span>
     </summary>
 
     <div class="send-body">
       <div class="send-tabs-row">
-        <div class="seg" role="group" aria-label="发送功能区">
-          <button class="seg-item" :class="{ active: tab === 'single' }" @click="tab = 'single'">单发</button>
+        <div class="seg" role="group" :aria-label="t('send.tab.group')">
+          <button class="seg-item" :class="{ active: tab === 'single' }" @click="tab = 'single'">{{ t('send.tab.single') }}</button>
           <button class="seg-item" :class="{ active: tab === 'quick' }" @click="tab = 'quick'">
-            快捷帧<span v-if="store.sendPresets.length" class="tab-n">{{ store.sendPresets.length }}</span>
+            {{ t('send.tab.quick') }}<span v-if="store.sendPresets.length" class="tab-n">{{ store.sendPresets.length }}</span>
           </button>
           <button class="seg-item" :class="{ active: tab === 'seq' }" @click="tab = 'seq'">
-            序列<span v-if="store.sendSequences.length" class="tab-n">{{ store.sendSequences.length }}</span>
+            {{ t('send.tab.seq') }}<span v-if="store.sendSequences.length" class="tab-n">{{ store.sendSequences.length }}</span>
           </button>
-          <button class="seg-item" :class="{ active: tab === 'ck' }" @click="tab = 'ck'">校验</button>
+          <button class="seg-item" :class="{ active: tab === 'ck' }" @click="tab = 'ck'">{{ t('send.tab.ck') }}</button>
         </div>
         <span class="send-spacer"></span>
         <span class="send-pins">
-          <span class="pin-label">信号线</span>
+          <span class="pin-label">{{ t('send.pin.label') }}</span>
           <button
             class="btn btn-ghost btn-sm"
             :class="{ 'is-on': dtrOn }"
             :disabled="!canSignal"
-            :title="canSignal ? 'DTR（数据终端就绪）电平切换' : '仅串口源已连接时可用'"
-            aria-label="切换 DTR 电平"
+            :title="canSignal ? t('send.pin.dtrTitle') : t('send.pin.serialOnly')"
+            :aria-label="t('send.pin.dtrAria')"
             @click="togglePin('dtr')"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
@@ -288,8 +290,8 @@ function saveCkPreset() {
             class="btn btn-ghost btn-sm"
             :class="{ 'is-on': rtsOn }"
             :disabled="!canSignal"
-            :title="canSignal ? 'RTS（请求发送）电平切换' : '仅串口源已连接时可用'"
-            aria-label="切换 RTS 电平"
+            :title="canSignal ? t('send.pin.rtsTitle') : t('send.pin.serialOnly')"
+            :aria-label="t('send.pin.rtsAria')"
             @click="togglePin('rts')"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
@@ -301,7 +303,7 @@ function saveCkPreset() {
       <!-- 单发（原有功能原样保留） -->
       <div v-show="tab === 'single'" class="tabpane">
         <div class="send-head">
-          <div class="seg" role="group" aria-label="发送模式">
+          <div class="seg" role="group" :aria-label="t('send.mode.group')">
             <button class="seg-item" :class="{ active: mode === 'ascii' }" @click="mode = 'ascii'">ASCII</button>
             <button class="seg-item" :class="{ active: mode === 'hex' }" @click="mode = 'hex'">HEX</button>
           </div>
@@ -311,14 +313,14 @@ function saveCkPreset() {
             <span class="box">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             </span>
-            <span>追加换行</span>
+            <span>{{ t('send.single.appendNewline') }}</span>
           </label>
         </div>
 
         <textarea
           class="send-text input-mono"
           v-model="text"
-          :placeholder="mode === 'hex' ? 'Hex，如 41 42 43' : '发送内容（Ctrl+Enter 发送）'"
+          :placeholder="mode === 'hex' ? t('send.single.hexPlaceholder') : t('send.single.textPlaceholder')"
           @keydown.ctrl.enter.prevent="send"
         />
 
@@ -328,7 +330,7 @@ function saveCkPreset() {
             <span class="box">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             </span>
-            <span>定时</span>
+            <span>{{ t('send.single.timed') }}</span>
           </label>
           <input class="auto-int" type="number" v-model.number="autoIntervalMs" min="50" step="100" />
           <span class="small muted">ms</span>
@@ -336,18 +338,18 @@ function saveCkPreset() {
           <button
             class="btn btn-primary"
             :disabled="busy || !canSend"
-            :title="canSend ? '发送' : `无法发送：${cannotSendReason}`"
+            :title="canSend ? t('send.single.send') : t('send.single.cannotSend', { reason: t(cannotSendReasonKey) })"
             @click="send"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
-            <span>发送</span>
+            <span>{{ t('send.single.send') }}</span>
           </button>
         </div>
 
         <details class="hist">
           <summary>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-            发送历史 ({{ active.sendHistory.length }})
+            {{ t('send.single.history', { count: active.sendHistory.length }) }}
           </summary>
           <div v-for="(h, i) in active.sendHistory" :key="i" class="hist-item" @click="pick(h)">
             {{ h }}
@@ -358,9 +360,9 @@ function saveCkPreset() {
       <!-- 快捷帧 -->
       <div v-show="tab === 'quick'" class="tabpane">
         <div class="qp-toolbar">
-          <button class="btn btn-sm" :disabled="!text.trim()" title="把单发输入框当前内容存为快捷帧" @click="saveCurrentAsPreset">
+          <button class="btn btn-sm" :disabled="!text.trim()" :title="t('send.quick.saveTitle')" @click="saveCurrentAsPreset">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
-            <span>存当前文本</span>
+            <span>{{ t('send.quick.save') }}</span>
           </button>
           <span class="send-spacer"></span>
           <label class="check">
@@ -368,7 +370,7 @@ function saveCkPreset() {
             <span class="box">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             </span>
-            <span>管理</span>
+            <span>{{ t('send.quick.manage') }}</span>
           </label>
         </div>
         <div v-if="store.sendPresets.length" class="qp-grid">
@@ -378,36 +380,36 @@ function saveCkPreset() {
             class="qp-chip"
             role="button"
             tabindex="0"
-            :title="qpManage ? '管理模式：用右侧按钮编辑/删除' : '点击发送'"
+            :title="qpManage ? t('send.quick.manageHint') : t('send.quick.clickToSend')"
             @click="sendPreset(p)"
             @keydown.enter.prevent="sendPreset(p)"
           >
             <span class="qp-name">{{ p.name }}<span class="tag" :class="p.mode">{{ p.mode.toUpperCase() }}</span></span>
             <span class="qp-payload">{{ p.payload }}</span>
             <span v-if="qpManage" class="qp-acts">
-              <button class="btn btn-icon btn-sm" :title="`重命名 ${p.name}`" :aria-label="`重命名 ${p.name}`" @click.stop="renamePreset(p)">
+              <button class="btn btn-icon btn-sm" :title="t('send.quick.rename', { name: p.name })" :aria-label="t('send.quick.rename', { name: p.name })" @click.stop="renamePreset(p)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
               </button>
-              <button class="btn btn-icon btn-sm" :title="`删除 ${p.name}`" :aria-label="`删除 ${p.name}`" @click.stop="store.removeSendPreset(p.id)">
+              <button class="btn btn-icon btn-sm" :title="t('send.quick.delete', { name: p.name })" :aria-label="t('send.quick.delete', { name: p.name })" @click.stop="store.removeSendPreset(p.id)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
               </button>
             </span>
           </div>
         </div>
-        <div v-else class="qp-empty">还没有快捷帧——在「单发」输入内容后点上方「存当前文本」</div>
+        <div v-else class="qp-empty">{{ t('send.quick.empty') }}</div>
       </div>
 
       <!-- 序列 -->
       <div v-show="tab === 'seq'" class="tabpane">
         <div class="seq-top">
           <div class="seq-selcol">
-            <span class="field-label">序列</span>
-            <select class="select" :value="curSeqId" aria-label="选择序列" @change="curSeqId = ($event.target as HTMLSelectElement).value">
-              <option v-for="s in store.sendSequences" :key="s.id" :value="s.id">{{ s.name }}（{{ s.steps.length }} 步）</option>
+            <span class="field-label">{{ t('send.seq.label') }}</span>
+            <select class="select" :value="curSeqId" :aria-label="t('send.seq.selectAria')" @change="curSeqId = ($event.target as HTMLSelectElement).value">
+              <option v-for="s in store.sendSequences" :key="s.id" :value="s.id">{{ t('send.seq.option', { name: s.name, count: s.steps.length }) }}</option>
             </select>
           </div>
-          <button class="btn btn-sm seq-mt" @click="newSeq">＋新建</button>
-          <button class="btn btn-sm seq-mt" :disabled="!draft" @click="delSeq">删除</button>
+          <button class="btn btn-sm seq-mt" @click="newSeq">{{ t('send.seq.new') }}</button>
+          <button class="btn btn-sm seq-mt" :disabled="!draft" @click="delSeq">{{ t('send.seq.delete') }}</button>
           <span class="send-spacer"></span>
           <template v-if="draft">
             <label class="check seq-mt">
@@ -415,19 +417,19 @@ function saveCkPreset() {
               <span class="box">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
               </span>
-              <span>循环</span>
+              <span>{{ t('send.seq.loop') }}</span>
             </label>
             <span class="seq-mt seq-int">
-              <input class="auto-int" type="number" v-model.number="draft.intervalMs" min="50" step="100" title="循环轮间隔" aria-label="循环轮间隔毫秒" @change="saveDraft" />
+              <input class="auto-int" type="number" v-model.number="draft.intervalMs" min="50" step="100" :title="t('send.seq.intervalTitle')" :aria-label="t('send.seq.intervalAria')" @change="saveDraft" />
               <span class="small muted">ms</span>
             </span>
-            <button class="btn btn-primary seq-mt" :disabled="!canRun || !!store.seqRun" title="按步骤顺序执行（发送/延时/信号）" @click="runSeq">
+            <button class="btn btn-primary seq-mt" :disabled="!canRun || !!store.seqRun" :title="t('send.seq.runTitle')" @click="runSeq">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>
-              <span>运行</span>
+              <span>{{ t('send.seq.run') }}</span>
             </button>
-            <button class="btn seq-mt" :disabled="!runningHere" title="中止当前序列" @click="store.stopSequence()">
+            <button class="btn seq-mt" :disabled="!runningHere" :title="t('send.seq.stopTitle')" @click="store.stopSequence()">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
-              <span>停止</span>
+              <span>{{ t('send.seq.stop') }}</span>
             </button>
           </template>
         </div>
@@ -447,11 +449,11 @@ function saveCkPreset() {
               <svg v-if="st.kind === 'send'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
               <svg v-else-if="st.kind === 'delay'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
               <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-              <span>{{ st.kind === 'send' ? '发送' : st.kind === 'delay' ? '延时' : '信号' }}</span>
+              <span>{{ st.kind === 'send' ? t('send.seq.stepSend') : st.kind === 'delay' ? t('send.seq.stepDelay') : t('send.seq.stepSignal') }}</span>
             </span>
             <template v-if="st.kind === 'send'">
-              <input class="input input-mono seq-payload" v-model="st.payload" placeholder="发送内容" @change="saveDraft" />
-              <select class="select seq-sel" v-model="st.mode" aria-label="发送模式" @change="saveDraft">
+              <input class="input input-mono seq-payload" v-model="st.payload" :placeholder="t('send.seq.payloadPlaceholder')" @change="saveDraft" />
+              <select class="select seq-sel" v-model="st.mode" :aria-label="t('send.mode.group')" @change="saveDraft">
                 <option value="ascii">ASCII</option>
                 <option value="hex">HEX</option>
               </select>
@@ -460,52 +462,52 @@ function saveCkPreset() {
                 <span class="box">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                 </span>
-                <span>换行</span>
+                <span>{{ t('send.seq.newline') }}</span>
               </label>
             </template>
             <template v-else-if="st.kind === 'delay'">
-              <input class="input seq-ms" type="number" v-model.number="st.ms" min="10" step="50" aria-label="延时毫秒" @change="saveDraft" />
+              <input class="input seq-ms" type="number" v-model.number="st.ms" min="10" step="50" :aria-label="t('send.seq.delayAria')" @change="saveDraft" />
               <span class="small muted">ms</span>
             </template>
             <template v-else>
-              <select class="select seq-sel" v-model="st.pin" aria-label="信号线" @change="saveDraft">
+              <select class="select seq-sel" v-model="st.pin" :aria-label="t('send.pin.label')" @change="saveDraft">
                 <option value="dtr">DTR</option>
                 <option value="rts">RTS</option>
               </select>
-              <select class="select seq-sel" v-model="st.level" aria-label="电平" @change="saveDraft">
-                <option :value="true">拉高</option>
-                <option :value="false">拉低</option>
+              <select class="select seq-sel" v-model="st.level" :aria-label="t('send.seq.levelAria')" @change="saveDraft">
+                <option :value="true">{{ t('send.seq.levelHigh') }}</option>
+                <option :value="false">{{ t('send.seq.levelLow') }}</option>
               </select>
             </template>
             <span class="seq-acts">
-              <button class="btn btn-ghost btn-sm" title="上移" aria-label="上移该步骤" :disabled="i === 0" @click="moveStep(i, -1)">
+              <button class="btn btn-ghost btn-sm" :title="t('send.seq.moveUp')" :aria-label="t('send.seq.moveUpAria')" :disabled="i === 0" @click="moveStep(i, -1)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg>
               </button>
-              <button class="btn btn-ghost btn-sm" title="下移" aria-label="下移该步骤" :disabled="i === draft.steps.length - 1" @click="moveStep(i, 1)">
+              <button class="btn btn-ghost btn-sm" :title="t('send.seq.moveDown')" :aria-label="t('send.seq.moveDownAria')" :disabled="i === draft.steps.length - 1" @click="moveStep(i, 1)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
               </button>
-              <button class="btn btn-ghost btn-sm" title="删除该步骤" aria-label="删除该步骤" @click="delStep(i)">
+              <button class="btn btn-ghost btn-sm" :title="t('send.seq.delStep')" :aria-label="t('send.seq.delStep')" @click="delStep(i)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
               </button>
             </span>
           </div>
           <div class="seq-addrow">
-            <button class="btn btn-ghost btn-sm" @click="addStep('send')">＋发送</button>
-            <button class="btn btn-ghost btn-sm" @click="addStep('delay')">＋延时</button>
-            <button class="btn btn-ghost btn-sm" @click="addStep('signal')">＋信号</button>
+            <button class="btn btn-ghost btn-sm" @click="addStep('send')">{{ t('send.seq.addSend') }}</button>
+            <button class="btn btn-ghost btn-sm" @click="addStep('delay')">{{ t('send.seq.addDelay') }}</button>
+            <button class="btn btn-ghost btn-sm" @click="addStep('signal')">{{ t('send.seq.addSignal') }}</button>
             <span class="send-spacer"></span>
-            <span class="small muted">信号步骤 = DTR/RTS 拉高/拉低（bootloader 复位进 ISP 用）</span>
+            <span class="small muted">{{ t('send.seq.signalHint') }}</span>
           </div>
         </div>
-        <div v-else class="qp-empty">还没有序列——点上方「＋新建」创建</div>
+        <div v-else class="qp-empty">{{ t('send.seq.empty') }}</div>
 
         <div class="seq-runline">
           <template v-if="store.seqRun && runningHere">
-            <span class="prog">运行中</span> · 轮次 {{ store.seqRun.round }} · 步骤 {{ store.seqRun.step + 1 }}/{{ draft?.steps.length ?? 0 }}
+            <span class="prog">{{ t('send.seq.running') }}</span> {{ t('send.seq.progress', { round: store.seqRun.round, step: store.seqRun.step + 1, total: draft?.steps.length ?? 0 }) }}
           </template>
-          <template v-else-if="store.seqRun">其他会话正在运行序列</template>
+          <template v-else-if="store.seqRun">{{ t('send.seq.runningElsewhere') }}</template>
           <template v-else-if="seqErr"><span class="seq-err">{{ seqErr }}</span></template>
-          <template v-else>就绪</template>
+          <template v-else>{{ t('send.seq.ready') }}</template>
         </div>
       </div>
 
@@ -515,17 +517,17 @@ function saveCkPreset() {
           <textarea
             class="textarea input-mono ck-text"
             v-model="ckInput"
-            :placeholder="ckMode === 'hex' ? '输入 HEX，如 01 03 00 00 00 02' : '输入 ASCII 文本'"
+            :placeholder="ckMode === 'hex' ? t('send.crc.hexPlaceholder') : t('send.crc.asciiPlaceholder')"
             rows="2"
           ></textarea>
           <div class="ck-opts">
-            <div class="seg" role="group" aria-label="校验输入模式">
+            <div class="seg" role="group" :aria-label="t('send.crc.modeGroup')">
               <button class="seg-item" :class="{ active: ckMode === 'hex' }" @click="ckMode = 'hex'">HEX</button>
               <button class="seg-item" :class="{ active: ckMode === 'ascii' }" @click="ckMode = 'ascii'">ASCII</button>
             </div>
-            <select class="select ck-endian" v-model="ckEndian" title="多字节校验的字节序" aria-label="校验字节序">
-              <option value="be">大端 AB</option>
-              <option value="le">小端 BA</option>
+            <select class="select ck-endian" v-model="ckEndian" :title="t('send.crc.endianTitle')" :aria-label="t('send.crc.endianAria')">
+              <option value="be">{{ t('send.crc.bigEndian') }}</option>
+              <option value="le">{{ t('send.crc.littleEndian') }}</option>
             </select>
           </div>
         </div>
@@ -533,18 +535,18 @@ function saveCkPreset() {
           <div v-for="row in ckRows" :key="row.algo" class="ck-row">
             <span class="algo">{{ row.algo }}</span>
             <span class="val">{{ row.hexBytes }}</span>
-            <span class="small muted">{{ row.bytes }} 字节</span>
-            <button class="btn btn-sm" :title="`把 ${row.algo} 校验字节追加到单发输入框`" @click="appendCk(row)">＋追加</button>
+            <span class="small muted">{{ t('send.crc.bytes', { count: row.bytes }) }}</span>
+            <button class="btn btn-sm" :title="t('send.crc.appendTitle', { algo: row.algo })" @click="appendCk(row)">{{ t('send.crc.append') }}</button>
           </div>
         </div>
-        <div v-else class="qp-empty">输入为空——输入 HEX 或 ASCII 后实时计算</div>
+        <div v-else class="qp-empty">{{ t('send.crc.empty') }}</div>
         <div class="send-foot">
-          <span class="small muted">「＋追加」把校验字节拼到「单发」输入框尾部</span>
+          <span class="small muted">{{ t('send.crc.appendHint') }}</span>
           <span class="send-spacer"></span>
-          <button class="btn btn-sm" :disabled="!ckRows.length" title="把 modbus 校验结果存为快捷帧" @click="saveCkPreset">存为快捷帧</button>
+          <button class="btn btn-sm" :disabled="!ckRows.length" :title="t('send.crc.saveTitle')" @click="saveCkPreset">{{ t('send.crc.save') }}</button>
         </div>
       </div>
     </div>
   </details>
-  <div v-else class="muted panel-empty">无活动会话</div>
+  <div v-else class="muted panel-empty">{{ t('app.status.noSession') }}</div>
 </template>

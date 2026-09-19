@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useSessionStore } from '../stores/session'
 import type { AutoReplyRule } from '../types'
+import { t } from '../i18n'
 
 const store = useSessionStore()
 const active = computed(() => store.active)
@@ -21,7 +22,7 @@ function del(rid: string) {
   <details class="panel">
     <summary class="panel-head">
       <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>
-      <span class="panel-title">自动回复</span>
+      <span class="panel-title">{{ t('ar.title') }}</span>
       <span v-if="active" class="badge">{{ active.autoReply.rules.length }}</span>
       <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
     </summary>
@@ -38,16 +39,16 @@ function del(rid: string) {
           <span class="box">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </span>
-          <span>启用自动回复</span>
+          <span>{{ t('ar.enableAll') }}</span>
         </label>
         <span class="send-spacer"></span>
         <button class="btn btn-ghost btn-sm" @click="add">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
-          <span>添加规则</span>
+          <span>{{ t('ar.add') }}</span>
         </button>
       </div>
       <div v-if="!active.autoReply.rules.length" class="panel-hint">
-        收到匹配命令自动回复，可设多条规则
+        {{ t('ar.hint') }}
       </div>
       <div v-for="r in active.autoReply.rules" :key="r.id" class="ar-card" :class="{ off: !r.enabled }">
         <div class="ar-line">
@@ -56,7 +57,7 @@ function del(rid: string) {
               type="checkbox"
               :checked="r.enabled"
               @change="upd(r.id, { enabled: ($event.target as HTMLInputElement).checked })"
-              title="启用该规则"
+              :title="t('ar.ruleEnableTitle')"
             />
             <span class="box">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
@@ -66,7 +67,7 @@ function del(rid: string) {
             class="ar-trigger"
             :value="r.trigger"
             @input="upd(r.id, { trigger: ($event.target as HTMLInputElement).value })"
-            placeholder="收到命令"
+            :placeholder="t('ar.triggerPh')"
           />
           <span class="ar-arrow">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
@@ -75,9 +76,9 @@ function del(rid: string) {
             class="ar-reply"
             :value="r.reply"
             @input="upd(r.id, { reply: ($event.target as HTMLInputElement).value })"
-            placeholder="回复内容"
+            :placeholder="t('ar.replyPh')"
           />
-          <button class="ar-x" @click="del(r.id)" title="删除" aria-label="删除规则">
+          <button class="ar-x" @click="del(r.id)" :title="t('ar.del')" :aria-label="t('ar.delAria')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
           </button>
         </div>
@@ -107,7 +108,7 @@ function del(rid: string) {
             <span class="box">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             </span>
-            <span>正则</span>
+            <span>{{ t('ar.regex') }}</span>
           </label>
           <label class="check">
             <input
@@ -118,7 +119,7 @@ function del(rid: string) {
             <span class="box">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             </span>
-            <span>大小写</span>
+            <span>{{ t('ar.case') }}</span>
           </label>
           <label class="check">
             <input
@@ -129,7 +130,7 @@ function del(rid: string) {
             <span class="box">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             </span>
-            <span>整词</span>
+            <span>{{ t('ar.whole') }}</span>
           </label>
           <label v-if="r.replyMode === 'ascii'" class="check">
             <input
@@ -140,11 +141,11 @@ function del(rid: string) {
             <span class="box">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             </span>
-            <span>追加换行</span>
+            <span>{{ t('ar.appendNewline') }}</span>
           </label>
         </div>
       </div>
     </div>
-    <div v-else class="panel-empty">无活动会话</div>
+    <div v-else class="panel-empty">{{ t('ar.noSession') }}</div>
   </details>
 </template>

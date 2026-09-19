@@ -3,6 +3,7 @@ import { commands } from '../../ipc/commands'
 import { ipcErrorDetail } from '../../ipc/errors'
 import { toast } from '../../composables/useToast'
 import { drainSessionTail } from '../../composables/useTauriEvents'
+import { t } from '../../i18n'
 import { openPath } from '@tauri-apps/plugin-opener'
 import type { DecodedFrame } from '../../types/parser'
 import type {
@@ -245,7 +246,7 @@ export const useSessionStore = defineStore('session', {
      *  正好落在真实文件行号上，翻到文件头时 no=1（否则负行号 + reconnectNo 守卫
      *  会卡死第二页回补）。 */
     async loadOfflineSession(path: string) {
-      const baseName = path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') || '离线日志'
+      const baseName = path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') || t('logic.session.offlineName')
       const config: PortConfig = {
         name: baseName,
         baudRate: 0,
@@ -287,7 +288,7 @@ export const useSessionStore = defineStore('session', {
      *  由 replay-state 事件 / replayStatus 轮询修正；告警规则随建账推送（回放
      *  自动回复被 origin 结构性排除）。 */
     async loadReplaySession(path: string, speed = 1.0, looped = false) {
-      const baseName = path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') || '回放日志'
+      const baseName = path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') || t('logic.session.replayName')
       const config: PortConfig = {
         name: baseName,
         baudRate: 0,
@@ -436,17 +437,17 @@ export const useSessionStore = defineStore('session', {
       try {
         p = await commands.sessionLogPath(id)
       } catch (e) {
-        toast('无法打开日志文件', 'error', 4000, String(e))
+        toast(t('logic.log.openFailed'), 'error', 4000, String(e))
         return
       }
       if (!p) {
-        toast('无法打开日志文件', 'error', 4000, '当前会话尚未生成日志文件')
+        toast(t('logic.log.openFailed'), 'error', 4000, t('logic.log.noLogFile'))
         return
       }
       try {
         await openPath(p)
       } catch (e) {
-        toast('无法打开日志文件', 'error', 4000, String(e))
+        toast(t('logic.log.openFailed'), 'error', 4000, String(e))
       }
     },
     /** 落盘录制开关：关=暂停写日志文件（数据仍进日志视图）；开=另起新分段文件继续录制。

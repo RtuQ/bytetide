@@ -3,6 +3,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { makeCodec } from '../persistence/schema'
 import { loadStored, saveStored } from '../persistence/storage'
+import { t } from '../i18n'
 
 /** 更新检查的 GitHub 仓库；改动需同步 scripts/portable-README.txt 的主页链接 */
 const UPDATE_REPO = 'RtuQ/bytetide'
@@ -130,10 +131,11 @@ async function checkNow(force = false): Promise<void> {
       signal: AbortSignal.timeout(API_TIMEOUT_MS),
     })
     if (!res.ok) {
-      throw new Error(res.status === 404 ? '仓库还没有发布版本' : `GitHub API 返回 ${res.status}`)
+      // throw 点求值（errorMsg 随后展示原文，不随语言切换重译）
+      throw new Error(res.status === 404 ? t('logic.update.noReleases') : t('logic.update.apiStatus', { status: res.status }))
     }
     const info = parseRelease(await res.json())
-    if (!info) throw new Error('更新响应格式异常')
+    if (!info) throw new Error(t('logic.update.badResponse'))
     updateInfo.value = info
     if (!isNewer(currentVersion.value, info.version)) {
       status.value = 'latest'

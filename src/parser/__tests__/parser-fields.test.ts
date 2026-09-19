@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readValue, decodeDeclarative, formatNumber, renderTemplate, autoText } from '../fields'
 import { normalizeFramingParts } from '../framer'
+import { t } from '../../i18n'
 import type { ValidatedField, ValidatedScript } from '../../types/parser'
 
 const bytes = (arr: number[]) => new Uint8Array(arr)
@@ -97,7 +98,7 @@ describe('decodeDeclarative 字段抽取', () => {
       ],
     })
     const r = decodeDeclarative(s, bytes([0xaa, 0x55, 0x01, 0x02, 0x01]))
-    expect(r.fields[0]).toMatchObject({ value: '—', raw: '越界@20' })
+    expect(r.fields[0]).toMatchObject({ value: '—', raw: t('logic.parser.outOfRange', { at: 20 }) })
     expect(r.fields[1]!.value).toBe('1')
     expect(r.text).toContain('—')
   })

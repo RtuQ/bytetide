@@ -9,6 +9,8 @@ import vue from '@vitejs/plugin-vue'
 export default defineConfig({
   plugins: [vue()],
   test: {
+    // 语言锁 zh-CN（jsdom navigator.language=en-US 会把跟随系统的默认判成英文，污染中文断言）
+    setupFiles: ['./src/test/vitest-setup.ts'],
     environment: 'jsdom',
     include: ['src/components/__tests__/*.test.ts'],
   },

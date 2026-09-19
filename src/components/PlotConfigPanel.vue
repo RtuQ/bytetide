@@ -3,6 +3,7 @@ import { computed, inject } from 'vue'
 import { useSessionStore } from '../stores/session'
 import { PLOT_DATA_KEY } from '../composables/usePlotData'
 import type { PlotBytes, PlotChecksum, PlotConfig } from '../types'
+import { t } from '../i18n'
 
 const store = useSessionStore()
 const active = computed(() => store.active)
@@ -21,7 +22,7 @@ function onEnabled(e: Event) {
   <details class="panel">
     <summary class="panel-head">
       <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
-      <span class="panel-title">数据绘图</span>
+      <span class="panel-title">{{ t('plotcfg.title') }}</span>
       <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
     </summary>
     <div class="panel-body" v-if="active && plot">
@@ -30,52 +31,52 @@ function onEnabled(e: Event) {
         <span class="box">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
         </span>
-        <span>绘图（开启后切到主区域波形图，自动启用 HEX 视图）</span>
+        <span>{{ t('plotcfg.enable') }}</span>
       </label>
 
       <div class="field">
-        <span class="field-label">数据源</span>
+        <span class="field-label">{{ t('plotcfg.source') }}</span>
         <div class="seg">
-          <button class="seg-item" :class="{ active: plot.source === 'binary' }" @click="patch({ source: 'binary' })">二进制</button>
-          <button class="seg-item" :class="{ active: plot.source === 'ascii-hex' }" @click="patch({ source: 'ascii-hex' })">ASCII hex</button>
+          <button class="seg-item" :class="{ active: plot.source === 'binary' }" @click="patch({ source: 'binary' })">{{ t('plotcfg.sourceBinary') }}</button>
+          <button class="seg-item" :class="{ active: plot.source === 'ascii-hex' }" @click="patch({ source: 'ascii-hex' })">{{ t('plotcfg.sourceAsciiHex') }}</button>
         </div>
       </div>
 
       <div class="field">
-        <span class="field-label">帧头 (hex)</span>
+        <span class="field-label">{{ t('plotcfg.frameHead') }}</span>
         <input
           class="input input-mono"
           :value="plot.frameHead"
           @input="patch({ frameHead: ($event.target as HTMLInputElement).value })"
-          placeholder="如 01 00"
+          :placeholder="t('plotcfg.frameHeadPh')"
         />
       </div>
 
       <div class="field">
-        <span class="field-label">帧尾 (hex, 可空)</span>
+        <span class="field-label">{{ t('plotcfg.frameTail') }}</span>
         <input
           class="input input-mono"
           :value="plot.frameTail"
           @input="patch({ frameTail: ($event.target as HTMLInputElement).value })"
-          placeholder="如 AA 55"
+          :placeholder="t('plotcfg.frameTailPh')"
         />
       </div>
 
       <div class="plot-grid">
         <div class="field">
-          <span class="field-label">校验</span>
+          <span class="field-label">{{ t('plotcfg.checksum') }}</span>
           <select
             class="select"
             :value="plot.checksum"
             @change="patch({ checksum: ($event.target as HTMLSelectElement).value as PlotChecksum })"
           >
-            <option value="none">无</option>
-            <option value="sum">累加和</option>
-            <option value="xor">XOR</option>
+            <option value="none">{{ t('plotcfg.checksumNone') }}</option>
+            <option value="sum">{{ t('plotcfg.checksumSum') }}</option>
+            <option value="xor">{{ t('plotcfg.checksumXor') }}</option>
           </select>
         </div>
         <div class="field">
-          <span class="field-label">通道数</span>
+          <span class="field-label">{{ t('plotcfg.channels') }}</span>
           <input
             class="input"
             type="number"
@@ -89,7 +90,7 @@ function onEnabled(e: Event) {
 
       <div class="plot-grid">
         <div class="field">
-          <span class="field-label">每通道字节</span>
+          <span class="field-label">{{ t('plotcfg.bytesPerChannel') }}</span>
           <select
             class="select"
             :value="plot.bytesPerChannel"
@@ -101,7 +102,7 @@ function onEnabled(e: Event) {
           </select>
         </div>
         <div class="field">
-          <span class="field-label">最大点数</span>
+          <span class="field-label">{{ t('plotcfg.maxPoints') }}</span>
           <select
             class="select"
             :value="plot.maxPoints"
@@ -116,10 +117,10 @@ function onEnabled(e: Event) {
       </div>
 
       <div class="field">
-        <span class="field-label">端序</span>
+        <span class="field-label">{{ t('plotcfg.endian') }}</span>
         <div class="seg">
-          <button class="seg-item" :class="{ active: plot.endian === 'big' }" @click="patch({ endian: 'big' })">大端</button>
-          <button class="seg-item" :class="{ active: plot.endian === 'little' }" @click="patch({ endian: 'little' })">小端</button>
+          <button class="seg-item" :class="{ active: plot.endian === 'big' }" @click="patch({ endian: 'big' })">{{ t('plotcfg.endianBig') }}</button>
+          <button class="seg-item" :class="{ active: plot.endian === 'little' }" @click="patch({ endian: 'little' })">{{ t('plotcfg.endianLittle') }}</button>
         </div>
       </div>
 
@@ -128,14 +129,14 @@ function onEnabled(e: Event) {
         <span class="box">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
         </span>
-        <span>有符号</span>
+        <span>{{ t('plotcfg.signed') }}</span>
       </label>
 
       <div class="plot-stat">
-        <span>解析 <b>{{ frameCount }}</b> 帧 / <b>{{ points.length }}</b> 点</span>
+        <span>{{ t('plotcfg.stat', { frames: frameCount, points: points.length }) }}</span>
         <span v-if="lastError" class="plot-err">{{ lastError }}</span>
       </div>
     </div>
-    <div v-else class="panel-empty">无活动会话</div>
+    <div v-else class="panel-empty">{{ t('plotcfg.noSession') }}</div>
   </details>
 </template>

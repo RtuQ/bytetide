@@ -279,7 +279,7 @@ impl ReplayRunner<'_> {
                 self.runtime.state.write().set_error(
                     self.sink,
                     &self.session_id,
-                    &format!("回放读取失败: {e}"),
+                    &crate::errors::err_msg("replay_read_failed", &e),
                     Some(SessionStatus::Error),
                 );
                 false
@@ -418,7 +418,7 @@ impl ReplayRunner<'_> {
                 self.runtime.state.write().set_error(
                     self.sink,
                     &self.session_id,
-                    &format!("回放定位失败: {e}"),
+                    &crate::errors::err_msg("replay_seek_failed", &e),
                     None,
                 );
             }

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { commands } from '../ipc/commands'
 import { normalizeIpcError } from '../ipc/errors'
+import { t } from '../i18n'
 import { onScenarioFinished, onScenarioProgress, onSessionStatus } from '../ipc/events'
 import type { Unlisten } from '../ipc/client'
 import type { StatusPayload } from '../types'
@@ -148,7 +149,7 @@ export const useAutomationStore = defineStore('automation', {
         id: newScenarioId(),
         scenario: cloneScenario(this.entries[i].scenario),
       }
-      dup.scenario.name = `${this.entries[i].scenario.name} 副本`
+      dup.scenario.name = t('logic.scen.copySuffix', { name: this.entries[i].scenario.name })
       this.entries.splice(i + 1, 0, dup)
       this.persist()
       return dup.id
@@ -169,7 +170,7 @@ export const useAutomationStore = defineStore('automation', {
     async saveScenario(id: string, scenario: Scenario): Promise<boolean> {
       const name = scenario.name.trim()
       if (!name) {
-        this.validationError = { code: 'empty_name', path: 'name', message: '名称不能为空' }
+        this.validationError = { code: 'empty_name', path: 'name', message: t('logic.scen.emptyName') }
         return false
       }
       const cleaned: Scenario = { ...cloneScenario(scenario), name }
@@ -179,7 +180,7 @@ export const useAutomationStore = defineStore('automation', {
           this.validationError = summary.error ?? {
             code: 'invalid_schema',
             path: 'steps',
-            message: '场景校验失败',
+            message: t('logic.scen.validationFailed'),
           }
           return false
         }

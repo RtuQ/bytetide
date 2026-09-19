@@ -1,5 +1,6 @@
 import type { LogLine, PlotBytes, PlotChecksum, PlotConfig, PlotEndian, PlotPoint } from '../types'
 import { lineBytes } from '../parser/lineBytes'
+import { t } from '../i18n'
 
 const HEX_PAIR = /[0-9a-fA-F]{2}/g
 
@@ -98,10 +99,10 @@ export function parseFrames(config: PlotConfig, rxLines: LogLine[]): ParseResult
   const frameLen = dataLen + checksumLen + tailLen
 
   if (head.length === 0 && tailLen === 0) {
-    return { points: [], frameCount: 0, lastError: '需设置帧头或帧尾' }
+    return { points: [], frameCount: 0, lastError: t('logic.plot.needHeadOrTail') }
   }
   if (frameLen <= 0) {
-    return { points: [], frameCount: 0, lastError: '通道/字节配置无效' }
+    return { points: [], frameCount: 0, lastError: t('logic.plot.invalidLayout') }
   }
 
   // 拼接字节流并记录每行字节区间 -> 行时间戳

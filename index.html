@@ -26,6 +26,31 @@
         } catch (e) { /* 坏值回默认浅色 */ }
         document.documentElement.dataset.theme = mode;
       })();
+      // 界面语言首屏同步 <html lang>（与 src/i18n 的 loadValue + detectSystemLocale
+      // 两处默认同步——AGENTS.md 纪律）：持久化值 > 系统语言（en* → en）。
+      (function () {
+        var lang = 'zh-CN';
+        try {
+          var nav = navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language];
+          for (var i = 0; i < nav.length; i++) {
+            var s = String(nav[i] || '').toLowerCase();
+            if (s === 'zh' || s.indexOf('zh-') === 0) { break; }
+            if (s === 'en' || s.indexOf('en-') === 0) { lang = 'en'; break; }
+          }
+        } catch (e) { /* 默认中文 */ }
+        try {
+          var raw = localStorage.getItem('serialtool.locale');
+          if (raw === 'en' || raw === 'zh-CN') {
+            lang = raw;
+          } else if (raw && raw.charAt(0) === '{') {
+            var v = JSON.parse(raw);
+            if (v && v.schema === 'locale' && v.version === 1 && (v.data === 'en' || v.data === 'zh-CN')) {
+              lang = v.data;
+            }
+          }
+        } catch (e) { /* 坏值保持系统判定 */ }
+        document.documentElement.lang = lang;
+      })();
     </script>
     <style>
       html[data-theme='light'] body { background: #f1f5f9; margin: 0; }

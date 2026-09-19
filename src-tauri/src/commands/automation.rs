@@ -52,6 +52,8 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::state::AppState;
 
+use super::errors::cmd_err;
+
 /// 完成报告保留份数（只逐出 completed 条目）。
 const KEEP_COMPLETED: usize = 50;
 
@@ -148,11 +150,11 @@ pub fn ensure_session_runnable(
     steps: &[ValidatedStep],
 ) -> Result<(), String> {
     let Some(mode) = manager.session_mode(session_id) else {
-        return Err("会话不存在".to_string());
+        return Err(cmd_err("session_not_found", ""));
     };
     match mode {
-        "offline" => Err("离线会话不支持场景".to_string()),
-        "replay" if contains_device_steps(steps) => Err("回放会话不支持发送步骤".to_string()),
+        "offline" => Err(cmd_err("offline_no_scenario", "")),
+        "replay" if contains_device_steps(steps) => Err(cmd_err("replay_no_send_step", "")),
         _ => Ok(()),
     }
 }
@@ -187,7 +189,7 @@ pub fn start_scenario(
     scenario: Scenario,
     emit: EmitFn,
 ) -> Result<String, String> {
-    let validated = validate_scenario(scenario).map_err(|e| format!("场景校验失败: {e}"))?;
+    let validated = validate_scenario(scenario).map_err(|e| cmd_err("scenario_invalid", e))?;
     ensure_session_runnable(manager, session_id, &validated.steps)?;
     registry.start(session_id, validated, manager.clone(), emit)
 }
@@ -263,7 +265,7 @@ impl AutomationRegistry {
                 .values()
                 .any(|r| r.session_id == session_id && r.status == RunStatus::Running)
             {
-                return Err(format!("同一会话同时只允许运行一个场景: {session_id}"));
+                return Err(cmd_err("scenario_already_running", session_id));
             }
             let run_id = format!("run{}", st.next_id);
             st.next_id += 1;
@@ -312,7 +314,7 @@ impl AutomationRegistry {
             }
             Err(e) => {
                 self.inner.lock().runs.remove(&run_id);
-                Err(format!("场景运行线程启动失败: {e}"))
+                Err(cmd_err("scenario_thread_spawn_failed", e))
             }
         }
     }
@@ -385,33 +387,34 @@ impl AutomationRegistry {
         }
     }
 
-    /// 运行视图查询（未知 runId 报稳定文案；前端对逐出/迟到期事件据此忽略）。
+    /// 运行视图查询（未知 runId 报 `scenario_run_not_found|`；前端对逐出/迟到期
+    /// 事件据此忽略）。
     pub fn view(&self, run_id: &str) -> Result<ScenarioRunView, String> {
         let st = self.inner.lock();
         let entry = st
             .runs
             .get(run_id)
-            .ok_or_else(|| format!("场景运行不存在: {run_id}"))?;
+            .ok_or_else(|| cmd_err("scenario_run_not_found", run_id))?;
         Ok(build_view(run_id, entry))
     }
 
     /// 报告序列化：`json` → pretty JSON，`junit` → JUnit XML；未完成 / 未知
-    /// run / 未知格式分别报稳定文案。
+    /// run / 未知格式分别报稳定 `code|detail`。
     pub fn report(&self, run_id: &str, format: &str) -> Result<String, String> {
         let st = self.inner.lock();
         let entry = st
             .runs
             .get(run_id)
-            .ok_or_else(|| format!("场景运行不存在: {run_id}"))?;
+            .ok_or_else(|| cmd_err("scenario_run_not_found", run_id))?;
         let renderer = match format {
             "json" => |r: &ScenarioReport| report_json(r).map_err(|e| e.to_string()),
             "junit" => |r: &ScenarioReport| Ok(report_junit(r)),
-            other => return Err(format!("未知报告格式: {other}，支持 json|junit")),
+            other => return Err(cmd_err("unknown_report_format", other)),
         };
         let report = entry
             .report
             .as_ref()
-            .ok_or_else(|| format!("场景尚未完成，报告未生成: {run_id}"))?;
+            .ok_or_else(|| cmd_err("report_not_ready", run_id))?;
         renderer(report)
     }
 }
@@ -473,8 +476,9 @@ impl ManagerScenarioHost {
         {
             return Ok(());
         }
+        // 报告 message 走英文技术细节（挂在 host_transport 码下，不经错误码词典）
         Err(HostError::Transport(
-            "hex 发送文本非法: 须为偶数个十六进制字符（空白忽略）".to_string(),
+            "hex send text must be an even number of hex digits (whitespace ignored)".to_string(),
         ))
     }
 }

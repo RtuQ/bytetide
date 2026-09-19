@@ -16,6 +16,7 @@ use super::recording::{default_log_path, next_segment_path};
 use super::rules::{AlertCfg, AutoReplyCfg, CaptureCfg};
 use super::runtime::{session_thread, IngestOrigin};
 use super::transport::host_of;
+use crate::errors::err_msg;
 use crate::logfmt;
 use crate::offline::{open_offline, OfflineIndex, OfflineReader};
 use crate::replay::{spawn_replay, ReplayCmd, ReplayConfig, ReplayState};
@@ -88,6 +89,11 @@ pub struct PortManager {
 /// 墓碑容量：覆盖「连停数个会话」的补拉窗口即可，防无释放时内存常驻
 /// （每份 ring ≤ RING_CAP ≈ 17MB）。
 const DEAD_RING_CAP: usize = 4;
+
+/// 查询面最高频错误：会话不存在（code|detail 契约，前端词典 errors.session_not_found）。
+fn session_not_found() -> anyhow::Error {
+    anyhow::anyhow!(err_msg("session_not_found", ""))
+}
 
 impl Default for PortManager {
     fn default() -> Self {
@@ -195,7 +201,7 @@ impl PortManager {
                     am2,
                 )
             })
-            .map_err(|e| anyhow::anyhow!("spawn reader thread failed: {e}"))?;
+            .map_err(|e| anyhow::anyhow!(err_msg("thread_spawn_failed", e)))?;
 
         self.sessions.write().insert(
             id.clone(),
@@ -333,7 +339,7 @@ impl PortManager {
         // 非法速度执行前失败（不建会话、不 spawn 线程）
         replay_config
             .validate()
-            .map_err(|e| anyhow::anyhow!("回放配置非法: {e}"))?;
+            .map_err(|e| anyhow::anyhow!(err_msg("replay_config_invalid", e)))?;
         let (index, reader) = open_offline(path)?;
         let id = format!("r{}", self.next_id.fetch_add(1, Ordering::Relaxed));
         let runtime = Arc::new(SessionRuntime::new());
@@ -352,7 +358,7 @@ impl PortManager {
             sink,
             id.clone(),
         )
-        .map_err(|e| anyhow::anyhow!("spawn replay thread failed: {e}"))?;
+        .map_err(|e| anyhow::anyhow!(err_msg("replay_thread_spawn_failed", e)))?;
         let name = path
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
@@ -387,19 +393,17 @@ impl PortManager {
     /// T7 命令层入口：SessionHandle 已持有控制通道（T6），此处只补公开路由面。
     pub fn replay_control(&self, id: &str, cmd: ReplayCmd) -> anyhow::Result<()> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         if !matches!(h.kind, SessionKind::Replay) {
-            return Err(anyhow::anyhow!("非回放会话"));
+            return Err(anyhow::anyhow!(err_msg("not_replay_session", "")));
         }
         let tx = h
             .replay_tx
             .clone()
-            .ok_or_else(|| anyhow::anyhow!("回放控制通道不可用"))?;
+            .ok_or_else(|| anyhow::anyhow!(err_msg("replay_channel_unavailable", "")))?;
         drop(sessions);
         tx.send(cmd)
-            .map_err(|_| anyhow::anyhow!("回放控制通道已关闭"))?;
+            .map_err(|_| anyhow::anyhow!(err_msg("replay_channel_closed", "")))?;
         Ok(())
     }
 
@@ -422,7 +426,7 @@ impl PortManager {
             .sessions
             .write()
             .remove(id)
-            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+            .ok_or_else(session_not_found)?;
         handle.stop.store(true, Ordering::Relaxed);
         // 回放会话：显式 Stop（start_replay 返回的 sender 克隆仍在调用方手里，
         // 仅 drop 不保证关通道）；线程已退出时发送失败静默忽略
@@ -439,18 +443,16 @@ impl PortManager {
 
     pub fn send(&self, id: &str, req: SendRequest) -> anyhow::Result<()> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         if matches!(h.kind, SessionKind::Offline) {
-            return Err(anyhow::anyhow!("离线会话不可发送"));
+            return Err(anyhow::anyhow!(err_msg("offline_no_send", "")));
         }
         if matches!(h.kind, SessionKind::Replay) {
-            return Err(anyhow::anyhow!("回放会话不支持发送"));
+            return Err(anyhow::anyhow!(err_msg("replay_no_send", "")));
         }
         h.write_tx
             .send(super::PortCmd::Send(req))
-            .map_err(|_| anyhow::anyhow!("发送通道已关闭"))?;
+            .map_err(|_| anyhow::anyhow!(err_msg("send_channel_closed", "")))?;
         Ok(())
     }
 
@@ -458,26 +460,22 @@ impl PortManager {
     /// 网络源在读线程内报“无信号线”，离线会话直接拒绝。
     pub fn set_signal(&self, id: &str, pin: Pin, level: bool) -> anyhow::Result<()> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         if matches!(h.kind, SessionKind::Offline) {
-            return Err(anyhow::anyhow!("离线会话不可控制信号线"));
+            return Err(anyhow::anyhow!(err_msg("offline_no_signal", "")));
         }
         if matches!(h.kind, SessionKind::Replay) {
-            return Err(anyhow::anyhow!("回放会话不支持信号线"));
+            return Err(anyhow::anyhow!(err_msg("replay_no_signal", "")));
         }
         h.write_tx
             .send(super::PortCmd::Signal { pin, level })
-            .map_err(|_| anyhow::anyhow!("通道已关闭"))?;
+            .map_err(|_| anyhow::anyhow!(err_msg("signal_channel_closed", "")))?;
         Ok(())
     }
 
     pub fn clear_log(&self, id: &str) -> anyhow::Result<()> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         // 离线（镜像遗忘 / ring 清屏）与回放（ring 清屏、seq 不回退、源文件与
         // 回放游标不动）：都不经 PortCmd——写通道是断开占位
         if matches!(h.kind, SessionKind::Offline | SessionKind::Replay) {
@@ -492,7 +490,7 @@ impl PortManager {
         }
         h.write_tx
             .send(super::PortCmd::Clear)
-            .map_err(|_| anyhow::anyhow!("通道已关闭"))?;
+            .map_err(|_| anyhow::anyhow!(err_msg("clear_channel_closed", "")))?;
         Ok(())
     }
 
@@ -554,7 +552,7 @@ impl PortManager {
             .iter()
             .find(|(did, _)| did == id)
             .map(|(_, rt)| rt)
-            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+            .ok_or_else(session_not_found)?;
         Ok(runtime.ring.lines_after_no(since_no, max))
     }
 
@@ -563,9 +561,7 @@ impl PortManager {
     /// REST `/lines?no=` 与批注回填做有界读取（评审 P1-1：不物化全量快照）。
     pub fn bridge_line_by_no(&self, id: &str, no: u64) -> anyhow::Result<Option<BridgeLine>> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         if no == 0 {
             return Ok(None);
         }
@@ -586,9 +582,7 @@ impl PortManager {
         max: usize,
     ) -> anyhow::Result<Vec<BridgeLine>> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         let max = max.clamp(1, RING_CAP);
         Ok(match &h.offline {
             Some(r) => r.lock().lines_before(before_no, max)?,
@@ -600,9 +594,7 @@ impl PortManager {
     /// 离线分页会话返回虚拟 ring 边界（首行 no=1、末行 no=line_count）。
     pub fn ring_bounds(&self, id: &str) -> anyhow::Result<RingBounds> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         Ok(match &h.offline {
             Some(r) => {
                 let (first_no, last_no, .., size) = r.lock().bounds();
@@ -635,9 +627,7 @@ impl PortManager {
         capture: CaptureCfg,
     ) -> anyhow::Result<()> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         *h.runtime.auto_reply.write() = auto_reply;
         *h.runtime.alerts.write() = alerts;
         *h.runtime.capture.write() = capture;
@@ -647,9 +637,7 @@ impl PortManager {
     /// 会话日志文件完整路径（导出/打开日志位置用）。
     pub fn session_log_path(&self, id: &str) -> anyhow::Result<String> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         // 先落局部变量再构造 Ok：路径读守卫的临时值不能活到块尾（晚于 sessions 释放）
         let p = h.log_path.read().clone().to_string_lossy().into_owned();
         Ok(p)
@@ -670,22 +658,20 @@ impl PortManager {
     /// 返回新文件完整路径。
     pub fn rotate_log(&self, id: &str) -> anyhow::Result<String> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         if matches!(h.kind, SessionKind::Offline) {
-            return Err(anyhow::anyhow!("离线会话不落盘"));
+            return Err(anyhow::anyhow!(err_msg("offline_no_recording", "")));
         }
         if matches!(h.kind, SessionKind::Replay) {
-            return Err(anyhow::anyhow!("回放会话不支持落盘"));
+            return Err(anyhow::anyhow!(err_msg("replay_no_recording", "")));
         }
         if h.log_base.as_os_str().is_empty() {
-            return Err(anyhow::anyhow!("该会话未启用日志落盘"));
+            return Err(anyhow::anyhow!(err_msg("recording_disabled", "")));
         }
         let np = next_segment_path(&h.log_base, &chrono::Local::now(), |p| p.exists());
         h.write_tx
             .send(super::PortCmd::RecOn(np.clone()))
-            .map_err(|_| anyhow::anyhow!("通道已关闭（会话未连接）"))?;
+            .map_err(|_| anyhow::anyhow!(err_msg("channel_closed", "session disconnected")))?;
         // 「打开日志」与下次分段都应基于新文件：只锁路径单元、不取 sessions 写锁
         //（读线程午夜轮转同样只写该单元，锁序恒为 sessions -> log_path，无死锁面）
         *h.log_path.write() = np.clone();
@@ -699,18 +685,16 @@ impl PortManager {
             return self.rotate_log(id).map(|_| ());
         }
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         if matches!(h.kind, SessionKind::Offline) {
-            return Err(anyhow::anyhow!("离线会话不落盘"));
+            return Err(anyhow::anyhow!(err_msg("offline_no_recording", "")));
         }
         if matches!(h.kind, SessionKind::Replay) {
-            return Err(anyhow::anyhow!("回放会话不支持落盘"));
+            return Err(anyhow::anyhow!(err_msg("replay_no_recording", "")));
         }
         h.write_tx
             .send(super::PortCmd::RecOff)
-            .map_err(|_| anyhow::anyhow!("通道已关闭（会话未连接）"))
+            .map_err(|_| anyhow::anyhow!(err_msg("channel_closed", "session disconnected")))
     }
 
     // ===== REST 桥访问器（同 crate 读取，不暴露 SessionHandle） =====

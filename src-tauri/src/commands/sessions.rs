@@ -11,6 +11,8 @@ use tauri::{AppHandle, Manager, State};
 use crate::gui_sink::GuiSink;
 use crate::state::AppState;
 
+use super::errors::cmd_err;
+
 #[tauri::command]
 pub fn list_ports_cmd() -> Vec<PortInfo> {
     list_ports()
@@ -95,7 +97,7 @@ pub fn set_signal_cmd(
     let pin = match pin.as_str() {
         "dtr" => Pin::Dtr,
         "rts" => Pin::Rts,
-        other => return Err(format!("未知信号线: {other}")),
+        other => return Err(cmd_err("unknown_signal", other)),
     };
     state
         .manager

@@ -16,6 +16,8 @@ import { requestBackfill } from '../composables/useTauriEvents'
 import ReplayControls from './ReplayControls.vue'
 import type { LogLine } from '../types'
 import { toast } from '../composables/useToast'
+import { t } from '../i18n'
+import { errorMessage } from '../ipc/errors'
 
 const props = defineProps<{ sessionId: string }>()
 const store = useSessionStore()
@@ -84,15 +86,16 @@ function ctxLineHex(line: LogLine): string {
 function resendLine() {
   const c = ctx.value
   if (!c || !canSendCtx.value) return
-  store.send(props.sessionId, ctxLineHex(c.line), 'hex').catch((e: unknown) => alert(String(e)))
+  store.send(props.sessionId, ctxLineHex(c.line), 'hex').catch((e: unknown) => alert(errorMessage(e)))
   closeCtx()
 }
 async function copyCtx(kind: 'text' | 'hex') {
   const c = ctx.value
   if (!c) return
-  const t = kind === 'text' ? (c.selText ?? c.line.text) : ctxLineHex(c.line)
+  // 局部变量避开 i18n 的 t（避免遮蔽导入的同名翻译函数）
+  const text = kind === 'text' ? (c.selText ?? c.line.text) : ctxLineHex(c.line)
   try {
-    await navigator.clipboard.writeText(t)
+    await navigator.clipboard.writeText(text)
   } catch {
     /* 剪贴板不可用时静默（无感失败好过报错打断） */
   }
@@ -153,11 +156,11 @@ const recomputeRowMinWidth = useThrottleFn(
     const items = viewItems.value
     for (let i = 0; i < items.length; i++) {
       const it = items[i]!
-      const t = it.text
+      const txt = it.text
       // 含 ANSI 序列的行按剥离后的显示长度估宽（守卫先行走快速路径，避免全量正则）
-      const disp = t.indexOf('\x1b') === -1 ? t.length : stripAnsi(t).length
+      const disp = txt.indexOf('\x1b') === -1 ? txt.length : stripAnsi(txt).length
       // HEX 视图按实际渲染字节数估宽：有原始字节用字节长（lossy 文本的 U+FFFD 长度不准）
-      const len = it.ts.length + (hexView.value ? lineHexLen(t, it.bytes) * 3 + 2 : disp)
+      const len = it.ts.length + (hexView.value ? lineHexLen(txt, it.bytes) * 3 + 2 : disp)
       if (len > m) m = len
     }
     const chars = Math.min(m, 20000)
@@ -224,9 +227,9 @@ async function exportLog() {
     s.lines.map((l) => `${l.ts}\t${l.dir === 'rx' ? 'RX' : 'TX'}\t${l.text}`).join('\n') + '\n'
   try {
     await commands.exportText(path, content)
-    toast('日志已导出', 'success', 3000, path)
+    toast(t('lv.exported'), 'success', 3000, path)
   } catch (e) {
-    toast('日志导出失败', 'error', 4500, String(e))
+    toast(t('lv.exportFailed'), 'error', 4500, errorMessage(e))
   }
 }
 
@@ -327,7 +330,7 @@ onBeforeUnmount(() => {
           <span class="box">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </span>
-          <span>跟随</span>
+          <span>{{ t('lv.toolbar.follow') }}</span>
         </label>
         <label class="check">
           <input
@@ -338,7 +341,7 @@ onBeforeUnmount(() => {
           <span class="box">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </span>
-          <span>只看命中</span>
+          <span>{{ t('lv.toolbar.matchesOnly') }}</span>
         </label>
         <label class="check">
           <input
@@ -351,7 +354,7 @@ onBeforeUnmount(() => {
           </span>
           <span>HEX</span>
         </label>
-        <label class="check" title="显示相邻行的时间差">
+        <label class="check" :title="t('lv.toolbar.deltaTitle')">
           <input
             type="checkbox"
             :checked="showDelta"
@@ -360,9 +363,9 @@ onBeforeUnmount(() => {
           <span class="box">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </span>
-          <span>间隔</span>
+          <span>{{ t('lv.toolbar.delta') }}</span>
         </label>
-        <label class="check" title="显示/隐藏行号列">
+        <label class="check" :title="t('lv.toolbar.lineNoTitle')">
           <input
             type="checkbox"
             :checked="showLineNo"
@@ -371,9 +374,9 @@ onBeforeUnmount(() => {
           <span class="box">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </span>
-          <span>行号</span>
+          <span>{{ t('lv.toolbar.lineNo') }}</span>
         </label>
-        <label class="check" title="显示/隐藏收发方向列">
+        <label class="check" :title="t('lv.toolbar.dirTitle')">
           <input
             type="checkbox"
             :checked="showDir"
@@ -389,15 +392,15 @@ onBeforeUnmount(() => {
           :class="{ 'bm-on': selectedNo != null && bookmarkSet.has(selectedNo) }"
           :disabled="selectedNo == null"
           :title="selectedNo == null
-            ? '书签当前行（先点击选中一行）'
+            ? t('lv.toolbar.bmNone')
             : bookmarkSet.has(selectedNo)
-              ? '取消该书签（Ctrl+F2 / Ctrl+B）'
-              : '书签当前行（Ctrl+F2 / Ctrl+B）'"
-          aria-label="切换选中行的书签"
+              ? t('lv.toolbar.bmRemove')
+              : t('lv.toolbar.bmAdd')"
+          :aria-label="t('lv.toolbar.bmAria')"
           @click="toggleSelectedBookmark"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-          <span>书签</span>
+          <span>{{ t('lv.toolbar.bookmark') }}</span>
         </button>
       </div>
 
@@ -407,28 +410,28 @@ onBeforeUnmount(() => {
         <button
           v-if="session.kind !== 'offline' && (session.status === 'connected' || session.status === 'connecting')"
           class="btn btn-sm btn-danger"
-          title="断开串口（保留标签页与日志）"
+          :title="t('lv.toolbar.stopTitle')"
           @click="store.stopSession(props.sessionId)"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>
-          <span>停止</span>
+          <span>{{ t('lv.toolbar.stop') }}</span>
         </button>
         <button
           v-else-if="session.kind === 'live'"
           class="btn btn-sm btn-primary"
-          title="重新连接该串口"
+          :title="t('lv.toolbar.reconnectTitle')"
           @click="store.reconnectSession(props.sessionId)"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h0a4 4 0 0 1-4-4V8Z"/></svg>
-          <span>重连</span>
+          <span>{{ t('lv.toolbar.reconnect') }}</span>
         </button>
-        <button class="btn btn-ghost btn-sm" title="清屏" @click="store.clearLog(props.sessionId)">
+        <button class="btn btn-ghost btn-sm" :title="t('lv.toolbar.clearTitle')" @click="store.clearLog(props.sessionId)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg>
-          <span>清屏</span>
+          <span>{{ t('lv.toolbar.clear') }}</span>
         </button>
-        <button class="btn btn-ghost btn-sm" title="导出日志" @click="exportLog">
+        <button class="btn btn-ghost btn-sm" :title="t('lv.toolbar.exportTitle')" @click="exportLog">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          <span>导出</span>
+          <span>{{ t('lv.toolbar.export') }}</span>
         </button>
         <button
           v-if="session.kind !== 'offline'"
@@ -436,36 +439,36 @@ onBeforeUnmount(() => {
           :class="{ 'rec-on': session.recOn }"
           :disabled="!recLive"
           :title="session.recOn
-            ? '落盘录制中，点击暂停写入日志文件（日志视图不受影响）'
-            : '录制已暂停，点击另起新文件继续落盘'"
-          aria-label="切换日志落盘录制"
+            ? t('lv.toolbar.recOnTitle')
+            : t('lv.toolbar.recOffTitle')"
+          :aria-label="t('lv.toolbar.recAria')"
           @click="store.setRec(props.sessionId, !session.recOn)"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/></svg>
-          <span>录制</span>
+          <span>{{ t('lv.toolbar.rec') }}</span>
         </button>
         <button
           v-if="session.kind !== 'offline'"
           class="btn btn-ghost btn-sm"
           :disabled="!recLive"
           :title="session.recOn
-            ? '日志分段：关闭当前文件，从当前时刻另起带时间戳的新文件继续落盘（旧文件保留）'
-            : '日志分段：另起带时间戳的新文件并恢复落盘'"
-          aria-label="另起新日志分段文件"
+            ? t('lv.toolbar.rotateOnTitle')
+            : t('lv.toolbar.rotateOffTitle')"
+          :aria-label="t('lv.toolbar.rotateAria')"
           @click="store.rotateLog(props.sessionId)"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M15 18v-6"/><path d="M12 15h6"/></svg>
-          <span>分段</span>
+          <span>{{ t('lv.toolbar.rotate') }}</span>
         </button>
-        <button v-if="session.kind !== 'offline'" class="btn btn-ghost btn-sm" title="打开当前日志文件" @click="store.openLogPath(props.sessionId)">
+        <button v-if="session.kind !== 'offline'" class="btn btn-ghost btn-sm" :title="t('lv.toolbar.openLogTitle')" @click="store.openLogPath(props.sessionId)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
-          <span>日志</span>
+          <span>{{ t('lv.toolbar.openLog') }}</span>
         </button>
       </div>
 
       <span v-if="session.error" class="logview-err">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
-        {{ session.error }}
+        {{ errorMessage(session.error) }}
       </span>
     </div>
 
@@ -517,24 +520,24 @@ onBeforeUnmount(() => {
       <span
         v-if="session.droppedLines"
         class="drop-note"
-        :title="`前端缓冲上限 ${store.logConfig.viewBufCap.toLocaleString()} 行，超出即从最旧行开始丢弃（自连接或上次清屏起累计）`"
+        :title="t('lv.droppedTitle', { n: store.logConfig.viewBufCap.toLocaleString() })"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 20h16a2 2 0 0 0 1.73-2Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
-        已丢弃 {{ session.droppedLines.toLocaleString() }} 行
+        {{ t('lv.dropped', { n: session.droppedLines.toLocaleString() }) }}
       </span>
       <span
         v-if="session.backfillTotal"
         class="drop-note"
-        :title="`上滑到顶时已从 ring 回补 ${session.backfillTotal.toLocaleString()} 行（仍在 ring 窗口内的被裁旧行）。更早的行已被 ring 覆盖或属上一连接，无法回补`"
+        :title="t('lv.backfillTitle', { n: session.backfillTotal.toLocaleString() })"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19V5"/><path d="m5 12 7 7 7-7"/></svg>
-        已回补 {{ session.backfillTotal.toLocaleString() }} 行
+        {{ t('lv.backfilled', { n: session.backfillTotal.toLocaleString() }) }}
       </span>
     </div>
 
     <div v-else class="logview-empty">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h0a4 4 0 0 1-4-4V8Z"/></svg>
-      <span>打开一个串口开始</span>
+      <span>{{ t('lv.empty') }}</span>
     </div>
 
     <Teleport to="body">
@@ -544,24 +547,24 @@ onBeforeUnmount(() => {
           <button
             class="ctx-item"
             :disabled="!canSendCtx"
-            :title="canSendCtx ? '按原始字节以 HEX 模式重发该行' : session?.kind === 'offline' ? '离线会话不可发送' : '会话未连接'"
+            :title="canSendCtx ? t('lv.ctx.resendTitle') : session?.kind === 'offline' ? t('lv.ctx.resendOffline') : t('lv.ctx.resendNotConnected')"
             @click="resendLine"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
-            <span>重发此帧</span>
+            <span>{{ t('lv.ctx.resend') }}</span>
           </button>
           <div class="ctx-sep"></div>
           <button
             class="ctx-item"
-            :title="ctx?.selText != null ? '复制划选中的文本（多行按行拼接）' : '复制该行完整文本'"
+            :title="ctx?.selText != null ? t('lv.ctx.copySelTitle') : t('lv.ctx.copyLineTitle')"
             @click="copyCtx('text')"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
-            <span>复制文本</span>
+            <span>{{ t('lv.ctx.copyText') }}</span>
           </button>
-          <button class="ctx-item" title="复制该行原始字节的 HEX（按整行，不受划选影响）" @click="copyCtx('hex')">
+          <button class="ctx-item" :title="t('lv.ctx.copyHexTitle')" @click="copyCtx('hex')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
-            <span>复制 HEX</span>
+            <span>{{ t('lv.ctx.copyHex') }}</span>
           </button>
         </div>
       </template>

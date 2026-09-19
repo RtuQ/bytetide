@@ -4,6 +4,8 @@ import { open, save } from '@tauri-apps/plugin-dialog'
 import { commands } from '../ipc/commands'
 import { useSessionStore } from '../stores/session'
 import { useAutomationStore } from '../stores/automation'
+import { t } from '../i18n'
+import type { MessageKey } from '../i18n'
 import { countScenarioLeaves, makeScenario, type ScenarioRunStatus } from '../types/automation'
 import ScenarioEditor from './ScenarioEditor.vue'
 import ScenarioRunView from './ScenarioRunView.vue'
@@ -45,11 +47,12 @@ function targetLabel(id: string): string {
 
 const editing = computed(() => automation.editing)
 
-const RUN_BADGE: Record<ScenarioRunStatus, { text: string; cls: string }> = {
-  running: { text: '运行中', cls: 'sc-st-running' },
-  passed: { text: '通过', cls: 'sc-st-passed' },
-  failed: { text: '失败', cls: 'sc-st-failed' },
-  cancelled: { text: '已取消', cls: 'sc-st-cancelled' },
+// code→词条映射：值存 MessageKey，使用点 t(badge.text) 求值（切语言即时刷新）
+const RUN_BADGE: Record<ScenarioRunStatus, { text: MessageKey; cls: string }> = {
+  running: { text: 'scen.stRunning', cls: 'sc-st-running' },
+  passed: { text: 'scen.stPassed', cls: 'sc-st-passed' },
+  failed: { text: 'scen.stFailed', cls: 'sc-st-failed' },
+  cancelled: { text: 'scen.stCancelled', cls: 'sc-st-cancelled' },
 }
 
 const hasRunning = computed(() => automation.runList.some((r) => r.status === 'running'))
@@ -62,7 +65,7 @@ const shownRunIds = computed(() => {
 })
 
 function newScenario(): void {
-  automation.addScenario(makeScenario(`新场景 ${automation.entries.length + 1}`))
+  automation.addScenario(makeScenario(t('scen.newName', { n: automation.entries.length + 1 })))
 }
 
 function runEntry(id: string): void {
@@ -81,9 +84,9 @@ async function importFile(): Promise<void> {
   try {
     const raw: unknown = JSON.parse(await commands.readTextFile(path))
     const n = automation.importScenarios(raw)
-    ioMsg.value = n > 0 ? `已导入 ${n} 个场景` : '未发现可导入的场景（形状不符）'
+    ioMsg.value = n > 0 ? t('scen.imported', { n }) : t('scen.importNone')
   } catch (e) {
-    ioMsg.value = `导入失败：${e instanceof Error ? e.message : String(e)}`
+    ioMsg.value = t('scen.importFailed', { msg: e instanceof Error ? e.message : String(e) })
   }
 }
 
@@ -99,7 +102,7 @@ async function exportFile(id: string | null): Promise<void> {
     await commands.exportText(path, content)
     ioMsg.value = ''
   } catch (e) {
-    ioMsg.value = `导出失败：${e instanceof Error ? e.message : String(e)}`
+    ioMsg.value = t('scen.exportFailed', { msg: e instanceof Error ? e.message : String(e) })
   }
 }
 </script>
@@ -108,9 +111,9 @@ async function exportFile(id: string | null): Promise<void> {
   <details class="panel">
     <summary class="panel-head">
       <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-      <span class="panel-title">场景</span>
+      <span class="panel-title">{{ t('scen.title') }}</span>
       <span v-if="automation.entries.length" class="badge">{{ automation.entries.length }}</span>
-      <span v-if="hasRunning" class="badge badge-hot" title="有场景运行中"><span class="dot-ic"></span></span>
+      <span v-if="hasRunning" class="badge badge-hot" :title="t('scen.runningBadge')"><span class="dot-ic"></span></span>
       <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
     </summary>
 
@@ -127,22 +130,22 @@ async function exportFile(id: string | null): Promise<void> {
             v-if="runTargets.length"
             v-model="targetId"
             class="select sc-target"
-            aria-label="目标会话"
-            title="选择运行场景的目标会话（仅实时已连接会话）"
+            :aria-label="t('scen.targetAria')"
+            :title="t('scen.targetTitle')"
           >
             <option v-for="s in runTargets" :key="s.id" :value="s.id">{{ s.config.name }}</option>
           </select>
-          <span v-else class="sc-no-target panel-hint">无已连接会话</span>
+          <span v-else class="sc-no-target panel-hint">{{ t('scen.noTarget') }}</span>
           <span class="send-spacer"></span>
-          <button class="btn btn-sm sc-new" type="button" title="新建场景" @click="newScenario">新建</button>
-          <button class="btn btn-ghost btn-sm sc-import" type="button" title="从 JSON 文件导入场景（数组或单个）" @click="importFile">导入</button>
+          <button class="btn btn-sm sc-new" type="button" :title="t('scen.newTitle')" @click="newScenario">{{ t('scen.new') }}</button>
+          <button class="btn btn-ghost btn-sm sc-import" type="button" :title="t('scen.importTitle')" @click="importFile">{{ t('scen.import') }}</button>
           <button
             v-if="automation.entries.length"
             class="btn btn-ghost btn-sm sc-export-all"
             type="button"
-            title="导出全部场景为 JSON 文件"
+            :title="t('scen.exportAllTitle')"
             @click="exportFile(null)"
-          >导出</button>
+          >{{ t('scen.export') }}</button>
         </div>
         <div v-if="ioMsg" class="sc-msg">{{ ioMsg }}</div>
 
@@ -151,28 +154,28 @@ async function exportFile(id: string | null): Promise<void> {
             <button
               class="sc-name"
               type="button"
-              :title="`编辑 ${e.scenario.name}`"
+              :title="t('scen.editTitle', { name: e.scenario.name })"
               @click="automation.editingId = e.id"
             >{{ e.scenario.name }}</button>
-            <span class="sc-meta">{{ countScenarioLeaves(e.scenario.steps) }} 步</span>
+            <span class="sc-meta">{{ t('scen.stepCount', { n: countScenarioLeaves(e.scenario.steps) }) }}</span>
             <span
               v-if="e.lastRunStatus"
               class="badge sc-runbadge"
               :class="RUN_BADGE[e.lastRunStatus]?.cls"
-            >{{ RUN_BADGE[e.lastRunStatus]?.text }}</span>
+            >{{ t(RUN_BADGE[e.lastRunStatus].text) }}</span>
             <span class="send-spacer"></span>
             <button
               class="btn btn-sm sc-run"
               type="button"
               :disabled="!targetId"
-              :title="targetId ? `运行到会话 ${targetLabel(targetId)}` : '无已连接会话可运行'"
+              :title="targetId ? t('scen.runToTitle', { name: targetLabel(targetId) }) : t('scen.runNoTargetTitle')"
               @click="runEntry(e.id)"
-            >运行</button>
+            >{{ t('scen.run') }}</button>
             <button
               class="btn btn-ghost btn-sm sc-dup"
               type="button"
-              :title="`复制场景 ${e.scenario.name}`"
-              :aria-label="`复制场景 ${e.scenario.name}`"
+              :title="t('scen.dupTitle', { name: e.scenario.name })"
+              :aria-label="t('scen.dupTitle', { name: e.scenario.name })"
               @click="automation.duplicateScenario(e.id)"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
@@ -180,8 +183,8 @@ async function exportFile(id: string | null): Promise<void> {
             <button
               class="btn btn-ghost btn-sm sc-export"
               type="button"
-              :title="`导出 ${e.scenario.name} 为 JSON`"
-              :aria-label="`导出场景 ${e.scenario.name} JSON`"
+              :title="t('scen.exportOneTitle', { name: e.scenario.name })"
+              :aria-label="t('scen.exportOneAria', { name: e.scenario.name })"
               @click="exportFile(e.id)"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
@@ -189,18 +192,18 @@ async function exportFile(id: string | null): Promise<void> {
             <button
               class="btn btn-ghost btn-sm sc-del"
               type="button"
-              :title="`删除场景 ${e.scenario.name}`"
-              :aria-label="`删除场景 ${e.scenario.name}`"
+              :title="t('scen.delTitle', { name: e.scenario.name })"
+              :aria-label="t('scen.delTitle', { name: e.scenario.name })"
               @click="automation.removeScenario(e.id)"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
             </button>
           </div>
         </div>
-        <div v-else class="panel-empty">暂无场景——点「新建」创建，或「导入」场景 JSON 文件</div>
+        <div v-else class="panel-empty">{{ t('scen.empty') }}</div>
 
         <template v-if="shownRunIds.length">
-          <div class="sc-sub">最近运行</div>
+          <div class="sc-sub">{{ t('scen.recentRuns') }}</div>
           <div class="sc-runs">
             <ScenarioRunView v-for="rid in shownRunIds" :key="rid" :run-id="rid" />
           </div>

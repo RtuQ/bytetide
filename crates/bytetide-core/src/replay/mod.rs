@@ -155,22 +155,22 @@ mod tests {
                     }
                 )
                 .unwrap_err()),
-            "回放会话不支持发送"
+            "replay_no_send|"
         );
         assert_eq!(
             err(m
                 .set_signal(&id, crate::serial::transport::Pin::Dtr, true)
                 .unwrap_err()),
-            "回放会话不支持信号线"
+            "replay_no_signal|"
         );
-        assert_eq!(err(m.rotate_log(&id).unwrap_err()), "回放会话不支持落盘");
+        assert_eq!(err(m.rotate_log(&id).unwrap_err()), "replay_no_recording|");
         assert_eq!(
             err(m.set_recording(&id, false).unwrap_err()),
-            "回放会话不支持落盘"
+            "replay_no_recording|"
         );
         assert_eq!(
             err(m.set_recording(&id, true).unwrap_err()),
-            "回放会话不支持落盘"
+            "replay_no_recording|"
         );
         // 首轮播完（线程驻留 Finished）
         wait_until(5_000, || m.bridge_last_no(&id) == Some(5));
@@ -220,7 +220,7 @@ mod tests {
             .start_replay(&path, bad, sink.clone(), PathBuf::new())
             .unwrap_err()
             .to_string()
-            .contains("回放配置非法"));
+            .contains("replay_config_invalid"));
         // 源文件缺失：open_offline 失败，不建会话
         let missing = _g.path().join("nope.log");
         assert!(m
@@ -246,7 +246,7 @@ mod tests {
             m.replay_control("nope", ReplayCmd::Stop)
                 .unwrap_err()
                 .to_string(),
-            "会话不存在"
+            "session_not_found|"
         );
         // 播到第 2 行（100ms 间隔）即暂停：控制面投递，非 start_replay 返回的 sender
         wait_until(5_000, || matches!(m.replay_view(&id), Some((_, 2))));

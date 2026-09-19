@@ -445,21 +445,21 @@ fn replay_pipeline_ingests_fixture_raises_alerts_and_guards() {
                 }
             )
             .unwrap_err()),
-        "回放会话不支持发送"
+        "replay_no_send|"
     );
     assert_eq!(
         err(m.set_signal(&id, Pin::Dtr, true).unwrap_err()),
-        "回放会话不支持信号线"
+        "replay_no_signal|"
     );
     assert_eq!(
         err(m.set_recording(&id, true).unwrap_err()),
-        "回放会话不支持落盘"
+        "replay_no_recording|"
     );
     assert_eq!(
         err(m.set_recording(&id, false).unwrap_err()),
-        "回放会话不支持落盘"
+        "replay_no_recording|"
     );
-    assert_eq!(err(m.rotate_log(&id).unwrap_err()), "回放会话不支持落盘");
+    assert_eq!(err(m.rotate_log(&id).unwrap_err()), "replay_no_recording|");
 
     // ring 上限字段可达（soak 断言的同源口径）
     assert_eq!(m.ring_bounds(&id).unwrap().ring_cap, RING_CAP);

@@ -13,6 +13,7 @@ use super::port::LogLine;
 use super::ring::RingBuf;
 use super::rules::{clamp_capture_window, CaptureCfg};
 use super::runtime::SessionState;
+use crate::errors::err_msg;
 use crate::session::SessionLog;
 use crate::sink::{CaptureInfo, EventSink};
 
@@ -85,7 +86,10 @@ impl CaptureController {
                 state.write().set_error(
                     sink,
                     session_id,
-                    &format!("现场档案创建失败 {}: {}", path.display(), e),
+                    &err_msg(
+                        "capture_create_failed",
+                        format!("{}: {}", path.display(), e),
+                    ),
                     None,
                 );
                 return;
@@ -650,7 +654,7 @@ mod tests {
         let events = sink.0.lock().clone();
         assert_eq!(events.len(), 1);
         assert!(
-            events[0].starts_with("error s1 现场档案创建失败 "),
+            events[0].starts_with("error s1 capture_create_failed|"),
             "建档失败只发 error 事件: {events:?}"
         );
         let st = st.read();
@@ -658,7 +662,7 @@ mod tests {
             .last_error
             .as_deref()
             .unwrap_or_default()
-            .starts_with("现场档案创建失败 "));
+            .starts_with("capture_create_failed|"));
         assert_eq!(st.status, SessionStatus::Connected);
         let _ = std::fs::remove_dir_all(&dir);
     }

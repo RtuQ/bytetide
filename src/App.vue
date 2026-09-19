@@ -42,6 +42,7 @@ import SendPanel from './components/SendPanel.vue'
 import SplitView from './components/SplitView.vue'
 import ToastHost from './components/ToastHost.vue'
 import { requestPopover } from './composables/usePopoverBridge'
+import { t } from './i18n'
 
 const store = useSessionStore()
 const bridge = useBridgeStore()
@@ -93,10 +94,11 @@ onBeforeUnmount(() => {
 const activeView = computed(() => store.active?.centerView ?? 'log')
 const compareOn = computed(() => store.compareMode)
 
+// label/title 存 MessageKey（词条随语言切换，勿在此存文案值），模板 t(v.label) 求值
 const VIEW_ITEMS = [
-  { key: 'log', label: '日志', title: '仅日志' },
-  { key: 'split', label: '分屏', title: '日志与图表同屏，可拖分割条调整高度' },
-  { key: 'plot', label: '图表', title: '仅图表' },
+  { key: 'log', label: 'app.view.log', title: 'app.view.logTitle' },
+  { key: 'split', label: 'app.view.split', title: 'app.view.splitTitle' },
+  { key: 'plot', label: 'app.view.plot', title: 'app.view.plotTitle' },
 ] as const
 
 function setView(v: 'log' | 'split' | 'plot') {
@@ -223,26 +225,26 @@ function onPanelToggle(e: Event, id: string) {
         <div class="app-center">
           <!-- 视图切换条：常驻（对比模式下也能一键切回，兼作对比退出） -->
           <div v-if="store.active" class="viewbar">
-            <div class="seg" role="group" aria-label="中心视图模式">
+            <div class="seg" role="group" :aria-label="t('app.view.group')">
               <button
                 v-for="v in VIEW_ITEMS"
                 :key="v.key"
                 class="seg-item"
                 :class="{ active: !compareOn && activeView === v.key }"
-                :title="v.title"
+                :title="t(v.title)"
                 type="button"
                 @click="setView(v.key)"
-              >{{ v.label }}</button>
+              >{{ t(v.label) }}</button>
               <button
                 class="seg-item"
                 :class="{ active: compareOn }"
                 :disabled="store.order.length < 2"
                 :title="store.order.length < 2
-                  ? '双会话时间对齐对比：需先打开第二个会话（离线日志也可）'
-                  : '双会话时间对齐对比（占中心区）'"
+                  ? t('app.view.compareDisabledTitle')
+                  : t('app.view.compareTitle')"
                 type="button"
                 @click="store.toggleCompareMode()"
-              >对比</button>
+              >{{ t('app.view.compare') }}</button>
             </div>
           </div>
           <div v-if="store.active" id="center-body" class="center-body">
@@ -254,8 +256,8 @@ function onPanelToggle(e: Event, id: string) {
               class="hsplit"
               role="separator"
               aria-orientation="horizontal"
-              aria-label="调整日志与图表高度"
-              title="拖动调整日志/图表高度"
+              :aria-label="t('app.view.splitAria')"
+              :title="t('app.view.splitDrag')"
               @mousedown="onSplitStart"
             ></div>
             <div v-if="activeView !== 'log' && !compareOn" class="plot-wrap">
@@ -272,17 +274,17 @@ function onPanelToggle(e: Event, id: string) {
                 </svg>
               </div>
               <div class="welcome-copy">
-                <h1>开始调试你的串口</h1>
-                <p>连接设备或打开日志文件，实时查看、搜索和分析字节流。</p>
+                <h1>{{ t('app.welcome.heading') }}</h1>
+                <p>{{ t('app.welcome.sub') }}</p>
               </div>
               <div class="welcome-actions">
                 <button class="btn btn-primary" type="button" @click="requestPopover('new-connection')">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
-                  新建连接
+                  {{ t('app.welcome.newConn') }}
                 </button>
-                <button class="btn btn-ghost" type="button" @click="openWelcomeLog">打开日志文件</button>
+                <button class="btn btn-ghost" type="button" @click="openWelcomeLog">{{ t('app.welcome.openLog') }}</button>
               </div>
-              <div class="welcome-hints"><span>支持串口、TCP、UDP</span><span>·</span><span>日志可离线分析</span><span>·</span><span><kbd>Ctrl N</kbd> 新建连接</span></div>
+              <div class="welcome-hints"><span>{{ t('app.welcome.hintTransport') }}</span><span>·</span><span>{{ t('app.welcome.hintOffline') }}</span><span>·</span><span><kbd>Ctrl N</kbd> {{ t('app.welcome.newConn') }}</span></div>
             </div>
           </div>
           <DockView v-if="store.active" />
@@ -294,17 +296,17 @@ function onPanelToggle(e: Event, id: string) {
         v-if="store.active"
         class="sidebar-handle"
         :class="{ collapsed: sidebarCollapsed }"
-        title="拖动调整侧栏宽度"
+        :title="t('app.sidebar.resizeTitle')"
         role="separator"
-        aria-label="调整侧栏宽度"
+        :aria-label="t('app.sidebar.resizeAria')"
         aria-orientation="vertical"
         @mousedown="onResizeStart"
       >
         <button
           class="sidebar-toggle"
           :class="{ collapsed: sidebarCollapsed }"
-          :title="sidebarCollapsed ? '展开侧栏' : '收起侧栏'"
-          :aria-label="sidebarCollapsed ? '展开侧栏' : '收起侧栏'"
+          :title="sidebarCollapsed ? t('app.sidebar.expand') : t('app.sidebar.collapse')"
+          :aria-label="sidebarCollapsed ? t('app.sidebar.expand') : t('app.sidebar.collapse')"
           @click.stop="toggleSidebar"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -315,22 +317,22 @@ function onPanelToggle(e: Event, id: string) {
         </button>
       </div>
       <aside v-if="store.active" class="app-sidebar" :class="{ collapsed: sidebarCollapsed }" :style="sidebarStyle">
-        <div class="group-head">查找</div>
+        <div class="group-head">{{ t('app.group.find') }}</div>
         <SearchPanel :open="panel.isOpen('search')" @toggle="onPanelToggle($event, 'search')" />
         <BookmarkPanel :open="panel.isOpen('bookmarks')" @toggle="onPanelToggle($event, 'bookmarks')" />
 
-        <div class="group-head">规则</div>
+        <div class="group-head">{{ t('app.group.rules') }}</div>
         <KeywordPanel :open="panel.isOpen('keywords')" @toggle="onPanelToggle($event, 'keywords')" />
         <ParserPanel :open="panel.isOpen('parser')" @toggle="onPanelToggle($event, 'parser')" />
         <AutoReplyPanel :open="panel.isOpen('autoreply')" @toggle="onPanelToggle($event, 'autoreply')" />
         <AlertPanel :open="panel.isOpen('alerts')" @toggle="onPanelToggle($event, 'alerts')" />
         <ScenarioPanel :open="panel.isOpen('scenarios')" @toggle="onPanelToggle($event, 'scenarios')" />
 
-        <div class="group-head">数据</div>
+        <div class="group-head">{{ t('app.group.data') }}</div>
         <PlotConfigPanel :open="panel.isOpen('plot')" @toggle="onPanelToggle($event, 'plot')" />
         <CapturePanel :open="panel.isOpen('capture')" @toggle="onPanelToggle($event, 'capture')" />
 
-        <div class="group-head">库</div>
+        <div class="group-head">{{ t('app.group.library') }}</div>
         <ConfigPresetsPanel :open="panel.isOpen('presets')" @toggle="onPanelToggle($event, 'presets')" />
         <AiNotesPanel :open="panel.isOpen('ainotes')" @toggle="onPanelToggle($event, 'ainotes')" />
       </aside>

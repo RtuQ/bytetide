@@ -220,19 +220,19 @@ fn start_rejects_invalid_scenario_and_forbidden_sessions() {
     }));
     let err = start_scenario(&registry, &m, "s1", bad, noop_emit()).unwrap_err();
     assert!(
-        err.contains("场景校验失败") && err.contains("invalid_version"),
+        err.starts_with("scenario_invalid|") && err.contains("invalid_version"),
         "校验失败须带稳定 code: {err}"
     );
 
     // 会话不存在
     let err =
         start_scenario(&registry, &m, "s9999", ping_pong_scenario(), noop_emit()).unwrap_err();
-    assert_eq!(err, "会话不存在");
+    assert_eq!(err, "session_not_found|");
 
     // 离线会话拒绝
     let off = m.load_offline(PortConfig::default(), PathBuf::from("x.log"), vec![]);
     let err = start_scenario(&registry, &m, &off, ping_pong_scenario(), noop_emit()).unwrap_err();
-    assert_eq!(err, "离线会话不支持场景");
+    assert_eq!(err, "offline_no_scenario|");
 
     // 回放会话 + 含 send 步场景拒绝（Task 8 Step 3 放宽后：只读场景可跑、
     // 发送面步骤仍拒——语义见 tests/cross_feature.rs 的回放只读用例）
@@ -247,7 +247,7 @@ fn start_rejects_invalid_scenario_and_forbidden_sessions() {
         )
         .expect("start replay");
     let err = start_scenario(&registry, &m, &rid, ping_pong_scenario(), noop_emit()).unwrap_err();
-    assert_eq!(err, "回放会话不支持发送步骤");
+    assert_eq!(err, "replay_no_send_step|");
 
     // live 会话放行
     let live = start_echo_session(&m);
@@ -273,7 +273,7 @@ fn same_session_second_run_rejected_but_other_session_parallel() {
         .start(&id_a, long.clone(), m.clone(), noop_emit())
         .unwrap_err();
     assert!(
-        err.contains("同一会话同时只允许运行一个场景"),
+        err.starts_with("scenario_already_running|"),
         "并发守卫稳定文案: {err}"
     );
     // 不同会话可并行
@@ -502,7 +502,10 @@ fn completed_runs_evicted_after_fifty_while_running_survives() {
     assert!(registry.view(&long).is_ok(), "运行中条目不得被逐出");
     // 最旧 completed 被逐出，最近 50 份保留
     let err = registry.view(&runs[0]).unwrap_err();
-    assert!(err.contains("场景运行不存在"), "最旧 completed 逐出: {err}");
+    assert!(
+        err.contains("scenario_run_not_found"),
+        "最旧 completed 逐出: {err}"
+    );
     assert!(registry.view(&runs[1]).is_ok(), "最近 50 份保留");
     assert!(registry.view(runs.last().unwrap()).is_ok());
 
@@ -532,19 +535,19 @@ fn report_errors_for_running_unknown_run_and_bad_format() {
 
     // 未完成 → 报告未生成
     let err = registry.report(&run, "json").unwrap_err();
-    assert!(err.contains("尚未完成"), "运行中报告错误: {err}");
+    assert!(err.contains("report_not_ready"), "运行中报告错误: {err}");
 
     // 未知格式
     let err = registry.report(&run, "xml").unwrap_err();
-    assert!(err.contains("未知报告格式"), "格式错误: {err}");
+    assert!(err.contains("unknown_report_format"), "格式错误: {err}");
 
     // 未知 run
     let err = registry.report("run9999", "json").unwrap_err();
-    assert!(err.contains("场景运行不存在"), "未知 run: {err}");
+    assert!(err.contains("scenario_run_not_found"), "未知 run: {err}");
     assert!(registry
         .view("run9999")
         .unwrap_err()
-        .contains("场景运行不存在"));
+        .contains("scenario_run_not_found"));
 
     registry.stop(&run);
     m.disconnect(&id).expect("disconnect");

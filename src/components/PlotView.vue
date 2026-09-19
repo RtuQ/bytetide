@@ -5,6 +5,7 @@ import { useSessionStore } from '../stores/session'
 import { PLOT_DATA_KEY } from '../composables/usePlotData'
 import { theme } from '../composables/useTheme'
 import { KEYWORD_PALETTE, type PlotPoint } from '../types'
+import { t } from '../i18n'
 
 const props = defineProps<{ sessionId: string }>()
 const store = useSessionStore()
@@ -601,31 +602,31 @@ onBeforeUnmount(() => {
       </div>
       <div class="bar-spacer"></div>
       <div class="bar-group">
-        <label class="check" title="Y 轴自适应量程（关闭后可手动缩放/平移）">
+        <label class="check" :title="t('plot.autoTitle')">
           <input type="checkbox" :checked="autoY" @change="autoY = ($event.target as HTMLInputElement).checked" />
           <span class="box">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </span>
-          <span>自适应</span>
+          <span>{{ t('plot.auto') }}</span>
         </label>
-        <label class="check" title="测量模式：点击放置双游标，显示 Δ 值与时间差">
+        <label class="check" :title="t('plot.measureTitle')">
           <input type="checkbox" :checked="measureMode" @change="onMeasureToggle" />
           <span class="box">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </span>
-          <span>测量</span>
+          <span>{{ t('plot.measure') }}</span>
         </label>
-        <button class="btn btn-ghost btn-sm" title="重置缩放/平移并清除游标（双击画布亦可）" @click="resetView">
+        <button class="btn btn-ghost btn-sm" :title="t('plot.resetTitle')" @click="resetView">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v5h-5"/></svg>
-          <span>重置</span>
+          <span>{{ t('plot.reset') }}</span>
         </button>
-        <button class="btn btn-ghost btn-sm" title="清屏（同时清空日志与绘图数据）" @click="store.clearLog(props.sessionId)">
+        <button class="btn btn-ghost btn-sm" :title="t('plot.clearTitle')" @click="store.clearLog(props.sessionId)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg>
-          <span>清空</span>
+          <span>{{ t('plot.clear') }}</span>
         </button>
-        <button class="btn btn-ghost btn-sm" title="关闭绘图，返回日志视图" @click="store.setPlotEnabled(props.sessionId, false)">
+        <button class="btn btn-ghost btn-sm" :title="t('plot.backTitle')" @click="store.setPlotEnabled(props.sessionId, false)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
-          <span>返回日志</span>
+          <span>{{ t('plot.backToLog') }}</span>
         </button>
       </div>
     </div>
@@ -641,17 +642,17 @@ onBeforeUnmount(() => {
         @dblclick="onDblClick"
       ></canvas>
       <div v-if="hoverPoint" class="plot-tooltip" :style="tooltipStyle">
-        <div class="tt-row tt-head">点 #{{ hoverPoint.idx }} · {{ hoverPoint.ts }}</div>
-        <div class="tt-row tt-mono">原始 {{ hoverPoint.rawHex }}</div>
+        <div class="tt-row tt-head">{{ t('plot.tipHead', { idx: hoverPoint.idx, ts: hoverPoint.ts }) }}</div>
+        <div class="tt-row tt-mono">{{ t('plot.tipRaw', { hex: hoverPoint.rawHex }) }}</div>
         <div v-for="(v, i) in hoverPoint.values" :key="i" class="tt-row">
           <span class="tt-dot" :style="{ background: channelColor(i) }"></span>
           <span>Ch{{ i }}: {{ v }}</span>
         </div>
       </div>
       <div v-if="measure" class="plot-measure">
-        <div class="pm-head">测量 A#{{ measure.a.idx }} → B#{{ measure.b.idx }}</div>
-        <div class="pm-row">Δ点 <b>{{ measure.dPts }}</b></div>
-        <div class="pm-row">Δ时间 <b>{{ formatMs(measure.dMs) }}</b></div>
+        <div class="pm-head">{{ t('plot.measureHead', { a: measure.a.idx, b: measure.b.idx }) }}</div>
+        <div class="pm-row">{{ t('plot.deltaPts') }} <b>{{ measure.dPts }}</b></div>
+        <div class="pm-row">{{ t('plot.deltaMs') }} <b>{{ formatMs(measure.dMs) }}</b></div>
         <div v-for="(dv, i) in measure.dVals" :key="i" class="pm-row">
           <span class="tt-dot" :style="{ background: channelColor(i) }"></span>
           ΔCh{{ i }} <b>{{ dv >= 0 ? '+' : '' }}{{ dv }}</b>
@@ -659,14 +660,14 @@ onBeforeUnmount(() => {
       </div>
       <div v-if="!points.length" class="plot-empty">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
-        <span>等待帧数据…</span>
+        <span>{{ t('plot.waiting') }}</span>
       </div>
     </div>
   </div>
   <div v-else class="plot-view">
     <div class="plot-empty">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
-      <span>打开一个串口并开启绘图开始</span>
+      <span>{{ t('plot.emptyNoSession') }}</span>
     </div>
   </div>
 </template>

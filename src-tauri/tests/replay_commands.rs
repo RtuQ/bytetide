@@ -153,7 +153,7 @@ fn open_then_full_control_flow_pause_resume_seek_speed_loop_stop() {
     m.disconnect(&id).expect("disconnect");
     let err = build_view(&m, &replays, &id).unwrap_err();
     assert!(
-        err.contains("会话不存在"),
+        err.contains("session_not_found"),
         "close 后 status 稳定报错: {err}"
     );
 }
@@ -163,21 +163,21 @@ fn invalid_action_and_value_yield_stable_errors() {
     // 未知 action
     assert_eq!(
         parse_replay_action("fly", None).unwrap_err(),
-        "未知回放控制: fly"
+        "unknown_replay_action|fly"
     );
     // seek：缺值 / 非正数 / 小数 / NaN
     assert!(parse_replay_action("seek", None)
         .unwrap_err()
-        .contains("seek"));
+        .contains("replay_seek_invalid"));
     assert!(parse_replay_action("seek", Some(0.0))
         .unwrap_err()
-        .contains("seek"));
+        .contains("replay_seek_invalid"));
     assert!(parse_replay_action("seek", Some(-3.0))
         .unwrap_err()
-        .contains("seek"));
+        .contains("replay_seek_invalid"));
     assert!(parse_replay_action("seek", Some(2.5))
         .unwrap_err()
-        .contains("seek"));
+        .contains("replay_seek_invalid"));
     assert!(parse_replay_action("seek", Some(f64::NAN))
         .unwrap_err()
         .contains("seek"));
@@ -189,29 +189,29 @@ fn invalid_action_and_value_yield_stable_errors() {
     // speed：缺值 / 0 / 越界 / 负数 / NaN / inf
     assert!(parse_replay_action("speed", None)
         .unwrap_err()
-        .contains("速度"));
+        .contains("replay_speed_invalid"));
     assert!(parse_replay_action("speed", Some(0.0))
         .unwrap_err()
-        .contains("速度"));
+        .contains("replay_speed_invalid"));
     assert!(parse_replay_action("speed", Some(100.1))
         .unwrap_err()
-        .contains("速度"));
+        .contains("replay_speed_invalid"));
     assert!(parse_replay_action("speed", Some(-1.0))
         .unwrap_err()
-        .contains("速度"));
+        .contains("replay_speed_invalid"));
     assert!(parse_replay_action("speed", Some(f64::NAN))
         .unwrap_err()
-        .contains("速度"));
+        .contains("replay_speed_invalid"));
     assert!(parse_replay_action("speed", Some(f64::INFINITY))
         .unwrap_err()
-        .contains("速度"));
+        .contains("replay_speed_invalid"));
     // 边界值合法
     assert!(parse_replay_action("speed", Some(0.1)).is_ok());
     assert!(parse_replay_action("speed", Some(100.0)).is_ok());
     // loop：仅 0/1
     assert!(parse_replay_action("loop", Some(0.5))
         .unwrap_err()
-        .contains("循环"));
+        .contains("replay_loop_invalid"));
     assert_eq!(
         format!("{:?}", parse_replay_action("loop", Some(0.0)).unwrap()),
         "SetLoop(false)"
@@ -253,11 +253,11 @@ fn send_and_disk_ops_reject_replay_and_control_rejects_non_replay() {
         )
         .unwrap_err()
         .to_string(),
-        "回放会话不支持发送"
+        "replay_no_send|"
     );
     assert_eq!(
         m.set_recording(&id, true).unwrap_err().to_string(),
-        "回放会话不支持落盘"
+        "replay_no_recording|"
     );
 
     // 控制面对非回放会话 / 不存在会话拒绝
@@ -272,19 +272,22 @@ fn send_and_disk_ops_reject_replay_and_control_rejects_non_replay() {
         parse_replay_action("pause", None)
             .and_then(|cmd| apply_replay_control(&m, &replays, &offline_id, cmd))
             .unwrap_err(),
-        "非回放会话"
+        "not_replay_session|"
     );
     assert_eq!(
         build_view(&m, &replays, &offline_id).unwrap_err(),
-        "会话不存在或非回放会话"
+        "replay_session_not_found|"
     );
     let err = parse_replay_action("stop", None)
         .and_then(|cmd| apply_replay_control(&m, &replays, "r9999", cmd))
         .unwrap_err();
-    assert!(err.contains("会话不存在"), "不存在会话稳定报错: {err}");
+    assert!(
+        err.contains("session_not_found"),
+        "不存在会话稳定报错: {err}"
+    );
     assert_eq!(
         build_view(&m, &replays, "r9999").unwrap_err(),
-        "会话不存在或非回放会话"
+        "replay_session_not_found|"
     );
 
     m.disconnect(&id).expect("disconnect");

@@ -4,6 +4,7 @@ import { ParserEngine } from '../parser/engine'
 import { createScriptHost } from '../parser/bootstrap'
 import { makeCodec } from '../persistence/schema'
 import { loadStored, removeStored, saveStored } from '../persistence/storage'
+import { t } from '../i18n'
 import type { LogLine } from '../types'
 import type { DecodedFrame, ParserBanner, ParserStats, TrialReport, ValidatedScript } from '../types/parser'
 
@@ -57,23 +58,23 @@ const ui = reactive<ParserUiState>({
 
 let engine: ParserEngine | null = null
 
-/** framing 摘要一行（面板卡片用） */
+/** framing 摘要一行（面板卡片用；求值时机=脚本装载/状态变化，不随语言切换重译） */
 function framingSummary(script: ValidatedScript): string {
   const f = script.framing
   const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0').toUpperCase()).join(' ')
   const len =
     f.length.kind === 'fixed'
-      ? `定长 ${f.length.value}B`
+      ? t('logic.parser.lenFixed', { n: f.length.value })
       : f.length.kind === 'field'
-        ? `长度域 ${f.length.fmt}@${f.length.at}+${f.length.add}`
+        ? t('logic.parser.lenField', { fmt: f.length.fmt, at: f.length.at, add: f.length.add })
         : f.length.kind === 'until'
-          ? `分隔符 ${hex(f.length.tail)}`
-          : '整行一帧'
+          ? t('logic.parser.lenUntil', { hex: hex(f.length.tail) })
+          : t('logic.parser.lenLine')
   const parts = [
-    f.source === 'ascii-hex' ? 'ASCII-Hex' : '二进制',
+    f.source === 'ascii-hex' ? 'ASCII-Hex' : t('logic.parser.srcBinary'),
     len,
-    f.sync.length ? `同步 ${hex(f.sync)}` : null,
-    f.crc ? `CRC ${f.crc.algo}` : null,
+    f.sync.length ? t('logic.parser.sync', { hex: hex(f.sync) }) : null,
+    f.crc ? t('logic.parser.crc', { algo: f.crc.algo }) : null,
   ]
   return parts.filter((x): x is string => !!x).join(' · ')
 }
@@ -221,7 +222,7 @@ async function importScript(src: string): Promise<{ ok: boolean; error?: string 
 /** 重新加载当前脚本（重跑装载+试运行） */
 async function reloadScript(): Promise<{ ok: boolean; error?: string }> {
   const src = ui.source
-  if (!src) return { ok: false, error: '没有已加载的脚本' }
+  if (!src) return { ok: false, error: t('logic.parser.noScript') }
   return importScript(src)
 }
 

@@ -398,7 +398,7 @@ fn scenario_guards_replay_send_steps_and_offline_unchanged() {
     )
     .expect("scenario");
     let err = start_scenario(&registry, &m, &rid, with_send, noop_emit()).unwrap_err();
-    assert_eq!(err, "回放会话不支持发送步骤");
+    assert_eq!(err, "replay_no_send_step|");
     // 含 signal 步同样拒绝
     let with_signal: Scenario = serde_json::from_str(
         r#"{
@@ -408,7 +408,7 @@ fn scenario_guards_replay_send_steps_and_offline_unchanged() {
     )
     .expect("scenario");
     let err = start_scenario(&registry, &m, &rid, with_signal, noop_emit()).unwrap_err();
-    assert_eq!(err, "回放会话不支持发送步骤");
+    assert_eq!(err, "replay_no_send_step|");
     m.disconnect(&rid).expect("disconnect replay");
 
     // 离线会话维持无条件拒绝（T3 语义不变）
@@ -416,10 +416,10 @@ fn scenario_guards_replay_send_steps_and_offline_unchanged() {
     let readonly: Scenario =
         serde_json::from_str(replay_readonly_scenario_json()).expect("scenario");
     let err = start_scenario(&registry, &m, &off, readonly.clone(), noop_emit()).unwrap_err();
-    assert_eq!(err, "离线会话不支持场景");
+    assert_eq!(err, "offline_no_scenario|");
     // 会话不存在维持稳定文案
     let err = start_scenario(&registry, &m, "s9999", readonly, noop_emit()).unwrap_err();
-    assert_eq!(err, "会话不存在");
+    assert_eq!(err, "session_not_found|");
 
     std::fs::remove_dir_all(&dir).ok();
 }
