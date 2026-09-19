@@ -262,3 +262,7 @@ UI 层与逻辑层严格分离：
 - 改了逻辑但没补测试 = 未完成；测试红了不准靠“眼看没问题”跳过，先修测试或修代码再走构建
 
 图标源图在 `scripts/brand-icon.png`（`make_icon.py` 生成 -> `npx tauri icon scripts/brand-icon.png` 出全套）。README 预览图（原 `docs/preview.png`）已应作者要求移除，待其自行补充新截图后恢复引用。
+
+### 发版流程（勿手改版本号文件）
+版本号散在四处：`package.json` / 根 `Cargo.toml [workspace.package]`（src-tauri 经 `version.workspace` 继承）/ `src-tauri/tauri.conf.json`（release workflow 打 DMG 直接读它命名，**不可删此字段**）。升版本一律走 `npm run bump -- 0.x.y`（`scripts/bump-version.mjs`：一条命令同步四处清单 + `cargo update --workspace` 刷 Cargo.lock，幂等，脚本只改文件不碰 git 并打印后续命令）。随后：`chore(release): 版本升至 0.x.y` 提交 → `git tag -a v0.x.y` → push 提交与 tag（触发 release workflow 出草稿 Release）→ GitHub 补说明后发布。CI `check:version` 门禁兜底四处一致性（`npm run test:bump` 是脚本自身单测）。
+

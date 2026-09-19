@@ -13,6 +13,8 @@
     "test:components": "vitest run --config vitest.components.config.ts",
     "check:version": "node scripts/check-release-version.mjs",
     "test:version": "node --test scripts/check-release-version.test.mjs",
+    "bump": "node scripts/bump-version.mjs",
+    "test:bump": "node --test scripts/bump-version.test.mjs",
     "check:tauri-config": "node scripts/check-tauri-config.mjs",
     "test:tauri-config": "node --test scripts/check-tauri-config.test.mjs",
     "check:architecture": "node scripts/check-architecture.mjs",
