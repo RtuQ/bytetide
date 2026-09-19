@@ -32,8 +32,8 @@ async function send() {
   if (mode.value === 'ascii' && appendNewline.value) payload += '\n'
   busy.value = true
   try {
+    // 发送后保留输入内容（便于微调重发）；清空可手选文本删除或从历史重新选择
     await store.send(s.id, payload, mode.value)
-    text.value = ''
   } catch (e: unknown) {
     alert(String(e instanceof Error ? e.message : e))
   } finally {
