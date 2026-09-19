@@ -107,6 +107,7 @@ jobs:
   build-macos:
     # macOS：仅 Apple Silicon（arm64）版——macos-15 运行器本身就是 aarch64，
     # 不做 universal 双架构；产物为 DMG（非 zip）
+    needs: [verify]
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
