@@ -257,7 +257,9 @@ mod tests {
         let mut buf = [0u8; 5];
         server.read_exact(&mut buf).expect("server read");
         assert_eq!(&buf, b"hello");
-        let err = client.set_signal(Pin::Rts, true).expect_err("network no signal");
+        let err = client
+            .set_signal(Pin::Rts, true)
+            .expect_err("network no signal");
         assert_eq!(err.to_string(), "network transport has no signal line");
     }
 

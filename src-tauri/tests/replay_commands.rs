@@ -281,7 +281,10 @@ fn send_and_disk_ops_reject_replay_and_control_rejects_non_replay() {
     let err = parse_replay_action("stop", None)
         .and_then(|cmd| apply_replay_control(&m, &replays, "r9999", cmd))
         .unwrap_err();
-    assert!(err.contains("session_not_found"), "不存在会话稳定报错: {err}");
+    assert!(
+        err.contains("session_not_found"),
+        "不存在会话稳定报错: {err}"
+    );
     assert_eq!(
         build_view(&m, &replays, "r9999").unwrap_err(),
         "replay_session_not_found|"

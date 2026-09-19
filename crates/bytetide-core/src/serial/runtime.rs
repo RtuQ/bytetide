@@ -291,7 +291,10 @@ pub(crate) fn session_thread(
         .set_status(&*sink, &session_id, SessionStatus::Connected);
 
     let (eof_msg, write_err_msg) = if net {
-        (err_msg("net_disconnected", ""), err_msg("net_write_failed", ""))
+        (
+            err_msg("net_disconnected", ""),
+            err_msg("net_write_failed", ""),
+        )
     } else {
         (
             err_msg("port_disconnected", ""),
@@ -346,7 +349,10 @@ fn open_recording(
                     state.write().set_error(
                         sink,
                         session_id,
-                        &err_msg("log_path_unwritable", format!("{}: {}", log_path.display(), e)),
+                        &err_msg(
+                            "log_path_unwritable",
+                            format!("{}: {}", log_path.display(), e),
+                        ),
                         None,
                     );
                 }
@@ -526,9 +532,12 @@ fn stream_loop(
                 PortCmd::Signal { pin, level } => {
                     if let Err(e) = io.set_signal(pin, level) {
                         // 置位失败连接不受影响：仅记 last_error
-                        rt.state
-                            .write()
-                            .set_error(sink, session_id, &err_msg("set_signal_failed", &e), None);
+                        rt.state.write().set_error(
+                            sink,
+                            session_id,
+                            &err_msg("set_signal_failed", &e),
+                            None,
+                        );
                     }
                 }
             }
@@ -613,9 +622,12 @@ fn stream_loop(
             }
             Err(e) => {
                 // 读硬错误且终止：状态置 Error，finish_loop 保留不覆盖
-                rt.state
-                    .write()
-                    .set_error(sink, session_id, &err_msg("read_failed", &e), Some(SessionStatus::Error));
+                rt.state.write().set_error(
+                    sink,
+                    session_id,
+                    &err_msg("read_failed", &e),
+                    Some(SessionStatus::Error),
+                );
                 break;
             }
         }

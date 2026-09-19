@@ -502,7 +502,10 @@ fn completed_runs_evicted_after_fifty_while_running_survives() {
     assert!(registry.view(&long).is_ok(), "运行中条目不得被逐出");
     // 最旧 completed 被逐出，最近 50 份保留
     let err = registry.view(&runs[0]).unwrap_err();
-    assert!(err.contains("scenario_run_not_found"), "最旧 completed 逐出: {err}");
+    assert!(
+        err.contains("scenario_run_not_found"),
+        "最旧 completed 逐出: {err}"
+    );
     assert!(registry.view(&runs[1]).is_ok(), "最近 50 份保留");
     assert!(registry.view(runs.last().unwrap()).is_ok());
 

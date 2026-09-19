@@ -86,7 +86,10 @@ impl CaptureController {
                 state.write().set_error(
                     sink,
                     session_id,
-                    &err_msg("capture_create_failed", format!("{}: {}", path.display(), e)),
+                    &err_msg(
+                        "capture_create_failed",
+                        format!("{}: {}", path.display(), e),
+                    ),
                     None,
                 );
                 return;

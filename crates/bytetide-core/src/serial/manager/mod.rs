@@ -393,9 +393,7 @@ impl PortManager {
     /// T7 命令层入口：SessionHandle 已持有控制通道（T6），此处只补公开路由面。
     pub fn replay_control(&self, id: &str, cmd: ReplayCmd) -> anyhow::Result<()> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(session_not_found)?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         if !matches!(h.kind, SessionKind::Replay) {
             return Err(anyhow::anyhow!(err_msg("not_replay_session", "")));
         }
@@ -445,9 +443,7 @@ impl PortManager {
 
     pub fn send(&self, id: &str, req: SendRequest) -> anyhow::Result<()> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(session_not_found)?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         if matches!(h.kind, SessionKind::Offline) {
             return Err(anyhow::anyhow!(err_msg("offline_no_send", "")));
         }
@@ -464,9 +460,7 @@ impl PortManager {
     /// 网络源在读线程内报“无信号线”，离线会话直接拒绝。
     pub fn set_signal(&self, id: &str, pin: Pin, level: bool) -> anyhow::Result<()> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(session_not_found)?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         if matches!(h.kind, SessionKind::Offline) {
             return Err(anyhow::anyhow!(err_msg("offline_no_signal", "")));
         }
@@ -481,9 +475,7 @@ impl PortManager {
 
     pub fn clear_log(&self, id: &str) -> anyhow::Result<()> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(session_not_found)?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         // 离线（镜像遗忘 / ring 清屏）与回放（ring 清屏、seq 不回退、源文件与
         // 回放游标不动）：都不经 PortCmd——写通道是断开占位
         if matches!(h.kind, SessionKind::Offline | SessionKind::Replay) {
@@ -569,9 +561,7 @@ impl PortManager {
     /// REST `/lines?no=` 与批注回填做有界读取（评审 P1-1：不物化全量快照）。
     pub fn bridge_line_by_no(&self, id: &str, no: u64) -> anyhow::Result<Option<BridgeLine>> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(session_not_found)?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         if no == 0 {
             return Ok(None);
         }
@@ -592,9 +582,7 @@ impl PortManager {
         max: usize,
     ) -> anyhow::Result<Vec<BridgeLine>> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(session_not_found)?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         let max = max.clamp(1, RING_CAP);
         Ok(match &h.offline {
             Some(r) => r.lock().lines_before(before_no, max)?,
@@ -606,9 +594,7 @@ impl PortManager {
     /// 离线分页会话返回虚拟 ring 边界（首行 no=1、末行 no=line_count）。
     pub fn ring_bounds(&self, id: &str) -> anyhow::Result<RingBounds> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(session_not_found)?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         Ok(match &h.offline {
             Some(r) => {
                 let (first_no, last_no, .., size) = r.lock().bounds();
@@ -641,9 +627,7 @@ impl PortManager {
         capture: CaptureCfg,
     ) -> anyhow::Result<()> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(session_not_found)?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         *h.runtime.auto_reply.write() = auto_reply;
         *h.runtime.alerts.write() = alerts;
         *h.runtime.capture.write() = capture;
@@ -653,9 +637,7 @@ impl PortManager {
     /// 会话日志文件完整路径（导出/打开日志位置用）。
     pub fn session_log_path(&self, id: &str) -> anyhow::Result<String> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(session_not_found)?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         // 先落局部变量再构造 Ok：路径读守卫的临时值不能活到块尾（晚于 sessions 释放）
         let p = h.log_path.read().clone().to_string_lossy().into_owned();
         Ok(p)
@@ -676,9 +658,7 @@ impl PortManager {
     /// 返回新文件完整路径。
     pub fn rotate_log(&self, id: &str) -> anyhow::Result<String> {
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(session_not_found)?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         if matches!(h.kind, SessionKind::Offline) {
             return Err(anyhow::anyhow!(err_msg("offline_no_recording", "")));
         }
@@ -705,9 +685,7 @@ impl PortManager {
             return self.rotate_log(id).map(|_| ());
         }
         let sessions = self.sessions.read();
-        let h = sessions
-            .get(id)
-            .ok_or_else(session_not_found)?;
+        let h = sessions.get(id).ok_or_else(session_not_found)?;
         if matches!(h.kind, SessionKind::Offline) {
             return Err(anyhow::anyhow!(err_msg("offline_no_recording", "")));
         }
