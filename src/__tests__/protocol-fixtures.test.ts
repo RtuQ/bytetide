@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import matcherFixture from '../../testdata/protocol/matcher-v1.json'
+import matcherFixture from '../../testdata/protocol/matcher-cases.json'
 import { lineBytes } from '../parser/lineBytes'
 import type { Dir } from '../types'
 
 /**
- * 桥交换匹配器黄金样本契约（testdata/protocol/matcher-v1.json）。
+ * 桥交换匹配器黄金样本契约（testdata/protocol/matcher-cases.json）。
  * Rust 侧 compile_exchange_match / parse_hex_strict / parse_mask_strict /
  * find_exchange_response（src-tauri/src/bridge/routes/exchange.rs）与这些向量同源：
- * 错误码是 Stage 1 冻结的跨语言契约（400 ApiError {error:{code,message}}），
+ * 错误码是冻结的跨语言契约（400 ApiError {error:{code,message}}），
  * 本测试冻结 TS 消费侧认得的向量集合与解码结果——两侧任一漂移即红。
  */
 
@@ -84,11 +84,11 @@ function maskFind(hay: Uint8Array, mask: (number | null)[]): boolean {
   return false
 }
 
-describe('matcher-v1 契约：版本与稳定错误码集合', () => {
+describe('matcher 契约：版本与稳定错误码集合', () => {
   it('fixture 版本为 1', () => {
     expect(fx.version).toBe(1)
   })
-  it('stableCodes 是 Stage 1 冻结的五元集，且所有 invalid 用例的 code 都在集合内', () => {
+  it('stableCodes 是冻结的五元集，且所有 invalid 用例的 code 都在集合内', () => {
     expect(fx.invalidMatchers.stableCodes).toEqual([
       'invalid_regex',
       'invalid_hex',
@@ -102,7 +102,7 @@ describe('matcher-v1 契约：版本与稳定错误码集合', () => {
   })
 })
 
-describe('matcher-v1 契约：非法向量按规则归类（regex 用 TS RegExp 判定，hex/mask 用镜像函数判定）', () => {
+describe('matcher 契约：非法向量按规则归类（regex 用 TS RegExp 判定，hex/mask 用镜像函数判定）', () => {
   it('invalid_regex 向量确实无法编译、合法 re 向量确实可编译', () => {
     for (const c of fx.invalidMatchers.cases) {
       if (c.code !== 'invalid_regex') continue
@@ -129,7 +129,7 @@ describe('matcher-v1 契约：非法向量按规则归类（regex 用 TS RegExp 
   })
 })
 
-describe('matcher-v1 契约：hexStrict / maskStrict 函数级向量', () => {
+describe('matcher 契约：hexStrict / maskStrict 函数级向量', () => {
   it('hex 向量解码一致', () => {
     for (const c of fx.hexStrict.cases) {
       const r = parseHexStrict(c.input)
@@ -152,7 +152,7 @@ describe('matcher-v1 契约：hexStrict / maskStrict 函数级向量', () => {
   })
 })
 
-describe('matcher-v1 契约：validMatchers 编译产物', () => {
+describe('matcher 契约：validMatchers 编译产物', () => {
   it('dir 缺省回落 rx；空字段视为未携带；hex/mask 解码与 compiled 向量一致', () => {
     for (const c of fx.validMatchers.cases) {
       expect(c.compiled.dir === 'rx' || c.compiled.dir === 'tx', c.name).toBe(true)
@@ -168,7 +168,7 @@ describe('matcher-v1 契约：validMatchers 编译产物', () => {
   })
 })
 
-describe('matcher-v1 契约：findCases 行匹配（bytes 优先于 lossy text）', () => {
+describe('matcher 契约：findCases 行匹配（bytes 优先于 lossy text）', () => {
   for (const c of fx.findCases.cases) {
     it(c.name, () => {
       const hex = typeof c.match.hex === 'string' ? parseHexStrict(c.match.hex) : null

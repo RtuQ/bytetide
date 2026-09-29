@@ -19,8 +19,8 @@ import {
 } from '../types/automation'
 
 /**
- * 场景自动化 store（Stage 3 Task 4）：保存的场景库（localStorage `serialtool.scenarios`，
- * 信封 schema `bytetide.scenario-library` v1，cap 100）+ 运行视图簿记。
+ * 场景自动化 store：保存的场景库（localStorage `serialtool.scenarios`，
+ * 信封 schema `bytetide.scenario-library`（版本 1），cap 100）+ 运行视图簿记。
  *
  * 职责边界：只持有「库 + run 视图」，不持有会话对象（live 会话列表由组件从
  * session store 只读消费）。后端交互全部经 src/ipc 门面：

@@ -21,7 +21,7 @@ export type {
   StatusPayload,
 } from '../types'
 
-// 场景自动化域类型（Stage 3 Task 4）：单一事实来源在 types/automation.ts
+// 场景自动化域类型：单一事实来源在 types/automation.ts
 // （Rust serde 镜像），此处仅再导出供 ipc 层签名引用。
 export type {
   CaptureSpec,
@@ -71,7 +71,7 @@ export interface RingBounds {
   ringCap: number
 }
 
-/** 流式打开离线日志（Task 8）的返回：core 一次顺序扫描建稀疏索引建会话（ring 恒空），
+/** 流式打开离线日志的返回：core 一次顺序扫描建稀疏索引建会话（ring 恒空），
  *  行经 offlineLinesAfter 分页拉取（no=文件内第 N 数据行，1 起连续）；epoch 为毫秒 */
 export interface OfflineOpenResult {
   sessionId: string
@@ -80,7 +80,7 @@ export interface OfflineOpenResult {
   lastEpoch: number
 }
 
-/** 打开时序回放会话（Stage 3 Task 7）的返回：durationMs=源文件首末行 epoch 差
+/** 打开时序回放会话的返回：durationMs=源文件首末行 epoch 差
  *  （当日毫秒口径，跨午夜日志低估——与回放调度同源同偏差，仅作时长展示） */
 export interface ReplayOpenResult {
   sessionId: string

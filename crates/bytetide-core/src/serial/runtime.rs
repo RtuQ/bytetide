@@ -1,9 +1,8 @@
 //! 会话运行态：状态机事实源（`SessionStatus`/`SessionState`）、每会话共享单元
 //! `SessionRuntime`（ring + 运行状态 + 前端推送规则配置五件套）与读线程主循环
-//! （`session_thread`/`stream_loop`，Stage 2 Task 3 自 manager.rs 迁出）。
-//! `serial::manager` 经再导出保持旧路径一个发布周期。
+//! （`session_thread`/`stream_loop`）。
 //!
-//! 入库收敛（Task 3）：[`SessionRuntime::ingest`] 统一 ring/计数/告警评估；
+//! 入库收敛：[`SessionRuntime::ingest`] 统一 ring/计数/告警评估；
 //! 自动回复与捕获触发决策仅 `IngestOrigin::Transport` 产生——自动回复的写动作由
 //! 传输循环执行（runtime 绝不持有/锁 io 句柄），TX 回显经 ingest(Transport) 入表，
 //! 捕获的 arm/入档由持有 [`CaptureController`](super::capture::CaptureController) 的
@@ -128,10 +127,10 @@ pub struct SessionRuntime {
     /// 非回放会话恒 None，见 crate::replay::ReplayState）
     pub replay_state: Arc<RwLock<Option<ReplayState>>>,
     /// 回放当前文件行号水位（最后已 ingest 的源文件行 no；seek 后未恢复=目标-1，
-    /// loop 回卷=0）。仅回放会话由 runner 写、manager 查询面读（T7 控制面进度），
+    /// loop 回卷=0）。仅回放会话由 runner 写、manager 查询面读（控制面进度），
     /// 非回放会话恒 0。
     pub replay_cursor: Arc<RwLock<u64>>,
-    /// 告警窗口/冷却状态（每会话独占；原 stream_loop 栈上状态迁入——随会话生灭）
+    /// 告警窗口/冷却状态（每会话独占，随会话生灭）
     alert_states: Mutex<HashMap<String, AlertWinState>>,
 }
 
@@ -158,7 +157,7 @@ impl SessionRuntime {
     /// 单行入库：分配单调 `no`、更新方向计数，并评估规则——
     /// 告警（窗口/冷却）两种 origin 都评估；自动回复与捕获触发决策仅 Transport。
     /// 不做落盘（调用方经 RecordingController 自理）、不执行自动回复写动作、不触碰捕获。
-    /// `sink` 仅为 plan 指定签名保留：ingest 自身不发事件（告警随 outcome 返回，
+    /// `sink` 仅为签名兼容保留：ingest 自身不发事件（告警随 outcome 返回，
     /// 由调用方攒批 mirror + alert_hits，与既有批次语义一致）。
     pub fn ingest(
         &self,
@@ -238,10 +237,10 @@ impl SessionRuntime {
     }
 }
 
-// ---------- 读线程主循环（原 manager 的 reader_loop/net_loop/stream_loop 合并迁移） ----------
+// ---------- 读线程主循环 ----------
 
 /// 读线程入口：串口与 TCP/UDP 源共用同一装配路径——开录制（connecting）→ 建链
-/// （失败=错误且终止）→ connected → stream_loop。事件顺序与迁移前逐点一致。
+/// （失败=错误且终止）→ connected → stream_loop。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn session_thread(
     config: PortConfig,
@@ -406,7 +405,7 @@ fn make_tx_line(text: &str, ts_fmt: &str) -> LogLine {
 }
 
 /// 逐 RX 行的传输侧处理：落盘 → ingest（ring/告警/自动回复/捕获决策）→
-/// 自动回复经传输写回 + TX 回显入库 → 捕获 arm/入档（顺序与迁移前 apply_rx_rules 一致）。
+/// 自动回复经传输写回 + TX 回显入库 → 捕获 arm/入档（恒按此顺序）。
 #[allow(clippy::too_many_arguments)]
 fn handle_rx_line(
     line: &LogLine,
@@ -678,7 +677,7 @@ fn finish_loop(
 
 #[cfg(test)]
 mod tests {
-    //! 状态机 + sink 薄壳（自 manager 迁移）、ingest 双 origin 契约（Replay 隔离）、
+    //! 状态机 + sink 薄壳、ingest 双 origin 契约（Replay 隔离）、
     //! open_recording 事件序。读循环端到端行为由 manager 的 loopback TCP 集成测试覆盖。
     use std::path::Path;
 
@@ -854,7 +853,7 @@ mod tests {
         assert_eq!(out2.alerts.len(), 1, "同窗口第二行触发");
     }
 
-    // ---------- SessionState：REST 快照与 sink 事件的共同事实源（自 manager 迁移） ----------
+    // ---------- SessionState：REST 快照与 sink 事件的共同事实源 ----------
 
     #[test]
     fn session_state_transitions_connecting_connected_disconnected() {
@@ -952,7 +951,7 @@ mod tests {
         )
     }
 
-    // ---------- open_recording：空路径不落盘（自 manager 迁移） ----------
+    // ---------- open_recording：空路径不落盘 ----------
 
     #[test]
     fn open_recording_empty_path_skips_recording() {
@@ -979,9 +978,7 @@ mod tests {
     }
 
     // ===== 集成：假传输（本机 loopback TCP，不开硬件、不固定 sleep 轮询）端到端跑 =====
-    // session_thread/stream_loop 读循环（自 manager.rs 测试迁入：被测主循环在本文件，
-    // manager 只提供编排；manager.rs 行数受架构检查器 1000 行限额约束）。
-    // 事件序/状态串断言与迁移前逐点一致。
+    // session_thread/stream_loop 读循环：被测主循环在本文件，manager 只提供编排。
 
     use std::time::{Duration, Instant};
 
@@ -1023,7 +1020,7 @@ mod tests {
         }
     }
 
-    /// 一致性断言（plan 明确要求）：bridge_list 的 status/lastError 与 sink 最近一次事件一致。
+    /// 一致性断言：bridge_list 的 status/lastError 与 sink 最近一次事件一致。
     fn assert_snap_matches_sink(snap: &SessionSnap, sink: &VecSink, id: &str) {
         let events = sink.0.lock().clone();
         let status_prefix = format!("status {id} ");

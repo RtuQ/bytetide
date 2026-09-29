@@ -5,7 +5,7 @@ import { useParserEngine } from '../composables/useParserEngine'
 import type { DecodedFrame } from '../types/parser'
 import { t } from '../i18n'
 
-/** 底部 dock「解码」页签（plan-parser-v1 §3）：解码帧倒序列表（最新在上），
+/** 底部 dock「解码」页签：解码帧倒序列表（最新在上），
  *  行头 ts/类型 chip/RX-TX 徽标 + 定位日志原文按钮，点击行展开字段表；
  *  解析未启用时显示引导空态。 */
 const store = useSessionStore()

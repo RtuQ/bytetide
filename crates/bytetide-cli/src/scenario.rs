@@ -1,4 +1,4 @@
-//! 场景执行（Stage 3 Task 5）：数据源经 core `Transport` 接入，实现
+//! 场景执行：数据源经 core `Transport` 接入，实现
 //! [`ScenarioHost`] trait 驱动 `run_scenario`，报告 JSON/JUnit 落 `--report`。
 //!
 //! # 输出纪律

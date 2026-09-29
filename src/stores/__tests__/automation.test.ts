@@ -69,7 +69,7 @@ afterEach(() => {
 // ===================== 库持久化（load/persist/cap） =====================
 
 describe('场景库 load/persist（serialtool.scenarios 信封）', () => {
-  it('load：v1 信封读回条目', () => {
+  it('load：版本化信封读回条目', () => {
     const s = memStorage()
     s.setItem(
       KEY,
@@ -130,7 +130,7 @@ describe('场景库 load/persist（serialtool.scenarios 信封）', () => {
     expect(s.getItem(KEY)).toBe(future)
   })
 
-  it('persist：修改后写回 v1 信封', async () => {
+  it('persist：修改后写回版本化信封', async () => {
     const s = memStorage()
     setStorageBackend(s)
     const store = useAutomationStore()

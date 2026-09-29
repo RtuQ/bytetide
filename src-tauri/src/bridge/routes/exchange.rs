@@ -336,9 +336,9 @@ mod tests {
     //! /exchange 严格 matcher（非法输入 400，绝不降级 match-all）与
     //! run_exchange：fake-service 排序回归（基线先行 + 快响应不丢）。
     //!
-    //! matcher 向量全部来自共享黄金样本 `testdata/protocol/matcher-v1.json`
-    //! （TS 消费：`src/__tests__/protocol-fixtures.test.ts`）——错误码是 Stage 1
-    //! 冻结的跨语言契约，任一侧漂移即红。
+    //! matcher 向量全部来自共享黄金样本 `testdata/protocol/matcher-cases.json`
+    //! （TS 消费：`src/__tests__/protocol-fixtures.test.ts`）——错误码是冻结的
+    //! 跨语言契约，任一侧漂移即红。
 
     use super::*;
     use crate::bridge::error::ServiceError;
@@ -349,7 +349,7 @@ mod tests {
     use serde::Deserialize;
     use std::path::PathBuf;
 
-    // ---------------- 共享黄金样本（matcher-v1.json） ----------------
+    // ---------------- 共享黄金样本（matcher-cases.json） ----------------
 
     /// fixture 顶层（serde 白名单取键，未知键如 `$about`/`version` 自动忽略）。
     #[derive(Deserialize)]
@@ -451,9 +451,9 @@ mod tests {
     fn matcher_fixture() -> MatcherFixture {
         // 相对本文件 4 级上跳到仓库根（routes → bridge → src → src-tauri → 根）
         serde_json::from_str(include_str!(
-            "../../../../testdata/protocol/matcher-v1.json"
+            "../../../../testdata/protocol/matcher-cases.json"
         ))
-        .expect("matcher-v1.json fixture parses")
+        .expect("matcher-cases.json fixture parses")
     }
 
     fn to_exchange_match(m: &FxMatch) -> ExchangeMatch {

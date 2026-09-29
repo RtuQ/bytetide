@@ -137,7 +137,7 @@ fn session_state_offline_remains_offline() {
 
 #[test]
 fn bridge_line_by_no_distinguishes_missing_line_from_io_error() {
-    // 复审 R-P2-2：源文件消失（存储故障）必须传播 Err，不得伪装成 Ok(None)
+    // 源文件消失（存储故障）必须传播 Err，不得伪装成 Ok(None)
     let m = PortManager::new();
     let dir = crate::offline::test_support::temp_dir("line-by-no");
     let path = crate::offline::test_support::write_lines(&dir, "l.log", 3);
@@ -159,7 +159,7 @@ fn bridge_line_by_no_distinguishes_missing_line_from_io_error() {
 
 #[test]
 fn disconnect_parks_readonly_tombstone_for_final_drain() {
-    // 评审 P1-2 回归：停止前 ring 里已有、前端尚未拉走的行，停止后仍可经
+    // 停止前 ring 里已有、前端尚未拉走的行，停止后仍可经
     // 墓碑补拉（两阶段关闭），显式释放后才彻底不可达
     let m = PortManager::new();
     let id = m.load_offline(

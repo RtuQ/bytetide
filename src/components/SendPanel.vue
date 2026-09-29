@@ -13,7 +13,7 @@ const mode = ref<'ascii' | 'hex'>('ascii')
 const appendNewline = ref(true)
 const busy = ref(false)
 
-/** 发送能力统一守卫：仅 live 会话且已连接（评审 P2-2——Replay/Offline 会话
+/** 发送能力统一守卫：仅 live 会话且已连接（Replay/Offline 会话
  *  的状态可能是 connected，但后端拒发，UI 不应让用户执行必然失败的操作） */
 const canSend = computed(
   () => active.value?.kind === 'live' && active.value.status === 'connected',

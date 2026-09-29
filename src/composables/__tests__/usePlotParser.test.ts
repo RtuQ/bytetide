@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { parseHexField, computeChecksum, parseValue, parseFrames, toHex } from '../usePlotParser'
-import plotFixture from '../../../testdata/protocol/plot-v1.json'
+import plotFixture from '../../../testdata/protocol/plot-cases.json'
 import type { Dir, LogLine, PlotBytes, PlotChecksum, PlotConfig, PlotEndian } from '../../types'
 
 /**
- * 绘图文法测试（消费共享黄金样本 testdata/protocol/plot-v1.json）：
+ * 绘图文法测试（消费共享黄金样本 testdata/protocol/plot-cases.json）：
  * 向量与期望值以 fixture 为准（Rust parse_frames 侧同源消费），本测试断言
  * TS 实现（usePlotParser）与样本一致——实现漂移即红，防跨语言语义漂移。
  */

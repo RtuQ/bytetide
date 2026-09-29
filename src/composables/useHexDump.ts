@@ -1,5 +1,5 @@
 /**
- * HEX 视图行渲染（plan 无文档、bugfix：二进制行 HEX 显示错误）。
+ * HEX 视图行渲染。
  *
  * 根因：后端 ring 的 text 经 `String::from_utf8_lossy`，二进制帧里 0x80+ 的
  * 字节全部变成 U+FFFD（EF BF BD），把 text 再按 UTF-8 编码得到的十六进制

@@ -15,7 +15,7 @@ import {
 } from '../types/automation'
 
 /**
- * 场景编辑器（Stage 3 Task 4）：步骤树的增删改/上下移动/嵌套 Repeat（扁平行渲染 +
+ * 场景编辑器：步骤树的增删改/上下移动/嵌套 Repeat（扁平行渲染 +
  * 视觉缩进，深度 ≤4，超限的「循环」按钮禁用并提示）；每步表单复用 .input/.select/
  * .seg/.check 控件；matcher 四选一（literal/regex/hex/mask seg 切换 + dir 任意/rx/tx）；
  * 变量表编辑；保存先经 store 的 scenarioValidate 预检，错误按 step path 定位到

@@ -1,4 +1,4 @@
-//! 跨特性集成测试（Stage 3 Task 8 Step 2，CLI 侧）：规范输入对——仓库根
+//! 跨特性集成测试（CLI 侧）：规范输入对——仓库根
 //! `tests/fixtures/replay-scenario.log` + `testdata/scenarios/replay-validation.json`
 //! ——以子进程跑真实 `bytetide run`（loopback TCP 对话服务器按对话脚本应答），
 //! 断言 JSON 报告（--report -）与 core/桌面等效（时间戳归一化后逐字段一致）。

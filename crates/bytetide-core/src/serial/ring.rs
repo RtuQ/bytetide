@@ -1,6 +1,5 @@
 //! 会话环形缓冲与桥数据类型：`RING_CAP`、`RingBuf`（拉模型唯一数据真相）与
 //! `BridgeLine`/`MatchHit`/`RingBounds`/`BridgeStats` DTO。
-//! Stage 2 Task 2 自 manager.rs 原样迁出；`serial::manager` 经再导出保持旧路径一个发布周期。
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};

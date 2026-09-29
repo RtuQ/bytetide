@@ -6,9 +6,9 @@ import { makeCodec } from '../persistence/schema'
 import { loadValue, saveStored } from '../persistence/storage'
 import type { PortConfig } from '../types'
 
-/** PortBar 退役后的共享挂点（布局重构 V1）：上次连接参数记忆 + 打开离线日志。
+/** PortBar 退役后的共享挂点：上次连接参数记忆 + 打开离线日志。
  *  模块级单例——TitleBar（设置弹层）与 TabBar（新建连接/打开日志）共用同一份 cfg。
- *  持久化走 src/persistence（v1 信封 + 旧裸 JSON 自动迁移回填网络源字段）。 */
+ *  持久化走 src/persistence（版本化信封 + 旧裸 JSON 自动迁移回填网络源字段）。 */
 
 const DEFAULT_CFG: PortConfig = {
   name: '',
@@ -66,7 +66,7 @@ export function useOpenLog() {
       const store = useSessionStore()
       const id = await store.loadOfflineSession(path)
       // 离线会话不走拉取循环（初始尾窗经 appendPulled 一次入表），解码引擎在此喂数：
-      // 只喂最近 2000 行（Task 8——行本身经 offline_lines_after_cmd 分页取得，
+      // 只喂最近 2000 行（行本身经 offline_lines_after_cmd 分页取得，
       // 不再 readTextFile 全文；对齐引擎 setEnabled 回溯的 2000 行惯例）
       const s = store.sessions[id]
       if (s) feedParser(id, s.lines.slice(-2000))

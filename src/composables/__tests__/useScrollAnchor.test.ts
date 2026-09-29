@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { anchoredTop } from '../useScrollAnchor'
 
-// 视口锚定补偿（plan-buffer-logging-v1 §2.3 + 方案 B）：
+// 视口锚定补偿：
 // 新 scrollTop = clamp(oldTop - evictedRows*itemSize + prependedRows*itemSize, 0, scrollHeight-clientHeight)
 describe('anchoredTop 视口锚定补偿', () => {
   it('正常补偿：上移量 = 被裁行数 × 行高', () => {
@@ -19,7 +19,7 @@ describe('anchoredTop 视口锚定补偿', () => {
     expect(anchoredTop(5000, 10, 0, 22, 2000, 500)).toBe(1500)
   })
 
-  it('头部回补（方案 B）：下移量 = 回补行数 × 行高，阅读位置钉死', () => {
+  it('头部回补：下移量 = 回补行数 × 行高，阅读位置钉死', () => {
     // 上滑回补 20 行插到头部，内容下推 440px，scrollTop 等量增加抵消
     expect(anchoredTop(880, 0, 20, 22, 9000, 500)).toBe(1320)
   })

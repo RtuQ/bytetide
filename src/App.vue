@@ -55,7 +55,7 @@ const highlighter = useHighlighter(
   () => store.active?.keywords ?? [],
   () => store.active?.lines ?? [],
   () => store.active?.lineCounter ?? 0,
-  // 方案 B 头部回补信号：backfillTotal 变化强制高亮统计全量重建（下标已位移）
+  // 头部回补信号：backfillTotal 变化强制高亮统计全量重建（下标已位移）
   () => store.active?.backfillTotal ?? 0,
 )
 provide(HIGHLIGHTER_KEY, highlighter)
@@ -90,7 +90,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('mouseup', onSplitEnd)
 })
 
-// ---- 视图四态（布局重构 V1）：viewbar 常驻于工具区之上，任何模式下都可切换/退出对比 ----
+// ---- 视图四态：viewbar 常驻于工具区之上，任何模式下都可切换/退出对比 ----
 const activeView = computed(() => store.active?.centerView ?? 'log')
 const compareOn = computed(() => store.compareMode)
 
@@ -194,7 +194,7 @@ const sidebarStyle = computed(() =>
       },
 )
 
-// ---- 面板开合记忆：默认全收起，用户展开/收起即持久化（布局重构 V1） ----
+// ---- 面板开合记忆：默认全收起，用户展开/收起即持久化 ----
 const panel = usePanelState()
 
 function openWelcomeLog() {

@@ -1,4 +1,4 @@
-//! 回放命令层集成测试（Stage 3 Task 7）：真 PortManager + 临时回放文件，走命令层
+//! 回放命令层集成测试 ：真 PortManager + 临时回放文件，走命令层
 //! 同一实现路径（parse_replay_action / apply_replay_control / build_view——tauri 壳
 //! 只差 State 提取与 replay-state 事件 emit）。覆盖 open 索引摘要、pause/resume/
 //! seek/speed/loop/stop 全控制面、非法 action/value 稳定文案、close 后 status Err、

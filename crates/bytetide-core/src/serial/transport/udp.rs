@@ -1,4 +1,4 @@
-//! UDP 监听链路：纯接收语义与原 `establish_link` 的 Udp 分支逐字一致。
+//! UDP 监听链路：纯接收语义。
 //! 读超时 200ms；未 connect 的监听 socket 上 send 会报 NotConnected，
 //! 符合“UDP 纯接收”设计（对端发送列为后续增强）。
 

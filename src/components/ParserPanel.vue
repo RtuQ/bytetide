@@ -6,7 +6,7 @@ import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 import type { TrialVerdict } from '../types/parser'
 
-/** 协议解析面板（plan-parser-v1 §3）：脚本导入/拖拽/内置示例 + 脚本卡片 +
+/** 协议解析面板：脚本导入/拖拽/内置示例 + 脚本卡片 +
  *  启用开关 + 三格统计 + 查看器弹层。面板开合状态由 App.vue 持久化。 */
 defineProps<{ open: boolean }>()
 const emit = defineEmits<{ toggle: [Event] }>()

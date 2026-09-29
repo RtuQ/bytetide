@@ -6,7 +6,7 @@ import { usePortCfg, useOpenLog } from '../composables/usePortConfig'
 import SettingsPopover from './SettingsPopover.vue'
 import { t } from '../i18n'
 
-// PortBar 退役（布局重构 V1）：设置弹层挂进标题行，cfg/openLog 走共享 composable
+// PortBar 退役：设置弹层挂进标题行，cfg/openLog 走共享 composable
 const { cfg, applyPreset } = usePortCfg()
 const { openLog } = useOpenLog()
 

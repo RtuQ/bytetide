@@ -1,7 +1,7 @@
 import type { PortInfo } from '../types'
 
 /**
- * 串口热插拔通知的纯逻辑（通知重设计 v2）：后端 hotplug.rs 每秒轮询 list_ports
+ * 串口热插拔通知的纯逻辑：后端 hotplug.rs 每秒轮询 list_ports
  * 做名字 diff 后 emit `port-changed`（完整端口列表、不区分插入/拔出方向），
  * 方向由前端对前后两次列表求差得到。首帧只建基线不弹通知——应用启动时
  * 已插着的端口不应刷一屏「已接入」。

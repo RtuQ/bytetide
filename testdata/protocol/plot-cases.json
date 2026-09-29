@@ -1,5 +1,5 @@
 {
-  "$about": "bytetide 协议黄金样本 v1（绘图文法 + 行字节还原 + 解析脚本样本）。共享防漂移：TypeScript 侧由 vitest 直接 import 消费，Rust 侧 include_str! + serde_json 白名单取键（未知键忽略）。两侧任一实现漂移，共享向量即红。改动本文件必须两侧测试同步。消费者：src/composables/__tests__/usePlotParser.test.ts、src/parser/__tests__/lineBytes.test.ts、src/parser/__tests__/engine-protocol.test.ts；Rust: src-tauri/src/bridge/routes/mod.rs parse_frames/line_bytes 的测试。",
+  "$about": "bytetide 协议黄金样本（绘图文法 + 行字节还原 + 解析脚本样本）。共享防漂移：TypeScript 侧由 vitest 直接 import 消费，Rust 侧 include_str! + serde_json 白名单取键（未知键忽略）。两侧任一实现漂移，共享向量即红。改动本文件必须两侧测试同步。消费者：src/composables/__tests__/usePlotParser.test.ts、src/parser/__tests__/lineBytes.test.ts、src/parser/__tests__/engine-protocol.test.ts；Rust: src-tauri/src/bridge/routes/mod.rs parse_frames/line_bytes 的测试。",
   "version": 1,
 
   "hexFields": {

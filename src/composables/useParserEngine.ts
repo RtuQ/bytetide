@@ -12,7 +12,7 @@ import type { DecodedFrame, ParserBanner, ParserStats, TrialReport, ValidatedScr
  * 解析引擎组合层（模块级单例）：加载/卸载/启停/localStorage 恢复/reset 挂载。
  * 引擎（ParserEngine）是纯 TS 编排；这里负责 Vue 响应式映射、store 落表节流与
  * 生命周期挂钩（onClear 注入 + order diff watch），App 各组件共享同一实例。
- * 脚本持久化走 src/persistence（v1 信封；旧裸 {src,enabled} 自动迁移）。
+ * 脚本持久化走 src/persistence（版本化信封；旧裸 {src,enabled} 自动迁移）。
  */
 
 const STORAGE_KEY = 'serialtool.parserScript'

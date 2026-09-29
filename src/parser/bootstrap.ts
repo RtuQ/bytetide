@@ -1,5 +1,5 @@
 /**
- * Worker 宿主（脚本层 parse 的执行沙箱，parser V1 · docs/plan-parser-v1.md §2）。
+ * Worker 宿主（脚本层 parse 的执行沙箱）。
  *
  * - Blob URL + `{ type: 'module' }`（module worker 才能动态 import blob 模块）；
  *   Worker/Blob/URL 任一缺失（node / 受限环境）返回 null，声明式脚本不受影响。

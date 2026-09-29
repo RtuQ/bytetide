@@ -243,7 +243,7 @@ function onScroll() {
   if (!scrollEl || !session.value) return
   const atBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 30
   store.setFollowTail(props.sessionId, atBottom)
-  // 上滑近顶（方案 B）：向前翻页回补仍在 ring 里的被裁旧行；
+  // 上滑近顶：向前翻页回补仍在 ring 里的被裁旧行；
   // 仅未跟随尾部时触发（跟随时无回看语义），requestBackfill 内部有在途守卫
   if (!atBottom && scrollEl.scrollTop < 40 && !session.value.backfillExhausted) {
     void requestBackfill(props.sessionId)
@@ -264,11 +264,11 @@ watch(session, () => {
 })
 
 // 跟随尾部：有新行且开启跟随时滚动到底。
-// 取消跟随时做视口锚定（plan-buffer-logging-v1 §2.3）：头部行被滑动窗口裁剪
+// 取消跟随时做视口锚定：头部行被滑动窗口裁剪
 // 会让内容高度收缩、浏览器钳制 scrollTop，视口整体上移——watcher 默认 pre-flush，
 // 此刻 DOM 还是旧几何，先记 oldTop；nextTick 后按被裁行数等量回补（双向钳制）。
 // takeEvicted 取走即清零，防同 tick 多批次漏计。
-// 方案 B 同一 watcher 统一补偿：上滑回补把行插到头部，内容高度增长会把视口
+// 同一 watcher 统一补偿：上滑回补把行插到头部，内容高度增长会把视口
 // 内容相对下推 N 行，按回补行数（仅计通过过滤链、真正渲染占高的）等量下移抵消。
 const ROW_HEIGHT = 22 // 与模板 LogScroller 的 item-size 联动；改行高须同步 .log-row height（AGENTS 红线）
 watch(
@@ -472,7 +472,7 @@ onBeforeUnmount(() => {
       </span>
     </div>
 
-    <!-- 回放控制条：仅 replay 会话（Stage 3 Task 7），工具栏与日志区之间 -->
+    <!-- 回放控制条：仅 replay 会话，工具栏与日志区之间 -->
     <ReplayControls
       v-if="session && session.kind === 'replay'"
       :session-id="props.sessionId"

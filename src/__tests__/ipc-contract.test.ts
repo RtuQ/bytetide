@@ -1,7 +1,7 @@
-// 前端 IPC DTO 契约测试（Stage 2 Task 1）。
+// 前端 IPC DTO 契约测试。
 // 与 crates/bytetide-core/tests/session_contract.rs **同源**的字面量镜像：Rust 侧用
 // serde_json::to_string 冻结后端序列化字节，这里用同一批 JSON 冻结前端消费侧——
-// 两边任一形状漂移都会红（Task 7 起迁移到共享 testdata/protocol/ fixtures）。
+// 两边任一形状漂移都会红。
 // 冻结点：
 // - ring 拉取行（BridgeLine）→ useTauriEvents 的 PulledLine → RawLogLine & {ringNo}
 //   → store.appendPulled 的 LogLine，映射不丢字段、bytes 数组原样

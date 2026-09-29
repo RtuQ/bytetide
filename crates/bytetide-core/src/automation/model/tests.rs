@@ -416,7 +416,7 @@ fn reference_ordering_strict_in_linear_block() {
 #[test]
 fn repeat_body_strict_first_iteration_ordering() {
     let save_v = || wait(matcher_lit(None, "OK"), 100, save("v", 0));
-    // 评审用例（P1-3）：体内先引用后保存 → 第一轮迭代必然未定义，预检失败
+    // 体内先引用后保存 → 第一轮迭代必然未定义，预检失败
     let e = validate(vec![repeat(1, vec![send("${v}"), save_v()])]).unwrap_err();
     assert_eq!(e.code, ScenarioErrorCode::UndefinedVariable);
     assert_eq!(e.path, "steps[0].steps[0]");
@@ -450,7 +450,7 @@ fn repeat_body_strict_first_iteration_ordering() {
 
 #[test]
 fn wait_timeout_and_repeat_times_lower_bounds() {
-    // 设计契约下界：wait 1..=600000 ms、repeat 1..=10000（评审回归清单）
+    // 设计契约下界：wait 1..=600000 ms、repeat 1..=10000
     let e = validate(vec![wait(matcher_lit(None, "a"), 0, None)]).unwrap_err();
     assert_eq!(e.code, ScenarioErrorCode::WaitTooShort);
     assert_eq!(e.path, "steps[0]");

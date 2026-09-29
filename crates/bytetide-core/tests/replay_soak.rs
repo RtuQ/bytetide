@@ -1,4 +1,4 @@
-//! 回放 soak（Stage 3 Task 8 Step 4）——`#[ignore]` 长跑测试，显式触发：
+//! 回放 soak——`#[ignore]` 长跑测试，显式触发：
 //!
 //! ```text
 //! cargo test -p bytetide-core --test replay_soak -- --ignored
@@ -22,7 +22,7 @@
 //!   `speed=100` + 默认 10s gap 钳制（≈18 万行），规则全程挂、采样 RSS 趋势
 //!   ——只在本地显式跑，不进 CI。
 //!
-//! # 断言（两模式一致，对应 plan Step 4 验收口径）
+//! # 断言（两模式一致）
 //! - ring size 恒 ≤ `RING_CAP`（100_000），bulk 相真实触顶，记录峰值
 //!   `maxRingLines`；
 //! - 观测 `no` 全程严格递增、批内连续（无重复/回退）；唯一合法的游标缺口 =

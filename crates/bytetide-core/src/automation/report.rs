@@ -1,5 +1,4 @@
-//! 场景运行报告与两种序列化格式（Stage 3 Task 2，plan：
-//! `docs/superpowers/plans/2026-09-11-stage-3-automation-and-replay.md`）。
+//! 场景运行报告与两种序列化格式。
 //!
 //! # 确定性（硬要求）
 //! 报告时间戳全部来自 [`crate::automation::runner::ScenarioHost::now_ms`]（可注入假钟）；
@@ -9,8 +8,8 @@
 //! # JSON（[`report_json`]）
 //! `serde_json::to_string_pretty`（2 空格缩进）。场景/步级 `status` 为小写枚举串
 //! （`passed|failed|cancelled` / `passed|failed|skipped`）；`matched_no`/`error`
-//! 缺省为 `null`。`name` 字段是 plan 形状的一处微调（已回报）：JUnit testsuite 名
-//! 取场景名，而 `report_junit(report)` 只收报告（签名 plan 指定），故名字随报告携带。
+//! 缺省为 `null`。`name` 字段：JUnit testsuite 名取场景名，而 `report_junit(report)`
+//! 只收报告，故名字随报告携带。
 //!
 //! # JUnit（[`report_junit`]）
 //! 单 `<testsuite>`（name=场景名；tests/failures/errors/skipped 计数；time=秒·3 位小数）；

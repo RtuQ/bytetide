@@ -1,14 +1,14 @@
-//! 回放会话命令层（Stage 3 Task 7）：打开回放 / 控制面（pause/resume/seek/speed/
+//! 回放会话命令层：打开回放 / 控制面（pause/resume/seek/speed/
 //! loop/stop）/ 状态查询。tauri 壳只差 State 提取与 `replay-state` 事件 emit——
 //! 纯逻辑（action/value 解析、控制投递+到位等待、视图组装）拆为可测函数，
 //! 集成测试 tests/replay_commands.rs 与命令走同一路径。
 //!
-//! Sender 持有方式：manager 的 SessionHandle.replay_tx 已持有控制通道（T6），
+//! Sender 持有方式：manager 的 SessionHandle.replay_tx 已持有控制通道，
 //! 命令层经 `manager.replay_control` 投递，不另存 sender；speed/looped 当前值
 //! runner 线程内维护、manager 不暴露，AppState.replays 以 ReplayRegistry 镜像
 //! （open 登记、SetSpeed/SetLoop 更新、disconnect/replay_status 失败时遗忘）。
 //!
-//! 事件 `replay-state`：plan 指定仅在状态/控制变化时发、不逐行——control 命令
+//! 事件 `replay-state`：仅在状态/控制变化时发、不逐行——control 命令
 //! 执行后 emit 一次（载荷=ReplayView，含当前文件行号水位）；EOF/Error 等
 //! 无控制命令的状态变化由前端 ReplayControls 的 status 轮询兜底。
 
@@ -44,7 +44,7 @@ pub struct ReplayView {
     pub line: u64,
 }
 
-/// 打开回放会话的返回（plan Task 7 形状：{sessionId,lineCount,durationMs}）。
+/// 打开回放会话的返回。
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplayOpenView {
@@ -291,7 +291,7 @@ pub fn replay_status_cmd(
 
 #[cfg(test)]
 mod tests {
-    //! 命令层形状冻结：ReplayView/ReplayOpenView 的 serde camelCase 键与 plan Task 7 对齐。
+    //! 命令层形状冻结：ReplayView/ReplayOpenView 的 serde camelCase 键形状冻结。
     use super::*;
 
     #[test]

@@ -1,4 +1,4 @@
-//! 时序回放（Stage 3 Task 6）：离线日志按相邻行原始时间差重放为伪实时会话。
+//! 时序回放：离线日志按相邻行原始时间差重放为伪实时会话。
 //! 回放是 [`crate::serial::runtime::SessionRuntime::ingest`] 的又一个生产者
 //! （`IngestOrigin::Replay`）——ring 拉模型、解析、绘图、告警、自动化全链路天然
 //! 复用，无并行前端模拟。
@@ -229,7 +229,7 @@ mod tests {
         assert!(m.bridge_list().is_empty(), "失败路径不留会话");
     }
 
-    /// T7 控制面：replay_control 经 SessionHandle 持有的通道投递（命令层路径），
+    /// 控制面：replay_control 经 SessionHandle 持有的通道投递（命令层路径），
     /// replay_view 返回状态 + 文件行号水位（ingest/seek 推进、暂停中 seek 只推水位）。
     #[test]
     fn manager_control_surface_replay_view_and_replay_control() {

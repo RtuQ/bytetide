@@ -63,7 +63,7 @@ const OFFLINE_FIRST_PAGE = 5000
 let seqStopFlag: { stopped: boolean } | null = null
 
 /**
- * useSessionStore（Task 6 兼容门面）：对外签名/响应式语义与拆分前完全一致，
+ * useSessionStore 兼容门面：对外签名/响应式语义保持不变，
  * 实现委托给 session/{model,lifecycle,registry,log,rules,view,presets} 纯函数
  * 模块；异步命令编排与建账竞态缓冲留在本文件。
  */
@@ -236,7 +236,7 @@ export const useSessionStore = defineStore('session', {
       this.flushPending(id)
       return id
     },
-    /** 从日志文件离线载入（Task 8 流式分页）：后端一次顺序扫描建稀疏索引建会话
+    /** 从日志文件离线载入（流式分页）：后端一次顺序扫描建稀疏索引建会话
      *  （o{N}，ring 恒空、不经 WebView 传全量行），前端再按页拉取初始视口；REST 桥可见。
      *  初始装载=尾窗（N=OFFLINE_FIRST_PAGE）：与旧全量链路视觉等价（parseLogFile
      *  截尾 50k + followTail 停在文件尾），文件不超过一页时即 sinceNo=0 全量；
@@ -281,7 +281,7 @@ export const useSessionStore = defineStore('session', {
       )
       return opened.sessionId
     },
-    /** 打开时序回放会话（Stage 3 Task 7）：后端 start_replay 按相邻行原始时间差
+    /** 打开时序回放会话：后端 start_replay 按相邻行原始时间差
      *  把源文件重放进 ring（r{N}，IngestOrigin::Replay：告警评估、零自动回复零
      *  捕获、无落盘）。ring 从空起步、pullNo=0——拉取循环（isPullSession 放行
      *  replay）按游标拉齐即可，无离线式初始尾窗。控制面初值本地置 ready，随后
@@ -331,7 +331,7 @@ export const useSessionStore = defineStore('session', {
       } catch {
         /* ignore */
       }
-      // 两阶段关闭（评审 P1-2 丢尾批修复）：后端已留只读墓碑 ring——先无视状态
+      // 两阶段关闭：后端已留只读墓碑 ring（防丢尾批）——先无视状态
       // 守卫拉空最后一批（常规拉取停在状态切换前，尾批会永远丢失），再显式
       // 释放墓碑。事件侧 drainSessionTail 与此收敛（draining 互斥 + 拉空即停）
       await drainSessionTail(id)
@@ -345,7 +345,7 @@ export const useSessionStore = defineStore('session', {
       }
     },
     /** 用原配置重连：后端生成新会话 id，前端把原会话数据迁移到新 id 下。
-     *  仅 live 会话可重连：offline 无连接可重建；replay 按 plan 拒绝（源文件
+     *  仅 live 会话可重连：offline 无连接可重建；replay 拒绝重连（源文件
      *  重开即可回放），字段策略 replay='runtime' 与此对应 */
     async reconnectSession(id: string) {
       const s = this.sessions[id]
@@ -496,8 +496,8 @@ export const useSessionStore = defineStore('session', {
       if (!s) return 0
       return takeEvictedFrom(s)
     },
-    /** 翻页补旧行（方案 B）：上滑时把仍在 ring 窗口内的被裁行回补到头部（语义见 log.ts）。
-     *  live 与 indexed 离线（Task 8 分页）会话均可补；可补性由调用方按 rn/bounds 判定 */
+    /** 翻页补旧行：上滑时把仍在 ring 窗口内的被裁行回补到头部（语义见 log.ts）。
+     *  live 与 indexed 离线（分页）会话均可补；可补性由调用方按 rn/bounds 判定 */
     prependBackfill(
       id: string,
       lines: (RawLogLine & { ringNo: number })[],
@@ -600,7 +600,7 @@ export const useSessionStore = defineStore('session', {
       const s = this.sessions[id]
       if (s) s.bookmarks = []
     },
-    /** 开启绘图：同时强制 HEX 视图；视图耦合（布局重构 V1）语义见 view.ts。
+    /** 开启绘图：同时强制 HEX 视图；视图耦合语义见 view.ts。
      *  不变式：centerView !== 'log' ⟹ plot.enabled */
     setPlotEnabled(id: string, v: boolean) {
       const s = this.sessions[id]

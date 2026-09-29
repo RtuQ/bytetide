@@ -8,7 +8,7 @@ import type { MessageKey } from '../i18n'
 import type { ScenarioReportFormat } from '../types/automation'
 
 /**
- * 单个场景运行视图（Stage 3 Task 4）：进度水位（currentStep/totalSteps + 当前
+ * 单个场景运行视图：进度水位（currentStep/totalSteps + 当前
  * 叶步种类，aria-live 聚焦播报）、运行中停止按钮、终态错误展示与 JSON/JUnit
  * 报告保存（scenario_report_cmd → 另存对话框 → export_text 写盘）。
  * 数据源 = automation store 的 run 视图（runId 定位；未知 runId 渲染空态）。

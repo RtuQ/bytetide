@@ -1,8 +1,7 @@
 //! 路由层公共部分：axum 共享状态 `BridgeCtx`、请求限额、404 文本助手，
 //! 以及跨路由复用的**纯函数**——行过滤（build_filter/apply_filter 及其底层查找）
 //! 与帧解码引擎（parse_frames，`/decode` `/value-hist` 共用）。
-//! 暂放所用路由模块旁（Stage 2 Task 7 再归并共享 fixtures）；只依赖
-//! `Arc<dyn BridgeService>`，不触 Tauri。
+//! 暂放所用路由模块旁；只依赖 `Arc<dyn BridgeService>`，不触 Tauri。
 
 pub mod analysis;
 pub mod annotations;
@@ -828,7 +827,7 @@ mod tests {
         assert!(build_filter(&bad).is_err());
     }
 
-    // ---------------- line_bytes（黄金样本 plot-v1.json lineBytesSamples） ----------------
+    // ---------------- line_bytes（黄金样本 plot-cases.json lineBytesSamples） ----------------
 
     /// 共享黄金样本顶层（serde 白名单取键，未知键如 `$about`/`version`/`declSample`
     /// 自动忽略）。向量与期望值以 fixture 为准，与 TS 侧
@@ -942,8 +941,8 @@ mod tests {
 
     fn plot_fixture() -> PlotFixture {
         // 相对本文件 4 级上跳到仓库根（routes → bridge → src → src-tauri → 根）
-        serde_json::from_str(include_str!("../../../../testdata/protocol/plot-v1.json"))
-            .expect("plot-v1.json fixture parses")
+        serde_json::from_str(include_str!("../../../../testdata/protocol/plot-cases.json"))
+            .expect("plot-cases.json fixture parses")
     }
 
     #[test]
@@ -968,7 +967,7 @@ mod tests {
         }
     }
 
-    // ---------------- parse_frames：共享黄金样本（plot-v1.json plotCases） ----------------
+    // ---------------- parse_frames：共享黄金样本（plot-cases.json plotCases） ----------------
 
     #[test]
     fn parse_frames_matches_plot_fixture_golden_cases() {

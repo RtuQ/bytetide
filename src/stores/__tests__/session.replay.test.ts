@@ -132,7 +132,7 @@ describe('回放会话生命周期', () => {
     expect(store.sessions[id]).toBeUndefined()
   })
 
-  it('复审 R-P1-2：在途常规拉取未完成时，stopSession 等待其结束并完成最终拉空后才 release', async () => {
+  it('在途常规拉取未完成时，stopSession 等待其结束并完成最终拉空后才 release', async () => {
     const { store, id } = await mkReplay()
     const r = store.sessions[id]!
     r.status = 'connected'

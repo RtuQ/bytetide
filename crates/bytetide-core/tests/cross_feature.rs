@@ -1,9 +1,9 @@
-//! 跨特性集成测试（Stage 3 Task 8 Step 2/3）：规范输入对——仓库根
+//! 跨特性集成测试：规范输入对——仓库根
 //! `tests/fixtures/replay-scenario.log` + `testdata/scenarios/replay-validation.json`
 //! ——在 core 侧跑出等效报告，并端到端验证回放管线（ingest → ring → 告警 →
 //! 只读场景 wait/assert）。
 //!
-//! # 三端等效（Step 2）
+//! # 三端等效
 //! 同一对 fixture 在 core（本文件 `DialogueHost` 镜像对话）、桌面
 //! （`src-tauri/tests/cross_feature.rs`，真实 loopback TCP 服务器按同一脚本
 //! 应答）、CLI（`crates/bytetide-cli/tests/cross_feature.rs`，同款 TCP 服务器
@@ -179,7 +179,7 @@ fn replay_readonly_scenario() -> &'static str {
 }"#
 }
 
-// ============ Step 2：三端等效报告（core 侧） ============
+// ============ 三端等效报告（core 侧） ============
 
 /// 对话时序的 core 侧镜像（桌面/CLI 用真实 TCP 服务器按同一脚本应答）。
 /// `now_ms` 走 +1ms 假钟：报告时间戳确定性（归一化后无差异，但 core 报告可整体
@@ -349,7 +349,7 @@ fn canonical_pair_report_matches_shared_expectations_in_core() {
     );
 }
 
-// ============ Step 3：回放管线（ingest → ring → 告警 → 守卫 → 只读场景） ============
+// ============ 回放管线（ingest → ring → 告警 → 守卫 → 只读场景） ============
 
 /// 轮询直到条件成立（回放线程异步推进）。
 fn wait_until(timeout_ms: u64, mut f: impl FnMut() -> bool) {
@@ -433,7 +433,7 @@ fn replay_pipeline_ingests_fixture_raises_alerts_and_guards() {
             .any(|e| e == &format!("alert-hit {id} n=1"))
     });
 
-    // 禁用操作稳定报错（T3/T6 守卫语义，报告/捕获对回放会话同样拒绝）
+    // 禁用操作稳定报错（守卫语义：报告/捕获对回放会话同样拒绝）
     let err = |e: anyhow::Error| e.to_string();
     assert_eq!(
         err(m

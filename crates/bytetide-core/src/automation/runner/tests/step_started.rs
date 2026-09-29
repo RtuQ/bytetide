@@ -1,5 +1,5 @@
 //! 显式步骤回调（on_step_started）单测：SpyHost 记录步边界，断言精确
-//! path/kind/current/total（复审 P2-1 修复的回归面）。
+//! path/kind/current/total。
 
 use super::*;
 

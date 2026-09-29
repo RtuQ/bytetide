@@ -106,7 +106,7 @@ pub(crate) async fn annotations_post(
             .into_response();
     }
     // 行仍在缓冲中时回填 ts/text，AI 只需给 no + note（按行号单行有界读取，
-    // 评审 P1-1：不再全量 snapshot；会话缺失 404，单行缺失保留调用方提供的值）
+    // 不再全量 snapshot；会话缺失 404，单行缺失保留调用方提供的值）
     if ctx.service.line_by_no(&id, 1).is_err() {
         return not_found();
     }

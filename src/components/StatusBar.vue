@@ -7,8 +7,8 @@ import type { SessionStatus } from '../types'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 
-// 底部状态栏（布局重构 V1）：连接状态/速率/丢行/渲染健康常驻可见，跟随活动会话。
-// 纯展示组件，数据全部来自现有 store/composable；解析器状态位待 plan-parser-v1 落地后点亮。
+// 底部状态栏：连接状态/速率/丢行/渲染健康常驻可见，跟随活动会话。
+// 纯展示组件，数据全部来自现有 store/composable；解析器状态位待解析引擎落地后点亮。
 const store = useSessionStore()
 const active = computed(() => store.active)
 

@@ -21,7 +21,7 @@ beforeEach(() => {
 })
 
 describe('useNotificationPrefs', () => {
-  it('默认开；写关回写 v1 信封', () => {
+  it('默认开；写关回写版本化信封', () => {
     const n = useNotificationPrefs()
     expect(n.prefs.enabled).toBe(true)
     n.setEnabled(false)

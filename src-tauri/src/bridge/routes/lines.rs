@@ -1,6 +1,6 @@
 //! 行数据路由：`/lines` `/follow` `/histogram` `/bookmarks` `/alerts` `/export`。
 //!
-//! 读取有界性（评审 P1-1）：`/lines` 与 `/histogram` 不再全量物化快照——
+//! 读取有界性：`/lines` 与 `/histogram` 不再全量物化快照——
 //! 无过滤把 `offset/limit` 直接下推为 no 区间页读（ring nos 连续、离线文件
 //! nos 连续，`lines_after`/`lines_before`/`line_by_no` 一步定位）；有过滤走
 //! 固定页大小流式扫描，只保留命中分页窗口与计数。对分页离线会话，任意
@@ -288,7 +288,7 @@ fn bounded_fetch(
 }
 
 /// 有过滤的流式扫描：固定页大小 `lines_after` 走完全程，只保留「命中分页
-/// 窗口」与计数——内存与命中总量无关（评审 P1-1）。选择语义镜像原
+/// 窗口」与计数——内存与命中总量无关。选择语义镜像原
 /// select_lines（对命中序列做 index 窗口）：
 /// - no：line_by_no 单行（未命中过滤 → 空页）；
 /// - last=N：选择集 = 最后 N 个命中 → 尾窗口（cap = min(N, offset+limit)，
@@ -618,7 +618,7 @@ pub(crate) async fn histogram(
         Err(e) => return e.into_response(),
     };
     let bucket = p.bucket.unwrap_or(1000).max(1);
-    // 流式扫描计数（评审 P1-1 同源）：命中只累加桶计数，不物化命中行列表
+    // 流式扫描计数：命中只累加桶计数，不物化命中行列表
     let mut cursor = 0u64;
     let mut map: BTreeMap<u64, u64> = BTreeMap::new();
     loop {

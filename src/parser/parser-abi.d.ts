@@ -1,5 +1,5 @@
 /**
- * bytetide.parser v1 — 脚本作者 / AI 参考类型定义（全局环境声明，无需 import）。
+ * bytetide.parser — 脚本作者 / AI 参考类型定义（全局环境声明，无需 import）。
  *
  * 权威语义文档：docs/parser-spec.md（偏移/长度域/CRC/重同步语义逐条钉死 + AI prompt 模板）。
  * 引擎运行时数据类型在 src/types/parser.ts；本文件是脚本 ABI 的唯一形状来源，

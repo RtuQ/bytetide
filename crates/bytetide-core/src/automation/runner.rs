@@ -1,10 +1,10 @@
-//! 场景运行器（Stage 3 Task 2）：迭代式确定性执行引擎 + 宿主抽象 [`ScenarioHost`]。
+//! 场景运行器：迭代式确定性执行引擎 + 宿主抽象 [`ScenarioHost`]。
 //!
 //! # 宿主契约（[`ScenarioHost`]）
 //! - [`ScenarioHost::last_no`]：ring 末行 `no`（空 = 0）。
 //! - [`ScenarioHost::lines_after`]：**严格大于** `since` 的最旧 `max` 行、按 `no`
 //!   升序——语义对齐 [`crate::serial::ring::RingBuf::lines_after_no`]，桌面/CLI
-//!   适配器（Task 3/5）直接委托它实现。
+//!   适配器直接委托它实现。
 //! - [`ScenarioHost::sleep`]：可取消睡眠；进入时或睡眠中 `cancel` 置位须尽快返回
 //!   [`HostError::Cancelled`]。Wait 轮询分片经它睡眠。
 //! - [`ScenarioHost::now_ms`]：报告时间戳与 Wait deadline 的唯一时间源（可注入
@@ -73,7 +73,7 @@ use crate::automation::report::{
 };
 use crate::serial::ring::BridgeLine;
 
-/// Wait 轮询睡眠分片（plan 指定 20–50ms，取中值 25ms）。
+/// Wait 轮询睡眠分片（20–50ms 分片，取中值 25ms）。
 pub const WAIT_POLL_SLICE_MS: u64 = 25;
 /// Wait 单批拉取行数上限（批消费后游标推进，剩余行下一轮继续拉）。
 pub const WAIT_BATCH_LINES: usize = 1024;

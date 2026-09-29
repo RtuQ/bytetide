@@ -80,7 +80,7 @@ export function createCommands(client: IpcClient) {
     createOfflineSession(config: PortConfig, path: string, lines: RawLogLine[]): Promise<string> {
       return client.invoke<string>('create_offline_session_cmd', { config, path, lines })
     },
-    /** 流式打开离线日志（Task 8）：core 一次顺序扫描建稀疏索引建会话（ring 恒空、
+    /** 流式打开离线日志：core 一次顺序扫描建稀疏索引建会话（ring 恒空、
      *  不经 WebView 传全量行），返回 {sessionId,lineCount,firstEpoch,lastEpoch} */
     openOfflineSession(path: string, config: PortConfig): Promise<OfflineOpenResult> {
       return client.invoke<OfflineOpenResult>('open_offline_session_cmd', { path, config })
@@ -91,7 +91,7 @@ export function createCommands(client: IpcClient) {
         ? client.invoke<PulledLine[]>('offline_lines_after_cmd', { sessionId, sinceNo })
         : client.invoke<PulledLine[]>('offline_lines_after_cmd', { sessionId, sinceNo, max })
     },
-    /** 打开时序回放会话（Stage 3 Task 7）：后端按相邻行原始时间差把源文件重放进
+    /** 打开时序回放会话：后端按相邻行原始时间差把源文件重放进
      *  ring（r{N}，拉模型复用），返回 {sessionId,lineCount,durationMs} */
     openReplaySession(path: string, speed: number, looped: boolean): Promise<ReplayOpenResult> {
       return client.invoke<ReplayOpenResult>('open_replay_session_cmd', { path, speed, looped })
@@ -108,7 +108,7 @@ export function createCommands(client: IpcClient) {
       return client.invoke<ReplayView>('replay_status_cmd', { sessionId })
     },
 
-    // ---- 场景自动化（Stage 3 Task 3 / commands/automation.rs）----
+    // ---- 场景自动化（commands/automation.rs）----
     /** 校验场景（不启动）：ok=false 时 error 携带稳定 code/path/message */
     scenarioValidate(scenario: Scenario): Promise<ScenarioValidateSummary> {
       return client.invoke<ScenarioValidateSummary>('scenario_validate_cmd', { scenario })

@@ -1,7 +1,7 @@
 //! 串口/网络数据源子系统：配置、会话管理（ring 拉模型）、规则评估、落盘与现场捕获。
 //! 热插拔监听属 GUI 关注点，留在桌面端 crate。
 //!
-//! Stage 2 Task 3 起按职责拆分（`docs/superpowers/plans/2026-09-11-stage-2-architecture-modularization.md`）：
+//! 按职责拆分：
 //! - [`transport`]：链路抽象（`Transport` trait + `open_transport` 分发；串口/TCP/UDP）
 //! - [`recording`]：落盘录制（开/写/分段/暂停/午夜轮转）
 //! - [`capture`]：触发式现场捕获（行车记录仪）

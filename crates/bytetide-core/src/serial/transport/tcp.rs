@@ -1,5 +1,5 @@
 //! TCP 链路（client 连接 / server 接受首个连入）。
-//! 语义与原 `establish_link` 的 Tcp 分支逐字一致：读超时 200ms、nodelay、
+//! 读超时 200ms、nodelay、
 //! tcp-server 只服务首个接入连接（该连接断开即会话结束，多并发列为后续增强）。
 
 use std::io;

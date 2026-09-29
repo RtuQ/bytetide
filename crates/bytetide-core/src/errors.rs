@@ -1,4 +1,4 @@
-//! 用户可见错误消息的 `"{code}|{detail}"` 前缀约定（i18n 阶段 2）。
+//! 用户可见错误消息的 `"{code}|{detail}"` 前缀约定。
 //!
 //! 后端不再产出中文错误句子：`code` = 稳定 snake_case 错误码（前端词典
 //! `errors.<code>` 承担文案，全集契约见 `src/ipc/errorCodes.ts`）；`detail` =

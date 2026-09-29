@@ -1,6 +1,5 @@
 /**
- * 场景自动化 v1 类型镜像（Stage 3 Task 4，plan：
- * docs/superpowers/plans/2026-09-11-stage-3-automation-and-replay.md）。
+ * 场景自动化类型镜像。
  *
  * **本文件是 crates/bytetide-core/src/automation/{model.rs,matcher.rs} 与
  * src-tauri/src/commands/automation.rs 的 serde camelCase 形状的逐字段前端镜像**：

@@ -3,7 +3,7 @@ import type { PlotConfig } from '../../types'
 import type { CenterView, Session } from './model'
 
 /**
- * 视图域纯函数（Task 6）：中心区视图耦合不变式 + 分屏/对比布局。
+ * 视图域纯函数：中心区视图耦合不变式 + 分屏/对比布局。
  * 显式传入状态原地变更，不内部调用 useSessionStore；后端推送（_pushPlot）由
  * 门面编排。
  */

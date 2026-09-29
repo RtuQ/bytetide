@@ -1,12 +1,10 @@
-//! 序列化特征化测试（Stage 2 Task 1，docs/superpowers/plans/2026-09-11-stage-2-architecture-modularization.md）：
-//! 冻结后端跨边界 DTO 的**线上 JSON 字节形状**——后续大重构（Task 2 ring/runtime 抽取、
-//! Task 3 传输/录制/捕获拆分、Task 4 bridge 拆分、Task 8 离线分页）不许改变这些字节。
+//! 序列化特征化测试：冻结后端跨边界 DTO 的**线上 JSON 字节形状**——后续任何
+//! 大重构不许改变这些字节。
 //! 断言用「固定值 serde_json::to_string ⇔ 完整字面量」的 assert_eq：键序=struct 字段
 //! 声明序，rename_all=camelCase，`Option` 是否省略按实际行为冻结（BridgeLine 的
 //! bytes/match 带 skip_serializing_if、SessionSnap 的 lastError 与 PortConfig 的
 //! transport/tcp* 字段**不带**——None 也序列化为 null）。任何 rename/增删字段都会在
-//! 这里红掉，提醒同步前端镜像（src/__tests__/ipc-contract.test.ts 同源字面量；
-//! Task 7 起共享 testdata/protocol/ fixtures）。
+//! 这里红掉，提醒同步前端镜像（src/__tests__/ipc-contract.test.ts 同源字面量）。
 //!
 //! Tauri 事件载荷形状在 src-tauri/src/gui_sink.rs（core 测试不能反向依赖桌面壳），
 //! 在此等价记录、由前端契约测试真正断言：

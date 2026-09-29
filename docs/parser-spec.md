@@ -1,4 +1,4 @@
-# bytetide.parser v1 规范
+# bytetide.parser 规范
 
 串口/网络调试中大量场景是「设备发十六进制帧，人脑查协议文档翻译字段」。本规范定义的解析器
 让用户**线下**把协议文档喂给任意 AI 生成一份解析脚本，导入后引擎实时把 RX/TX 帧翻译为
@@ -9,13 +9,13 @@
 权威文件：ABI 形状唯一来源 `src/parser/parser-abi.d.ts`（全局命名空间 `BytetideParser`）；
 切帧语义落地 `src/parser/framer.ts`；CRC 实现 `src/parser/crc.ts`；声明式字段 `src/parser/fields.ts`；
 字节还原 `src/parser/lineBytes.ts`。改 ABI 先改 `.d.ts`，再同步 `src/types/parser.ts` 与本文档，
-三处不得各自漂移。计划背景见 `docs/plan-parser-v1.md`（本文即其交付物之一）。
+三处不得各自漂移。
 
 ---
 
 ## 脚本结构
 
-脚本是一个 **ESM 模块，唯一默认导出一个对象**（`bytetide.parser v1`）。两层结构：
+脚本是一个 **ESM 模块，唯一默认导出一个对象**（`bytetide.parser`）。两层结构：
 
 | 层 | 字段 | 执行方式 | 说明 |
 |---|---|---|---|
@@ -47,7 +47,7 @@
 最小完整示例（声明式温控协议，可直接保存为 `temp-control.js` 导入）：
 
 ```js
-// bytetide.parser v1 — 温控协议（声明式示例）
+// bytetide.parser — 温控协议（声明式示例）
 // 帧布局：AA 55 | type(1B) | len(1B) | payload(len-2 B) | CRC16-modbus(2B, 小端)
 // len = payload 字节数 + 2（type 与 len 自身）→ 总帧长 = len + 4
 export default {
@@ -110,8 +110,8 @@ export default {
 - `at` **仅支持 `'tail:N'`**（帧尾倒数 N 字节是 CRC 本身）；N = 算法宽度：sum8/xor8 为 1，
   crc16 为 2，crc32 为 4。存盘 CRC 字节按 `crc.endian` 读为无符号整数与计算值比较
   （缺省 little——modbus 惯例低字节在前）。
-- **V1 限制**：不支持中位 CRC（CRC 在帧中间）、不支持子范围覆盖（只校验头部某段）、
-  不支持多段拼接覆盖。这类协议 V1 请省略 `crc` 声明（切帧照常，帧不标校验状态），
+- **已知限制**：不支持中位 CRC（CRC 在帧中间）、不支持子范围覆盖（只校验头部某段）、
+  不支持多段拼接覆盖。这类协议请省略 `crc` 声明（切帧照常，帧不标校验状态），
   或在 `parse` 内用 `ctx.bt.crc` 自行校验。
 - 校验失败帧：以 `crcOk = false` 吐出、计入警告、**不进翻译**（引擎包装展示原始 hex）；
   帧不进声明式求值，也不进 `parse`。
@@ -188,7 +188,7 @@ framing.crc 与 Worker 内 `bt.crc(algo, bytes)` 共用同一实现（`crc.ts`�
   2 倍上限——更早的行解码了也会被淘汰）；离线 .log 会话走同一条拉取循环，解码自动覆盖。
 - **方向隔离**：切帧状态按 `(sessionId, dir)` 独立——TX 回显与 RX 行在日志表交织，单状态机
   会把两路字节流切碎。
-- **全局单脚本**：V1 一份脚本 + 全局启停，多会话共享；会话级多脚本槽留 V3。
+- **全局单脚本**：一份脚本 + 全局启停，多会话共享；会话级多脚本槽暂未支持。
 - 切帧在**主线程**同步执行（线性扫描毫秒级）；Worker 只执行脚本层 `parse`，且只收完整帧
   （背压丢帧 = 丢结果不脏流）；会话 reset 时引擎代际号 gen+1，旧 Worker 在途结果按 gen 丢弃。
 
@@ -242,18 +242,18 @@ framing.crc 与 Worker 内 `bt.crc(algo, bytes)` 共用同一实现（`crc.ts`�
   报错（防 AI 脚本死循环）。
 - **错误率熔断**：滚动 1000 帧解析错误率 > 30% → 自动停用 + 横幅。
 - 背压：Worker 队列上限 1000 帧/批，超出丢最旧并计警告——丢的是完整帧，**不脏流**。
-- **信任模型 =「只加载审过码的脚本」**：V1 不做来源校验，沙箱是纵深防御而非安全边界；
+- **信任模型 =「只加载审过码的脚本」**：不做来源校验，沙箱是纵深防御而非安全边界；
   不要导入来路不明的脚本。
 
 ---
 
 ## 给 AI 的 prompt 模板
 
-用户拿下面模板 + 协议文档喂给任意 AI，线下生成脚本（V1 的 AI 协作形态）：
+用户拿下面模板 + 协议文档喂给任意 AI，线下生成脚本：
 
 ```text
 你是一名嵌入式串口协议专家。请依据我提供的协议文档，为串口调试工具 ByteTide 编写
-一个协议解析脚本（bytetide.parser v1 ABI）。
+一个协议解析脚本（bytetide.parser ABI）。
 
 硬性要求：
 1. 输出一个 ESM 模块，唯一默认导出一个对象（export default { ... }）；不要 export 其它
@@ -302,7 +302,7 @@ framing.crc 与 Worker 内 `bt.crc(algo, bytes)` 共用同一实现（`crc.ts`�
 ### 示例 1：声明式温控协议
 
 ```js
-// bytetide.parser v1 — 温控协议（声明式）
+// bytetide.parser — 温控协议（声明式）
 export default {
   meta: {
     name: '温控协议',
@@ -332,13 +332,13 @@ export default {
 }
 ```
 
-已知限制（V1）：声明式字段表对所有类型统一生效——`设置响应` 帧只有 1 字节 payload 时，
+已知限制：声明式字段表对所有类型统一生效——`设置响应` 帧只有 1 字节 payload 时，
 `湿度@7` / `报警@8` 安全显示 `—`（越界标注），不会报错；按类型条件布局见示例 2。
 
 ### 示例 2：parse 兜底（同一协议，手写解码）
 
 ```js
-// bytetide.parser v1 — 温控协议（parse 兜底示例：ctx.bt 读数 + map 翻译 + 按类型布局）
+// bytetide.parser — 温控协议（parse 兜底示例：ctx.bt 读数 + map 翻译 + 按类型布局）
 export default {
   meta: {
     name: '温控协议（parse 兜底）',
@@ -414,12 +414,12 @@ export default {
 
 ## 版本与兼容
 
-- **v1 ABI 冻结**：`src/parser/parser-abi.d.ts` 是形状唯一权威；改 ABI 先改它，再同步
+- **ABI 冻结**：`src/parser/parser-abi.d.ts` 是形状唯一权威；改 ABI 先改它，再同步
   `src/types/parser.ts` 与本文档，三处不得各自漂移。
-- V2 展望：应用内 AI 生成解析器（REST 桥调 LLM + 真机数据试运行闭环）。
-- V3 展望：Rust 侧运行时（rquickjs 跑 JS 层，声明式脚本直接 serde + 字段抽取）、encode
+- 展望：应用内 AI 生成解析器（REST 桥调 LLM + 真机数据试运行闭环）。
+- 远期展望：Rust 侧运行时（rquickjs 跑 JS 层，声明式脚本直接 serde + 字段抽取）、encode
   构包（声明式字段表反向填值）、多脚本槽（会话级）、告警规则引用解码字段。
-- V1 明确不做：AI 应用内生成、TX 按字段构包、Rust 侧解码（零后端改动）。
+- 明确不做：AI 应用内生成、TX 按字段构包、Rust 侧解码（零后端改动）。
 
 ## 实现备忘
 

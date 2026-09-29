@@ -1,9 +1,9 @@
 import { SCHEMA_VERSION } from './schema'
 
 /**
- * migration 注册表（plan Stage 2 Task 7）：schema 名 → 逐版本升级函数链。
+ * migration 注册表：schema 名 → 逐版本升级函数链。
  *
- * 本阶段全部 schema 从 v1 起步，legacy 裸数据按「版本 0」跑 0→1 identity 链；
+ * 全部 schema 从版本 1 起步，legacy 裸数据按「版本 0」跑 0→1 identity 链；
  * 链产出后再交给 codec.parse 校验（两层防线：链改形状、parse 定类型）。
  * 未来引入 v2：SCHEMA_VERSION+1，并为需要迁移的 schema 注册 {from:1,to:2} 步。
  */
@@ -54,7 +54,7 @@ export function isKnownSchema(schema: string): boolean {
   return registry.has(schema)
 }
 
-// 生产 schema 的起步链：legacy(0) → v1 恒等（数据形状由各 codec.parse 负责）。
+// 生产 schema 的起步链：legacy(0) → 版本 1 恒等（数据形状由各 codec.parse 负责）。
 for (const s of PRODUCTION_SCHEMAS) {
   registerMigrations(s, [{ from: 0, to: SCHEMA_VERSION, migrate: (d) => d }])
 }

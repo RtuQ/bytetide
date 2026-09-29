@@ -1,10 +1,10 @@
 //! 回放调度线程：离线日志按相邻行 `epoch_millis` 差值重放为伪实时会话。
 //!
-//! # 调度语义（plan Task 6 Step 1 清单全覆盖）
+//! # 调度语义
 //!
 //! - 时序源=相邻行原始时间差 Δ；`delay = min(Δ, max_gap_ms) / speed`（**钳制作用于
-//!   原始 Δ**，实际睡眠 = 钳后值 ÷ 速度 → 恒 ≤ `max_gap_ms / speed`，plan
-//!   「10-second gap cap」语义的确立与测试见 `gap_cap_limits_actual_sleep`）。
+//!   原始 Δ**，实际睡眠 = 钳后值 ÷ 速度 → 恒 ≤ `max_gap_ms / speed`；测试见
+//!   `gap_cap_limits_actual_sleep`）。
 //!   首行 / seek / loop 后首行的 Δ 视为 0（立即入库）。
 //! - 逐行 `runtime.ingest(line, IngestOrigin::Replay)`：原顺序、行 ts/epoch 保持
 //!   原值不重打（回放历史）；告警照常评估并经 sink 稀疏上报；自动回复与捕获触发
@@ -24,7 +24,7 @@
 //!
 //! 细粒度状态写 `SessionRuntime::replay_state`；会话级状态照 live 惯例经
 //! sink.status/error 稀疏上报并写入共享 SessionStatus：起跑→connected（Running）、
-//! 暂停/恢复不换会话状态（细粒度走 replay_state 查询，T7 接线控制面事件）、
+//! 暂停/恢复不换会话状态（细粒度走 replay_state 查询，事件接线在桌面壳）、
 //! Finished/Stopped→disconnected（仅当仍处活动态，重复收尾不重复发事件）、
 //! 页读 IO 错误→error。
 //!
@@ -45,7 +45,7 @@ use crate::sink::EventSink;
 
 use super::model::{valid_speed, ReplayCmd, ReplayConfig, ReplayState};
 
-/// 睡眠分段/暂停轮询上限：Pause/Stop/SetSpeed 最长 50ms 响应（plan 指定）。
+/// 睡眠分段/暂停轮询上限：Pause/Stop/SetSpeed 最长 50ms 响应。
 const SLICE_MS: u64 = 50;
 /// 单页读取/seek 直达页大小（对齐 offline 稀疏索引步长，跳扫 ≤ 一页可接受）。
 const PAGE_LINES: usize = 4096;
@@ -234,7 +234,7 @@ impl ReplayRunner<'_> {
             // 结构性排除——见 SessionRuntime::ingest）
             let outcome = self.runtime.ingest(&line, IngestOrigin::Replay, self.sink);
             self.cursor += 1;
-            // 控制面进度水位（T7：manager 查询面 → ReplayView.line）
+            // 控制面进度水位（manager 查询面 → ReplayView.line）
             *self.runtime.replay_cursor.write() = self.cursor;
             self.page_idx += 1;
             self.prev_epoch = Some(line.epoch_millis);
@@ -734,8 +734,8 @@ mod tests {
 
     #[test]
     fn gap_cap_limits_actual_sleep_to_max_gap_over_speed() {
-        // 语义确立（回报项）：plan「10-second gap cap」读作——钳制作用于原始 Δ
-        // （min(Δ, max_gap_ms)），实际睡眠=钳后值 ÷ speed → 恒 ≤ max_gap_ms/speed。
+        // 钳制作用于原始 Δ（min(Δ, max_gap_ms)），实际睡眠=钳后值 ÷ speed
+        // → 恒 ≤ max_gap_ms/speed。
         // Δ=70_000 > 10_000：speed 1 → 睡 10_000；speed 2 → 5_000；speed 100 → 100。
         for (speed, want) in [(1.0, 10_000), (2.0, 5_000), (100.0, 100)] {
             let mut run = TestRun::new(cfg(speed, false, 10_000), &[1_000, 71_000]);
@@ -932,7 +932,7 @@ mod tests {
 
     #[test]
     fn midnight_wrap_gap_is_preserved() {
-        // 评审 P3：23:59:59.000 → 23:59:59.500 → 00:00:00.500——跨午夜边界的
+        // 23:59:59.000 → 23:59:59.500 → 00:00:00.500——跨午夜边界的
         // 原始间隔（500 + 1000）在回放中完整保留（离线 reader 的回卷补偿使
         // 内部 epoch 单调）；显示 ts 仍为原当日时刻
         let mut run = TestRun::new(

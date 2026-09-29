@@ -3,8 +3,8 @@ import { makeCodec } from '../persistence/schema'
 import { loadValue, saveStored } from '../persistence/storage'
 
 /**
- * 通知开关（通知重设计 v2）：单个总开关，统一门控连接状态与串口插拔提示。
- * localStorage 键 `serialtool.notifications`（v1 信封），模块级单例——
+ * 通知开关：单个总开关，统一门控连接状态与串口插拔提示。
+ * localStorage 键 `serialtool.notifications`（版本化信封），模块级单例——
  * SettingsPopover 的开关与 useTauriEvents 的弹出门控共享同一份状态。
  * 纯校验在 codec.parse，副作用统一走 src/persistence。
  */

@@ -20,8 +20,8 @@ import { newKeywordId, newRuleId } from './rules'
 import type { Session } from './model'
 
 /**
- * 预设/持久化域纯函数（Task 6）：连接配置预设、快捷帧、发送序列、配置预设库、
- * 搜索历史、日志配置——localStorage 读写（src/persistence v1 信封，键名不变，
+ * 预设/持久化域纯函数：连接配置预设、快捷帧、发送序列、配置预设库、
+ * 搜索历史、日志配置——localStorage 读写（src/persistence 版本化信封，键名不变，
  * 旧裸 JSON 首次成功读取时自动迁移回写信封）与列表运算。列表运算返回新数组
  * （或 null=拒绝），由门面写回 store 状态；本模块不持有响应式状态、不调 useSessionStore。
  */

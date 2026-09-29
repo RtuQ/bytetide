@@ -8,10 +8,10 @@ import type { MessageKey } from '../i18n'
 import type { ReplayAction, ReplayState, ReplayView } from '../ipc/types'
 
 /**
- * 回放控制工具条（Stage 3 Task 7）：仅 replay 会话渲染（由 LogView 挂载）。
+ * 回放控制工具条：仅 replay 会话渲染（由 LogView 挂载）。
  * 播放/暂停/停止 + 倍速 + 循环 + 行号水位 + 跳转滑块；控制经 ipc 命令适配层，
  * 返回的 ReplayView 与 replay-state 事件同载荷，谁先到都幂等落账（store 纪律）。
- * plan：事件仅在状态/控制变化时发——EOF/Error 等无控制命令的变化由 500ms
+ * 事件仅在状态/控制变化时发——EOF/Error 等无控制命令的变化由 500ms
  * status 轮询兜底；seek 拖动中只本地更新目标行号，change（松手）才发 IPC 防洪水。
  */
 const props = defineProps<{ sessionId: string }>()

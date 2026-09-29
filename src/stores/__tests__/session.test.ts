@@ -232,7 +232,7 @@ describe('AI 批注同步', () => {
   })
 })
 
-describe('centerView / compareMode（布局重构 V1）', () => {
+describe('centerView / compareMode', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
   it('新会话 centerView 默认 log', () => {
@@ -318,7 +318,7 @@ describe('centerView / compareMode（布局重构 V1）', () => {
   })
 })
 
-describe('decoded 解码帧（plan-parser-v1）', () => {
+describe('decoded 解码帧', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
   it('applyDecoded 追加 + markRaw + 1000 条 FIFO', () => {
@@ -417,7 +417,7 @@ describe('落盘录制 recOn（录制/分段）', () => {
   })
 })
 
-describe('ringDropped ring 缺口检测（plan-buffer-logging-v1）', () => {
+describe('ringDropped ring 缺口检测', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
   function mkPulled(ringNo: number) {
@@ -475,7 +475,7 @@ describe('ringDropped ring 缺口检测（plan-buffer-logging-v1）', () => {
   })
 })
 
-describe('evictedPending / takeEvicted 视口锚定计数（plan-buffer-logging-v1）', () => {
+describe('evictedPending / takeEvicted 视口锚定计数', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
   function mkPulledEv(ringNo: number) {
@@ -511,7 +511,7 @@ describe('evictedPending / takeEvicted 视口锚定计数（plan-buffer-logging-
   })
 })
 
-describe('logConfig viewBufCap / midnightRotate（plan-buffer-logging-v1）', () => {
+describe('logConfig viewBufCap / midnightRotate', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     // node 环境无 localStorage：注入内存 stub（参照 useLayoutPrefs.test.ts）
@@ -619,7 +619,7 @@ describe('prependBackfill 翻页补旧行（方案 B）', () => {
     // 旧 ring 纪元：reconnectNo 抬到当前 lineCounter 后头部不可补
     store.sessions[id]!.reconnectNo = store.sessions[id]!.lineCounter
     expect(store.prependBackfill(id, [mkPulledBf(0)])).toEqual([])
-    // indexed 离线会话（Task 8 分页）可回补：no==rn 对齐下按原行号插到头部
+    // indexed 离线（分页）会话可回补：no==rn 对齐下按原行号插到头部
     const off = store.createLocalSession('bf-3-off', CFG)
     store.sessions[off]!.kind = 'offline'
     // 模拟流式打开的尾窗定位：no/rn 从 5 起（行号=文件行号）
@@ -650,7 +650,7 @@ describe('prependBackfill 翻页补旧行（方案 B）', () => {
   })
 })
 
-describe('loadOfflineSession 流式分页打开（Task 8）', () => {
+describe('loadOfflineSession 流式分页打开', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     invokeMock.mockReset()
@@ -734,7 +734,7 @@ describe('loadOfflineSession 流式分页打开（Task 8）', () => {
   })
 })
 
-describe('byteLength 二进制字节计数（stage-1 Task 5）', () => {
+describe('byteLength 二进制字节计数', () => {
   it('prefers original bytes over lossy UTF-8 text', () => {
     expect(byteLength({ bytes: [0xff], text: '\ufffd' })).toBe(1)
   })
@@ -748,7 +748,7 @@ describe('byteLength 二进制字节计数（stage-1 Task 5）', () => {
   })
 })
 
-describe('tallyBytes 二进制行计数（stage-1 Task 5）', () => {
+describe('tallyBytes 二进制行计数', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
   it('带原始 bytes 的行按 bytes.length 计数，不把 lossy 文本再编码', () => {
@@ -774,7 +774,7 @@ describe('tallyBytes 二进制行计数（stage-1 Task 5）', () => {
   })
 })
 
-describe('openLogPath 打开当前日志文件（stage-1 Task 5）', () => {
+describe('openLogPath 打开当前日志文件', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     invokeMock.mockReset()

@@ -9,7 +9,7 @@ import type {
 import type { Session } from './model'
 
 /**
- * 规则域纯函数（Task 6）：关键词高亮 / 过滤链 / 自动回复 / 告警 / 现场捕获的
+ * 规则域纯函数：关键词高亮 / 过滤链 / 自动回复 / 告警 / 现场捕获的
  * 增删改逻辑。显式传入会话对象原地变更，不内部调用 useSessionStore；变更后的
  * 后端推送（pushLiveRules/_pushPlot）由门面编排。
  */

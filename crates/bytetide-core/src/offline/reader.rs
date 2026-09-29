@@ -110,7 +110,7 @@ impl OfflineReader {
             self.anchor_state(want_start)
         };
         // 页内回卷状态机从锚点快照续接：任意页读顺序产出的调整后 epoch
-        // 与索引期顺序扫描逐行一致（评审 P3 跨午夜补偿）
+        // 与索引期顺序扫描逐行一致（跨午夜补偿）
         let mut wrap = DayWrap::resume(day_off, prev_raw);
         let mut file = std::fs::File::open(&self.path)?;
         file.seek(SeekFrom::Start(start_off))?;

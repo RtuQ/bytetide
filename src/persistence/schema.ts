@@ -1,5 +1,5 @@
 /**
- * 持久化 schema 基元（plan Stage 2 Task 7）：信封类型 / codec / 版本常量。
+ * 持久化 schema 基元：信封类型 / codec / 版本常量。
  *
  * 所有 localStorage 键的「值」升级为信封 `{ schema, version, data }`（键名不变，
  * AGENTS.md 的键清单是合同）。schema 名取键的 `serialtool.` 后缀（如 'logConfig'），
@@ -58,9 +58,9 @@ export function isEnvelope(v: unknown): v is StoredEnvelope<unknown> {
 }
 
 // ---------------------------------------------------------------------------
-// 场景库 codec（Stage 3 Task 4）：localStorage 键 `serialtool.scenarios`，
-// 信封 schema 名 `bytetide.scenario-library`（plan 指定名，非「键去前缀」惯例），
-// v1 起步。形状校验委托 types/automation.ts 的结构守卫（与 JSON 导入共用）。
+// 场景库 codec：localStorage 键 `serialtool.scenarios`，
+// 信封 schema 名 `bytetide.scenario-library`（非「键去前缀」惯例），
+// 版本 1 起步。形状校验委托 types/automation.ts 的结构守卫（与 JSON 导入共用）。
 // migrations 注册表未含此名——storage 层对未注册 schema 的 legacy 数据走
 // identity 链，行为等价（最终类型守门在本 codec.parse）。
 // ---------------------------------------------------------------------------

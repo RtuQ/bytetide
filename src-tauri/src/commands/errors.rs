@@ -1,4 +1,4 @@
-//! 命令层错误码 helper（i18n 阶段 2）。
+//! 命令层错误码 helper。
 //!
 //! Tauri 命令 `Result<T, String>` 的 Err 字符串统一走 `"{code}|{detail}"` 前缀约定：
 //! `code` = 稳定 snake_case 错误码（前端词典 `errors.<code>` 承担文案，全集契约见

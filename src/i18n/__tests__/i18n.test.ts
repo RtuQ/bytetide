@@ -68,7 +68,7 @@ describe('t 与语言切换', () => {
 })
 
 describe('持久化', () => {
-  it('setLocale 写 v1 信封（schema locale）', () => {
+  it('setLocale 写版本化信封（schema locale）', () => {
     setLocale('en')
     const raw = store.dump().get('serialtool.locale')
     expect(raw).toBeDefined()

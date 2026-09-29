@@ -2,7 +2,7 @@
  * 内置示例解析脚本（声明式，零代码执行）——ParserPanel「加载内置示例体验」用。
  * 源码必须是可直接 import() 的合法 ESM（脚本内容由引擎 schema 校验后装载）。
  */
-export const BUILTIN_EXAMPLE_SRC: string = `// bytetide.parser v1 · 内置示例：温控协议 v2.1（声明式，无 parse 脚本层）
+export const BUILTIN_EXAMPLE_SRC: string = `// bytetide.parser · 内置示例：温控协议 v2.1（声明式，无 parse 脚本层）
 //
 // 帧布局（与 framing 自洽：总帧长 = 长度域@3 的值 + add 4）：
 //   [0..1] 同步字 AA 55

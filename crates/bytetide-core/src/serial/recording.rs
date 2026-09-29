@@ -1,8 +1,8 @@
 //! 落盘录制控制：`SessionLog` writer 的开/写/分段/暂停/午夜轮转收口在
-//! [`RecordingController`]。Stage 2 Task 3 自 manager.rs 迁出：
-//! `next_segment_path` / `segment_due` / `default_log_path` 与 stream_loop 内的
-//! writer 切换逻辑。暂停/恢复/显式分段/同秒冲突 -2/-3/午夜轮转/空路径（不落盘，
-//! CLI 缺省）语义逐字保留；writer 的切换只发生在持有它的读线程内。
+//! [`RecordingController`]，含 `next_segment_path` / `segment_due` /
+//! `default_log_path` 与 stream_loop 内的 writer 切换逻辑：暂停/恢复/显式分段/
+//! 同秒冲突 -2/-3/午夜轮转/空路径（不落盘，CLI 缺省）；writer 的切换只发生在
+//! 持有它的读线程内。
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -201,7 +201,7 @@ fn segment_due(enabled: bool, last_date: NaiveDate, now_date: NaiveDate) -> bool
 
 #[cfg(test)]
 mod tests {
-    //! 路径命名纯函数（自 manager 迁移的既有断言）+ 控制器行为（临时目录，不触业务目录）。
+    //! 路径命名纯函数断言 + 控制器行为（临时目录，不触业务目录）。
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -383,7 +383,7 @@ mod tests {
         rec.clear().expect("clear");
         rec.flush().expect("flush");
         assert_eq!(read_file(&path), "");
-        // 复审 CI 回归：截断后续写必须从文件头开始（Windows append 句柄
+        // 截断后续写必须从文件头开始（Windows append 句柄
         // set_len 会 Access Denied，改 write+seek 后游标归零语义由此处钉死）
         rec.write(&mk_line("after")).expect("write");
         rec.flush().expect("flush");

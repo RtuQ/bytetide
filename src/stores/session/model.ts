@@ -61,7 +61,7 @@ export interface Session {
    *  旧 ring 的 rn，而新 ring no 从 1 重新计数，no <= reconnectNo 的行不可往前
    *  翻页回补（旧 ring 已销毁）。makeSession=0；clearLog 重置 0。 */
   reconnectNo: number
-  /** 翻页补旧行累计（方案 B）：视图缓冲裁掉的行从 ring 回补的总行数（兼作
+  /** 翻页补旧行累计：视图缓冲裁掉的行从 ring 回补的总行数（兼作
    *  useHighlighter/useLineStats/usePlotData 的 prepend 重建信号）；
    *  重连不迁移（新 ring 无旧史可补）；清屏归零 */
   backfillTotal: number
@@ -107,7 +107,7 @@ export interface Session {
   /** 回放控制面（仅 kind='replay'）：状态/倍速/循环/当前行水位（runtime 策略：
    *  重连回落 null——回放会话不可重连；清屏不动——控制面与日志行数据无关） */
   replay: ReplayRuntime | null
-  /** 离线源文件元信息（Task 8 流式打开写入）：数据行数与首/末行 epoch 毫秒。
+  /** 离线源文件元信息（流式打开写入）：数据行数与首/末行 epoch 毫秒。
    *  live 会话恒 0；描述源文件本身（清屏/重连均不抹）。replay 会话写入 lineCount
    *  供回放工具条显示总行数。现状无 UI 消费者（旧全量链路 parseLogFile 的 total
    *  直接丢弃），预留给状态栏/对比视图 */

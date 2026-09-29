@@ -1,8 +1,8 @@
 //! 触发式现场捕获（行车记录仪）：armed/deadline/档案文件行为收口在
-//! [`CaptureController`]，消费 `&RingBuf` + `&dyn EventSink`。
-//! Stage 2 Task 3 自 manager.rs 迁出：`CaptureRun` / `next_capture_path` /
-//! `capture_start` / `cap_maybe_arm` / `cap_on_line` / `cap_finalize`，行为逐字保留——
-//! 含「触发行既在 pre 窗口快照中、又经续写再入档一次」的既有双写行为（语义冻结不改）。
+//! [`CaptureController`]，消费 `&RingBuf` + `&dyn EventSink`；`CaptureRun` /
+//! `next_capture_path` / `capture_start` / `cap_maybe_arm` / `cap_on_line` /
+//! `cap_finalize` 同在此。含「触发行既在 pre 窗口快照中、又经续写再入档一次」
+//! 的双写行为。
 
 use std::path::{Path, PathBuf};
 

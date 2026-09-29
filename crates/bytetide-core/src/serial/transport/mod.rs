@@ -1,7 +1,6 @@
 //! 数据源链路抽象：`Transport` trait 与 `open_transport` 分发。
-//! Stage 2 Task 3 自 manager.rs 迁出：`Link`/`NetLink`/`establish_link` 合并为
-//! trait + 三个具体实现（serial/tcp/udp），host/bind/describe/is_net 等 helper 随迁。
-//! 网络超时（NET_READ_TIMEOUT=200ms）与 UDP/TCP 语义逐字保留。
+//! 三个具体实现（serial/tcp/udp）与 host/bind/describe/is_net 等 helper；
+//! 网络读超时 NET_READ_TIMEOUT=200ms。
 
 use std::io;
 use std::time::Duration;
@@ -263,7 +262,7 @@ mod tests {
         assert_eq!(err.to_string(), "network transport has no signal line");
     }
 
-    // ---------- 纯 helper（自 manager 迁移的既有断言） ----------
+    // ---------- 纯 helper ----------
 
     #[test]
     fn host_of_network_and_serial() {

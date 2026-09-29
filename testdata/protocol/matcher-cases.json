@@ -1,5 +1,5 @@
 {
-  "$about": "bytetide 协议黄金样本 v1（REST 桥 /exchange 交换匹配器）。错误码与 Stage 1 冻结的稳定契约一致（src-tauri/src/bridge/routes/exchange.rs）：invalid_regex / invalid_hex / invalid_mask / invalid_direction / conflicting_matchers，非法输入一律 400 绝不降级 match-all。TS 消费：src/__tests__/protocol-fixtures.test.ts；Rust 消费：exchange.rs 测试 include_str!（Task 7 收尾接入）。改动本文件必须两侧测试同步。",
+  "$about": "bytetide 协议黄金样本（REST 桥 /exchange 交换匹配器）。错误码与冻结的稳定契约一致（src-tauri/src/bridge/routes/exchange.rs）：invalid_regex / invalid_hex / invalid_mask / invalid_direction / conflicting_matchers，非法输入一律 400 绝不降级 match-all。TS 消费：src/__tests__/protocol-fixtures.test.ts；Rust 消费：exchange.rs 测试 include_str!。改动本文件必须两侧测试同步。",
   "version": 1,
 
   "validMatchers": {

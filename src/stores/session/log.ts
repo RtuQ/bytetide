@@ -4,7 +4,7 @@ import type { DecodedFrame } from '../../types/parser'
 import type { LogLine, RawLogLine } from '../../types'
 import type { Session } from './model'
 
-/** 解码帧环形上限（plan-parser-v1：1000 条/会话 FIFO） */
+/** 解码帧环形上限（1000 条/会话 FIFO） */
 export const MAX_DECODED = 1000
 
 /** 超出视图缓冲上限从头部裁剪最旧行：累计 droppedLines（lifetime）与
@@ -76,12 +76,12 @@ export function appendPulledInto(
 }
 
 /**
- * 翻页补旧行（方案 B，原 prependBackfill 主体）：视图缓冲裁掉的行若仍在后端
+ * 翻页补旧行：视图缓冲裁掉的行若仍在后端
  * ring 窗口内，上滑时回补到头部。沿用被裁前的原行号（no = headNo-k+i 连续延伸
  * ——no 连续性是 SearchPanel O(1) 映射与书签/跳转的前提），不推进
  * lineCounter/pullNo，不动 droppedLines/ringDropped/evictedPending。
  * live 会话要求视图头属当前 ring 纪元（head.no > reconnectNo）方可补；
- * indexed 离线（Task 8 分页）no==rn 恒等、reconnectNo 恒 0，同一守卫天然放行。
+ * indexed 离线（分页）no==rn 恒等、reconnectNo 恒 0，同一守卫天然放行。
  * 返回本次回补的行。
  */
 export function prependBackfillInto(

@@ -1,4 +1,4 @@
-//! 场景自动化命令层（Stage 3 Task 3）：校验摘要 / 启动 / 停止 / 状态 / 报告。
+//! 场景自动化命令层：校验摘要 / 启动 / 停止 / 状态 / 报告。
 //!
 //! 分层（同 commands/replay.rs 做法）：tauri 壳只差 State 提取与 AppHandle emit——
 //! 纯逻辑（校验摘要、会话守卫、运行登记表、host 适配）拆为可测单元，集成测试
@@ -83,7 +83,7 @@ pub struct ValidatedScenarioSummary {
 }
 
 /// 进度水位（当前执行到第几个叶子步 / 静态总步数；由 runner 显式步骤回调驱动，
-/// plan 形状中的 path 随 scenario-progress 事件提供、水位查询面不存）。
+/// path 随 scenario-progress 事件提供、水位查询面不存）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressView {
@@ -140,10 +140,9 @@ pub fn validate_summary(scenario: Scenario) -> ValidatedScenarioSummary {
     }
 }
 
-/// 场景启动会话守卫（Task 8 Step 3 放宽）：live 会话全步型可跑；offline 无条件
+/// 场景启动会话守卫：live 会话全步型可跑；offline 无条件
 /// 拒绝；replay 仅当场景含 send/signal 步（含 Repeat 体）时拒绝——回放只读，
-/// wait/assert/delay/repeat 对回放产生的行有效（plan Stage 3 里程碑「scenario
-/// wait/assert behavior works against replay」）。命令层与集成测试共用路径。
+/// wait/assert/delay/repeat 对回放产生的行有效。命令层与集成测试共用路径。
 pub fn ensure_session_runnable(
     manager: &PortManager,
     session_id: &str,
@@ -662,7 +661,7 @@ pub fn scenario_report_cmd(
 #[cfg(test)]
 mod tests {
     //! 命令层形状冻结：ScenarioRunView/ValidatedScenarioSummary 的 serde
-    //! camelCase 键与 plan Task 3 对齐。
+    //! camelCase 键形状冻结。
     use super::*;
 
     #[test]

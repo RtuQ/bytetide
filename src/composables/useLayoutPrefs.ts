@@ -4,7 +4,7 @@ import { loadValue, saveStored } from '../persistence/storage'
 
 /** 布局类 UI 偏好（localStorage 持久化）：侧栏面板开合 / 日志↔图表分屏高度比 /
  *  底部 dock 状态 / 侧栏宽度收起。纯函数（钳制/解析）与副作用分离，存储统一走
- *  src/persistence（v1 信封 + 旧裸 JSON 自动迁移），vitest node 环境注入
+ *  src/persistence（版本化信封 + 旧裸 JSON 自动迁移），vitest node 环境注入
  *  localStorage stub 或 setStorageBackend 即可直测。 */
 
 export type DockTab = 'decode' | 'alerts' | 'monitor'

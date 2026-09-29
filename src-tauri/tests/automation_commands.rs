@@ -1,7 +1,7 @@
-//! 场景命令层集成测试（Stage 3 Task 3）：真 PortManager + 本机 loopback TCP 回声
+//! 场景命令层集成测试 ：真 PortManager + 本机 loopback TCP 回声
 //! 会话，走命令层同一实现路径（start_scenario / AutomationRegistry /
 //! cancel_and_disconnect——tauri 壳只差 State 提取与 AppHandle emit）。
-//! 覆盖 plan 清单：校验失败、缺失/离线/回放会话拒绝、同会话二次运行拒绝
+//! 覆盖：校验失败、缺失/离线/回放会话拒绝、同会话二次运行拒绝
 //! （不同会话可并行）、progress 事件顺序、stop 幂等、disconnect 取消、
 //! 报告获取（json/junit）、完成后清理（50 上限逐出最旧 completed，running 永不逐出）。
 
@@ -234,7 +234,7 @@ fn start_rejects_invalid_scenario_and_forbidden_sessions() {
     let err = start_scenario(&registry, &m, &off, ping_pong_scenario(), noop_emit()).unwrap_err();
     assert_eq!(err, "offline_no_scenario|");
 
-    // 回放会话 + 含 send 步场景拒绝（Task 8 Step 3 放宽后：只读场景可跑、
+    // 回放会话 + 含 send 步场景拒绝（放宽后：只读场景可跑、
     // 发送面步骤仍拒——语义见 tests/cross_feature.rs 的回放只读用例）
     let dir = temp_dir("replay-reject");
     let path = write_log(dir.0.as_path(), "r.log", 3);

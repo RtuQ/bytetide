@@ -2,7 +2,7 @@
 //!
 //! 内存 fake service + `bridge::router(service, config)` 构造 axum Router，
 //! 经 `tower::ServiceExt::oneshot` 直接喂 Request（不起真监听、不触串口）。
-//! 覆盖 plan Task 7 Step 1 指定用例：匿名 /health、令牌门禁、allowSend 门禁、
+//! 覆盖指定用例：匿名 /health、令牌门禁、allowSend 门禁、
 //! 非法 matcher 400（ApiError 信封）、立即响应回归、会话缺失、运行态 serde 形状。
 
 use std::sync::{Arc, Mutex};
@@ -155,7 +155,7 @@ impl BridgeService for FakeService {
         })
     }
 
-    /// 有界读取计数（评审 P1-1 回归）：/lines、/annotations 不得再调 snapshot。
+    /// 有界读取计数（回归）：/lines、/annotations 不得再调 snapshot。
     fn snapshot(&self, _id: &str) -> Result<Vec<BridgeLine>, ServiceError> {
         let mut g = self.inner.lock().expect("fake mutex");
         g.snapshot_calls += 1;
@@ -460,7 +460,7 @@ fn bridge_view_runtime_error_serializes_camel_case_and_lowercase_state() {
     assert_eq!(json["config"]["allowSend"], serde_json::json!(false));
 }
 
-// =============================== /lines 有界读取（评审 P1-1） ===============================
+// =============================== /lines 有界读取 ===============================
 
 /// 无过滤 + limit：offset/limit 直接下推为单次有界页读，绝不 snapshot。
 #[tokio::test]

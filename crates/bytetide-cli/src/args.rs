@@ -378,7 +378,7 @@ mod tests {
         assert!(Cli::try_parse_from(["bytetide", "monitor", "-p", "COM3", "--data", "9"]).is_err());
     }
 
-    // ---------- run 子命令（Task 5） ----------
+    // ---------- run 子命令 ----------
 
     #[test]
     fn clap_parses_run_flags() {

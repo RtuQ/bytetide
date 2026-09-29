@@ -625,7 +625,7 @@ fn regex_non_participating_group_saves_empty_string() {
 
 #[test]
 fn wait_matcher_literal_substitutes_captured_variable() {
-    // 先捕获 token，再用它构造后续 Wait 的 matcher（评审影响示例的最小复现）
+    // 先捕获 token，再用它构造后续 Wait 的 matcher
     let s = validated(
         &[],
         vec![
@@ -737,7 +737,7 @@ fn dynamic_literal_rejects_nonzero_capture_group_at_runtime() {
 
 #[test]
 fn dynamic_hex_and_mask_matchers_reject_nonzero_capture_group_at_runtime() {
-    // 复审 R-P2-1 补全：动态 hex/mask 同 literal——只暴露 group 0，运行期越界
+    // 动态 hex/mask 同 literal——只暴露 group 0，运行期越界
     // 报 capture_group_invalid（变量值须为合法 hex 对，否则先报 invalid_hex/
     // invalid_mask 而非本用例目标码）
     let hex_case = validated(

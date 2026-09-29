@@ -8,7 +8,7 @@ export type ThemeMode = 'dark' | 'light'
 const THEME_KEY = 'serialtool.theme'
 
 /** 信封 codec（schema 'theme'）：旧裸字符串 'dark'/'light'（含非 JSON 原文）由
- *  loadStored 迁移，首次成功读取即回写 v1 信封。index.html 内联脚本同步认两种
+ *  loadStored 迁移，首次成功读取即回写版本化信封。index.html 内联脚本同步认两种
  *  形状（默认值初始化的两处之一，改默认必须同步两处——AGENTS.md）。 */
 const themeCodec = makeCodec<ThemeMode>('theme', (raw) => {
   if (raw === 'light' || raw === 'dark') return raw

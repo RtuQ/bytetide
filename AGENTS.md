@@ -153,7 +153,7 @@ body 用 `.panel-body`；需限高滚动的用 `.kw-body` / `.ar-body`（已带 
   归零全量重建，防下标位移漏扫/重扫）、useLineStats/usePlotData 补同源 watch 触发。
   补行**不喂 feedParser**（framer 是 (sessionId,dir) 有序状态机，乱序历史行破坏切帧）。
   仅 live 会话适用（离线行无 rn）；后端 `RingBuf::lines_before_no`/`ring_bounds` 在 manager.rs。
-- **协议解析引擎（feat/parser-v1，规范见 docs/parser-spec.md）**：导入 `bytetide.parser v1`
+- **协议解析引擎（feat/parser-v1，规范见 docs/parser-spec.md）**：导入 `bytetide.parser`
   脚本（声明式字段层为主 / JS parse 兜底 / 纯切帧器），把 RX/TX 帧实时翻译为解码行。
   **切帧在主线程**（`src/parser/framer.ts` 状态机按 (sessionId,dir) 隔离），声明式解码零代码执行；
   脚本层 parse 跑 blob module Worker 沙箱（`bootstrap.ts`，reqId 看门狗 ack 3s/results 10s 超时即

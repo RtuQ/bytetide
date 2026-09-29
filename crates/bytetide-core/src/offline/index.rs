@@ -35,7 +35,7 @@ pub fn open_offline(path: &Path) -> Result<(OfflineIndex, OfflineReader), Offlin
     let mut off: u64 = 0;
     let mut data_no: u64 = 0;
     let mut bad_rows: u64 = 0;
-    // 跨午夜回卷补偿（评审 P3）：内部 epoch = 当日毫秒 + 日期偏移，保持单调——
+    // 跨午夜回卷补偿：内部 epoch = 当日毫秒 + 日期偏移，保持单调——
     // 回放相邻行间隔与 durationMs 在 23:59:59→00:00:00 边界不再塌缩为 0
     let mut wrap = DayWrap::new();
     let mut first_epoch: u64 = 0;
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn midnight_wrap_offsets_epochs_monotonic() {
-        // 评审 P3：23:59:59 → 00:00:01 跨午夜——内部 epoch 补 +24h 保持单调
+        // 23:59:59 → 00:00:01 跨午夜——内部 epoch 补 +24h 保持单调
         //（回放间隔/时长不再塌缩），显示用 ts 字符串原样不变；锚点回跳单行读
         // 与顺序整页读结果一致
         let dir = temp_dir("idx-wrap");
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn open_offline_consumes_golden_tsv_fixture() {
-        // 共享黄金样本 testdata/protocol/tsv-v1.log（TS useLogParser.test.ts 同源）：
+        // 共享黄金样本 testdata/protocol/tsv-recording.log（TS useLogParser.test.ts 同源）：
         // 流式索引/分页全链路，含 # 注释头、坏行、epoch 回退、lossy U+FFFD。
         use crate::offline::test_support::TSV_FIXTURE;
         let dir = temp_dir("idx-fixture");

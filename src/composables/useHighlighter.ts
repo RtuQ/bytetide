@@ -196,7 +196,7 @@ export function useHighlighter(
   // 增量游标：上次已扫到的行数组下标 + 参与过统计的匹配器身份。
   // 匹配器/关键词变化或缓冲截断（长度小于游标）时全量重建；否则只扫新增行--
   // 搜索激活时长跑大缓冲不再每 300ms 全量重扫（吞吐赤字根因之一）。
-  // 方案 B 头部回补不推进 lineCounter 但使全部下标位移，getPrepends 变化
+  // 头部回补不推进 lineCounter 但使全部下标位移，getPrepends 变化
   // （= backfillTotal 增长）同样强制全量重建，否则游标错位漏扫/重扫。
   let cursor = 0
   let lastSm: RegExp | null = null

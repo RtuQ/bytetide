@@ -1,7 +1,7 @@
 //! 会话编排层：PortManager 建 runtime → 开链路（读线程内）→ spawn/join 线程 →
-//! 路由命令 → 查询访问器。Stage 2 Task 3 后本文件不再含链路分支（transport/）、
-//! 落盘录制与路径命名（recording.rs）、现场捕获（capture.rs）、读循环与行评估
-//! （runtime.rs 的 session_thread/stream_loop/ingest）。
+//! 路由命令 → 查询访问器。本文件不含链路分支（transport/）、落盘录制与路径
+//! 命名（recording.rs）、现场捕获（capture.rs）、读循环与行评估（runtime.rs 的
+//! session_thread/stream_loop/ingest）。
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -21,8 +21,7 @@ use crate::logfmt;
 use crate::offline::{open_offline, OfflineIndex, OfflineReader};
 use crate::replay::{spawn_replay, ReplayCmd, ReplayConfig, ReplayState};
 use crate::sink::EventSink;
-// ring/runtime/transport/共享 DTO 自本文件迁出（Stage 2 Task 2/3）：
-// 旧公开路径经再导出保持一个发布周期
+// 再导出：ring/runtime/transport/共享 DTO 的旧公开路径 serial::manager::* 保持可用
 pub use super::ring::{BridgeLine, BridgeStats, MatchHit, RingBounds, RingBuf, RING_CAP};
 pub use super::runtime::{SessionRuntime, SessionState, SessionStatus};
 pub use super::transport::Pin;
@@ -266,7 +265,7 @@ impl PortManager {
         id
     }
 
-    /// 创建离线分页会话（Stage 2 Task 8）：core 建稀疏索引（每 4096 数据行记字节
+    /// 创建离线分页会话：core 建稀疏索引（每 4096 数据行记字节
     /// 偏移）后 ring 保持为空——`ring_lines_after_no`/`ring_lines_before_no`/
     /// `bridge_snapshot`/`bridge_follow`/`bridge_last_no`/`bridge_stats`/
     /// `ring_bounds` 对该会话改走 `OfflineReader` 按页直读源文件（虚拟 ring），
@@ -328,7 +327,7 @@ impl PortManager {
     }
 
     /// [`Self::start_replay`] 的完整版：同时返回离线索引摘要（行数与首末行 epoch
-    /// 毫秒——前端回放工具条的总行数/时长来源，T7 命令层入口）。
+    /// 毫秒——前端回放工具条的总行数/时长来源，命令层入口）。
     pub fn start_replay_indexed(
         &self,
         path: &Path,
@@ -390,7 +389,7 @@ impl PortManager {
 
     /// 回放控制命令投递（仅 Replay 会话；非回放/不存在报稳定错误）。命令异步生效
     /// （runner ≤50ms 排水），调用方经 [`Self::replay_view`] 轮询到位。
-    /// T7 命令层入口：SessionHandle 已持有控制通道（T6），此处只补公开路由面。
+    /// 命令层入口：SessionHandle 已持有控制通道，此处只补公开路由面。
     pub fn replay_control(&self, id: &str, cmd: ReplayCmd) -> anyhow::Result<()> {
         let sessions = self.sessions.read();
         let h = sessions.get(id).ok_or_else(session_not_found)?;
@@ -409,7 +408,7 @@ impl PortManager {
 
     /// 回放控制面视图：细粒度状态 + 当前文件行号水位（最后已 ingest 的源文件行；
     /// seek 后未恢复=目标-1，loop 回卷=0）。非回放会话/不存在返回 None
-    /// （T7 命令层据此报「会话不存在或非回放会话」）。
+    /// （命令层据此报「会话不存在或非回放会话」）。
     pub fn replay_view(&self, id: &str) -> Option<(ReplayState, u64)> {
         let sessions = self.sessions.read();
         let h = sessions.get(id)?;
@@ -516,7 +515,7 @@ impl PortManager {
             .collect()
     }
 
-    /// 会话模式（场景启动守卫用，Stage 3 Task 3）：live 可跑场景；offline/replay
+    /// 会话模式（场景启动守卫用）：live 可跑场景；offline/replay
     /// 与不存在分别返回对应值——`None`=会话不存在。
     pub fn session_mode(&self, id: &str) -> Option<&'static str> {
         self.sessions.read().get(id).map(|h| match h.kind {
@@ -558,7 +557,7 @@ impl PortManager {
 
     /// 按行号精确读单行（会话缺失 Err；行不存在 `Ok(None)`；`no=0` 恒 None）。
     /// ring/离线文件的 no 都按序连续 → `lines_after(no-1, 1)` 一步定位，供
-    /// REST `/lines?no=` 与批注回填做有界读取（评审 P1-1：不物化全量快照）。
+    /// REST `/lines?no=` 与批注回填做有界读取（不物化全量快照）。
     pub fn bridge_line_by_no(&self, id: &str, no: u64) -> anyhow::Result<Option<BridgeLine>> {
         let sessions = self.sessions.read();
         let h = sessions.get(id).ok_or_else(session_not_found)?;

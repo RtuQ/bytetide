@@ -1,9 +1,9 @@
-//! 场景自动化（Stage 3）：v1 版本化场景模型、静态校验与预编译匹配器（Task 1）、
-//! 迭代式运行器与宿主抽象（Task 2 `runner`）、报告 JSON/JUnit 序列化（Task 2
-//! `report`）；桌面/CLI 适配（Task 3/5）挂在本模块下游。
+//! 场景自动化：版本化场景模型、静态校验与预编译匹配器（`model`/`matcher`）、
+//! 迭代式运行器与宿主抽象（`runner`）、报告 JSON/JUnit 序列化（`report`）；
+//! 桌面/CLI 适配挂在本模块下游。
 //!
 //! serde 形状是契约，JSON 黄金样例在仓库根 `testdata/scenarios/`——改字段必须同步
-//! fixture 与前端镜像类型（Task 4 的 `src/types/automation.ts`）。
+//! fixture 与前端镜像类型（`src/types/automation.ts`）。
 
 pub mod matcher;
 pub mod model;

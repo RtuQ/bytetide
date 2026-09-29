@@ -15,13 +15,13 @@ import DockMonitor from './DockMonitor.vue'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 
-/** 底部 dock 容器（docs/plan-layout-v1.md §2-③）：
+/** 底部 dock 容器：
  *  页签（解码 / 告警历史 / 监控）+ 上缘拖高 + 收起；状态持久化到 serialtool.dock。
  *  开合入口：右侧箭头 / 已停留页签再点（收起）/ 收起态点任意页签（展开并切换）。
  *  无 props / emits，由布局集成层挂载。 */
 const alerts = useAlertStore()
 const store = useSessionStore()
-// 解析开关（plan-parser-v1）：解码页签仅在脚本启用时出现
+// 解析开关：解码页签仅在脚本启用时出现
 const { ui } = useParserEngine()
 
 const initial = loadDockPrefs(window.innerHeight)

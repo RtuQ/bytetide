@@ -1,12 +1,12 @@
 //! 回放模型：配置（速度/循环/gap 钳制上限）、细粒度回放状态与控制命令。
 //!
-//! 速度约束 plan 指定：有限数值且 `0.1..=100.0`，非法在执行前失败
+//! 速度约束：有限数值且 `0.1..=100.0`，非法在执行前失败
 //! （[`ReplayConfig::validate`]，[`crate::serial::manager::PortManager::start_replay`]
 //! 据此拒绝建会话）；控制通道的 [`ReplayCmd::SetSpeed`] 非法值静默忽略（维持原速）。
 //! `max_gap_ms` 为相邻行**原始**时间差的钳制上限（默认 10_000）：实际睡眠 =
-//! `min(Δ, max_gap_ms) / speed`，恒 ≤ `max_gap_ms / speed`（plan「10-second gap cap」）。
+//! `min(Δ, max_gap_ms) / speed`，恒 ≤ `max_gap_ms / speed`。
 
-/// 相邻行时间差钳制上限默认值（plan V1 固定 10 秒）。
+/// 相邻行时间差钳制上限默认值（固定 10 秒）。
 pub const DEFAULT_MAX_GAP_MS: u64 = 10_000;
 /// 回放速度下限（含）。
 pub const MIN_SPEED: f64 = 0.1;

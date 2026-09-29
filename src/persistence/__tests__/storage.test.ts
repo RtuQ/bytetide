@@ -4,8 +4,8 @@ import { makeCodec } from '../schema'
 import type { StorageLike } from '../storage'
 
 /**
- * 版本化持久化存储单测（plan Task 7 Step 1 的七种场景 + 边界）：
- * 缺失 / 裸旧格式迁移 / v1 信封 / 未来版本 / 烂 JSON / quota / invalid 备份。
+ * 版本化持久化存储单测（七种场景 + 边界）：
+ * 缺失 / 裸旧格式迁移 / 版本化信封 / 未来版本 / 烂 JSON / quota / invalid 备份。
  * localStorage 经 setStorageBackend 注入内存实现（生产默认 globalThis.localStorage）。
  */
 
@@ -116,7 +116,7 @@ describe('loadStored：裸旧格式（无信封）→ migrated 并回写信封',
   })
 })
 
-describe('loadStored：v1 信封 → ok（不回写）', () => {
+describe('loadStored：版本化信封 → ok（不回写）', () => {
   it('schema 匹配 + version 1 → ok，存储原值不动', () => {
     const raw = JSON.stringify({ schema: 'test.list', version: 1, data: ['a'] })
     store.setItem('k.env', raw)
@@ -159,7 +159,7 @@ describe('loadStored：烂 JSON / parse 失败 → invalid（先备份再重置�
     expect(dump['k.broken']).toBeUndefined()
   })
 
-  it('信封 v1 但 data 让 codec.parse 抛错 → 同样备份 + 重置', () => {
+  it('信封（版本 1）但 data 让 codec.parse 抛错 → 同样备份 + 重置', () => {
     const raw = JSON.stringify({ schema: 'test.list', version: 1, data: 'not-array' })
     store.setItem('k.baddata', raw)
     const r = loadStored('k.baddata', listCodec(), [])
@@ -181,7 +181,7 @@ describe('loadStored：烂 JSON / parse 失败 → invalid（先备份再重置�
 })
 
 describe('saveStored', () => {
-  it('写 v1 信封：{schema, version:1, data}', () => {
+  it('写版本化信封：{schema, version:1, data}', () => {
     expect(saveStored('k.save', 'test.list', ['a'])).toEqual({ ok: true })
     expect(JSON.parse(store.dump()['k.save']!)).toEqual({
       schema: 'test.list',

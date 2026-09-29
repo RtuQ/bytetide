@@ -1,7 +1,7 @@
-//! 跨特性集成测试（Stage 3 Task 8 Step 2/3，桌面命令层）：规范输入对——仓库根
+//! 跨特性集成测试（桌面命令层）：规范输入对——仓库根
 //! `tests/fixtures/replay-scenario.log` + `testdata/scenarios/replay-validation.json`
 //! ——经真 PortManager + loopback TCP 对话服务器跑出与 core/CLI 等效的报告；
-//! 并覆盖回放只读场景守卫（Task 8 Step 3 放宽：scenario_start 允许无 send/signal
+//! 并覆盖回放只读场景守卫（放宽语义：scenario_start 允许无 send/signal
 //! 的场景对回放会话运行，wait/assert 命中回放产生的行）。
 //!
 //! # 三端等效
@@ -367,7 +367,7 @@ fn scenario_guards_replay_send_steps_and_offline_unchanged() {
     let m = Arc::new(PortManager::new());
     let registry = AutomationRegistry::default();
 
-    // 回放会话 + 含 send 步的场景 → 稳定文案拒绝（Task 8 Step 3 的新语义）
+    // 回放会话 + 含 send 步的场景 → 稳定文案拒绝（新语义）
     let dir = std::env::temp_dir().join(format!(
         "bytetide-xf-guard-{}-{}",
         std::process::id(),

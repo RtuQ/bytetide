@@ -12,7 +12,7 @@ import { en } from './messages/en'
  * - t() 内读 locale.value → 模板/computed 调用点自动被依赖追踪，切语言即时全量
  *   刷新。**模块级映射表存文案值的写法已废止**：动态映射改存 MessageKey，使用点
  *   t(MAP[code]) 求值。
- * - 持久化键 `serialtool.locale`（v1 信封，AGENTS.md 键清单）；首启无值按系统
+ * - 持久化键 `serialtool.locale`（版本化信封，AGENTS.md 键清单）；首启无值按系统
  *   语言（en* → en，其余中文）。
  * - `<html lang>` 首屏前的另一处默认同步点在 index.html 内联脚本（AGENTS.md
  *   「两处默认同步」纪律，改默认必须同步两处）。

@@ -1,5 +1,5 @@
 /**
- * 解析引擎协议测试（engine + bootstrap 契约，计划 §6 engine-protocol 行）。
+ * 解析引擎协议测试（engine + bootstrap 契约）。
  * 不 mock Worker：hostFactory / importModule / makeBlobUrl 全部注入 fake，
  * 看门狗/泵批时序用 vi.useFakeTimers 控制（node 环境可测，引擎不依赖 Vue/store）。
  */
@@ -8,13 +8,13 @@ import { ParserEngine, staticHasParse, validateDecl, classifyTrial, ErrorRateWin
 import type { EngineBatchItem, EngineBatchResult, EngineHost } from '../engine'
 import { createScriptHost } from '../bootstrap'
 import { computeCrc } from '../crc'
-import plotFixture from '../../../testdata/protocol/plot-v1.json'
+import plotFixture from '../../../testdata/protocol/plot-cases.json'
 import type { LogLine } from '../../types'
 import type { DecodedFrame } from '../../types/parser'
 
 // ---- fixtures ----
 
-/** 共享黄金样本（testdata/protocol/plot-v1.json 的 declSample，Rust serde 消费时忽略本节） */
+/** 共享黄金样本（testdata/protocol/plot-cases.json 的 declSample，Rust serde 消费时忽略本节） */
 interface DeclFixture {
   declSample: {
     decl: Record<string, unknown>

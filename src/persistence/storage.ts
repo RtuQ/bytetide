@@ -2,12 +2,12 @@ import { SCHEMA_VERSION, envelope, isEnvelope, type Codec } from './schema'
 import { migrateEnvelope, migrateLegacy, isKnownSchema } from './migrations'
 
 /**
- * 版本化 localStorage 存取（plan Stage 2 Task 7）：读四态 LoadResult + 信封写。
+ * 版本化 localStorage 存取：读四态 LoadResult + 信封写。
  *
  * - missing：键缺失（或无可用后端）→ 调用方用 fallback，**不写盘**
  * - migrated：裸旧格式经 migration 链 + codec.parse 成功 → 此时才回写信封
  *   （write envelopes only after a successful read/migration）
- * - ok：v1 信封且 schema 匹配
+ * - ok：版本化信封且 schema 匹配
  * - invalid：烂 JSON / parse 失败 → 先备份到 `${key}.invalid.<timestamp>` 再重置；
  *   未来版本（version > 当前）/ schema 不匹配 → invalid 但**不覆盖不备份**
  *   （保留现场，降级版本或其他 schema 的数据不能被悄悄清掉）

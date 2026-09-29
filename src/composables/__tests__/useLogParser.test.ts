@@ -4,13 +4,13 @@ import { parseTsToMs, parseLogFile } from '../useLogParser'
 import type { RawLogLine } from '../../types'
 
 /**
- * TSV 会话录制/现场捕获黄金样本（testdata/protocol/tsv-v1.log，Rust 离线读取
+ * TSV 会话录制/现场捕获黄金样本（testdata/protocol/tsv-recording.log，Rust 离线读取
  * 同源消费）：覆盖 # 注释头、CRLF/LF（仓库 eol=lf 规范化，CRLF 由消费方运行时
  * 全文转换验证）、坏行、非法 dir 归一、tab 含于 text、ts 失败 epoch 回退、
  * 二进制 lossy U+FFFD。
  */
 const TSV_FIXTURE = readFileSync(
-  new URL('../../../testdata/protocol/tsv-v1.log', import.meta.url),
+  new URL('../../../testdata/protocol/tsv-recording.log', import.meta.url),
   'utf8',
 )
 
@@ -91,7 +91,7 @@ describe('parseLogFile', () => {
     expect(r.lines.length).toBe(50_000)
   })
 
-  it('golden fixture tsv-v1.log：注释头/坏行/dir 归一/tab text/epoch 回退/lossy U+FFFD', () => {
+  it('golden fixture tsv-recording.log：注释头/坏行/dir 归一/tab text/epoch 回退/lossy U+FFFD', () => {
     const r = parseLogFile(TSV_FIXTURE)
     expect(r.total).toBe(9)
     expect(r.errors).toBe(1) // 仅无 tab 行

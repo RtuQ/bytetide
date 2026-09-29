@@ -1,9 +1,8 @@
-//! 场景 v1 数据模型与静态校验（Stage 3 Task 1，plan：
-//! `docs/superpowers/plans/2026-09-11-stage-3-automation-and-replay.md`）。
+//! 版本化场景数据模型与静态校验。
 //!
 //! # serde 形状即契约
 //! `testdata/scenarios/*.json`（仓库根）是黄金样例——改任何字段/命名必须同步 fixture
-//! 与前端镜像类型（Task 4 的 `src/types/automation.ts`）。enum 用 `kind` 内部 tag +
+//! 与前端镜像类型（`src/types/automation.ts`）。enum 用 `kind` 内部 tag +
 //! camelCase 字段（`appendNewline`/`timeoutMs`/`withinLast`），子枚举小写
 //! （`ascii`/`hex`、`dtr`/`rts`、`rx`/`tx`）。
 //!
@@ -75,7 +74,7 @@ pub const MAX_DELAY_WAIT_MS: u64 = 600_000;
 /// Repeat.times 上限。
 pub const MAX_REPEAT_TIMES: u32 = 10_000;
 
-/// 版本化场景（v1）。字段 serde 命名不变（全小写单词）。
+/// 版本化场景（版本 1）。字段 serde 命名不变（全小写单词）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Scenario {
     pub schema: String,

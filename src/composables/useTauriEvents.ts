@@ -57,7 +57,7 @@ const tailPending = new Set<string>()
 const backfilling = new Set<string>()
 
 /**
- * 翻页补旧行（方案 B）：用户上滑到视图缓冲头时，把仍在后端 ring 窗口内的
+ * 翻页补旧行：用户上滑到视图缓冲头时，把仍在后端 ring 窗口内的
  * 被裁旧行按原行号回补到头部。与正向拉取完全独立——不碰 pullNo/ringDropped，
  * beforeNo 取视图头行的 rn；ring 翻空即置 backfillExhausted 不再白发请求。
  * 由 LogView onScroll 触发（scrollTop < 阈值且未跟随尾部时）。
@@ -66,7 +66,7 @@ export async function requestBackfill(sessionId: string): Promise<void> {
   if (backfilling.has(sessionId)) return
     const store = useSessionStore()
     const s = store.sessions[sessionId]
-    // live 与 indexed 离线（Task 8 分页）会话均可回补——离线的"ring"是整个源文件；
+    // live 与 indexed 离线会话均可回补——离线的"ring"是整个源文件；
     // replay 的 ring 命令照常路由（同 RING_CAP 窗口），无需额外守卫
     if (!s || s.backfillExhausted) return
   const head = s.lines[0]
@@ -223,13 +223,13 @@ export function drainStateForTest(sessionId: string): {
 }
 
 /**
- * 最终补拉（评审 P1-2「停止丢尾批」修复）：停止/断开瞬间，最近一个拉取周期
+ * 最终补拉（「停止丢尾批」修复）：停止/断开瞬间，最近一个拉取周期
  * （渲染进程被系统节流时远不止 200ms）内已进入后端 ring、尚未入表的行由这里
  * 收尾——无视连接状态守卫拉空游标。live 停止后端留有只读墓碑 ring（两阶段
  * 关闭第 1 阶段），设备断连时 ring 本就在；调用方随后 releaseSession 释放
  * （第 2 阶段）。
  *
- * 所有权交接（复审 R-P1-2）：先置 tailPending 让常规拉取让路，再 **await 在途
+ * 所有权交接：先置 tailPending 让常规拉取让路，再 **await 在途
  * 拉取的真实完成 promise**（不用固定等待时间猜），等干净后经同步 check+set
  * 独占执行最终拉空。stopSession 必须等本函数 resolve 后才 release——释放只会
  * 发生在最终拉空真正完成之后。并发重入（stopSession 与事件侧双路）经
@@ -341,7 +341,7 @@ export async function setupEvents(): Promise<Unlisten[]> {
   startPullLoop()
   unlistens.push(stopPullLoop)
 
-  // 会话状态：live 的连接/断开 toast 提示（通知重设计 v2：断开升级 warning + 6s +
+  // 会话状态：live 的连接/断开 toast 提示（断开升级 warning + 6s +
   // 'disconnect' tag，重连成功时按 tag 收掉未过期的断开提示）；replay 的状态事件不打
   // 连接 toast（起跑 connected / EOF·停止 disconnected 对回放语义是「回放中/已播完」，
   // 用 ReplayControls 的状态标签表达），断开时最终补拉收尾（丢尾批修复，不受开关门控）
@@ -377,7 +377,7 @@ export async function setupEvents(): Promise<Unlisten[]> {
   unlistens.push(
     await onPortChanged((ports) => {
       store.setPorts(ports)
-      // 热插拔通知（通知重设计 v2）：后端轮询 diff 不带方向，前端对前后列表求差；
+      // 热插拔通知：后端轮询 diff 不带方向，前端对前后列表求差；
       // 首帧只建基线（启动时已插着的端口不刷「已接入」），开关在设置弹层「通知」分组
       const diff = consumePortDiff(ports)
       if (!diff) return
@@ -449,7 +449,7 @@ export async function setupEvents(): Promise<Unlisten[]> {
     }),
   )
 
-  // 回放控制面（Stage 3 Task 7）：control 命令执行后命令层 emit 一次；EOF/Error
+  // 回放控制面：control 命令执行后命令层 emit 一次；EOF/Error
   // 等无控制命令的状态变化由 ReplayControls 的 replayStatus 轮询兜底
   unlistens.push(
     await onReplayState((p) => {

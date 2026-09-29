@@ -209,7 +209,7 @@ pub fn create_offline_session_cmd(
         .load_offline(config, PathBuf::from(path), lines))
 }
 
-/// 流式打开离线日志会话的结果（plan Task 8 形状：{sessionId,lineCount,firstEpoch,lastEpoch}）。
+/// 流式打开离线日志会话的结果。
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OfflineOpenResult {
@@ -258,7 +258,7 @@ pub fn offline_lines_after_cmd(
 
 #[cfg(test)]
 mod tests {
-    //! 命令层形状冻结：OfflineOpenResult 的 serde camelCase 键与 plan Task 8 对齐。
+    //! 命令层形状冻结：OfflineOpenResult 的 serde camelCase 键形状冻结。
     use super::OfflineOpenResult;
 
     #[test]

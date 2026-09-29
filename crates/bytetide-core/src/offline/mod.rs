@@ -1,6 +1,6 @@
-//! 离线日志流式分页（Stage 2 Task 8）：稀疏索引（每 [`PAGE_LINES`] 个数据行记一个
+//! 离线日志流式分页：稀疏索引（每 [`PAGE_LINES`] 个数据行记一个
 //! 文件字节偏移锚点）+ 按页读取，替代「前端全量解析 → create_offline_session_cmd
-//! 整包灌 ring」的旧路径（旧命令保留一个发布周期，见 `PortManager::load_offline`）。
+//! 整包灌 ring」的旧路径（旧命令仍保留，见 `PortManager::load_offline`）。
 //!
 //! - [`index`]：[`open_offline`] 一次 `BufRead` 顺序扫全文件建索引——内存只持
 //!   锚点表（≈行数/4096 个 u64）+ 单行缓冲，不持行、不灌 ring。
@@ -42,8 +42,8 @@ pub(crate) struct Anchor {
 }
 
 /// 跨午夜回卷检测（索引期与页读期共享的顺序状态机）：合法 ts 行的原始当日
-/// 毫秒比前一个合法值小超过半天 ⟹ 判定日期回卷，偏移累加一天（评审 P3——
-/// 使回放间隔/时长等内部 epoch 消费单调；显示用原始 ts 字符串不变）。
+/// 毫秒比前一个合法值小超过半天 ⟹ 判定日期回卷，偏移累加一天（使回放间隔/
+/// 时长等内部 epoch 消费单调；显示用原始 ts 字符串不变）。
 /// 行序回退行（ts 非法，epoch=seq 的合成值）不参与检测也不更新 prev——合成值
 /// 既会伪造回卷也会掩盖回卷（特例：合法 ts 恰等于行序号时误判为回退，仅错过
 /// 该行的检测机会，无累积影响）。
@@ -249,11 +249,11 @@ pub(crate) mod test_support {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    /// 共享黄金样本（仓库 `testdata/protocol/tsv-v1.log`，TS 侧
+    /// 共享黄金样本（仓库 `testdata/protocol/tsv-recording.log`，TS 侧
     /// `useLogParser.test.ts` 同源消费）：`#` 注释头、坏行、非法 dir、tab text、
     /// epoch 回退、lossy U+FFFD。仓库 `.gitattributes eol=lf` 规范化，拿到的是
     /// LF 版本（CRLF 语义由消费方运行时转换验证）。
-    pub(crate) const TSV_FIXTURE: &str = include_str!("../../../../testdata/protocol/tsv-v1.log");
+    pub(crate) const TSV_FIXTURE: &str = include_str!("../../../../testdata/protocol/tsv-recording.log");
 
     static SEQ: AtomicU32 = AtomicU32::new(0);
 
@@ -442,7 +442,7 @@ mod tests {
         }
     }
 
-    // ===== 共享黄金样本（testdata/protocol/tsv-v1.log，TS useLogParser.test.ts 同源）=====
+    // ===== 共享黄金样本（testdata/protocol/tsv-recording.log，TS useLogParser.test.ts 同源）=====
 
     #[test]
     fn golden_fixture_tsv_v1_classifies_like_frontend() {

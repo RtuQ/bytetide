@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { lineBytes } from '../lineBytes'
-import plotFixture from '../../../testdata/protocol/plot-v1.json'
+import plotFixture from '../../../testdata/protocol/plot-cases.json'
 import type { LogLine, PlotSource } from '../../types'
 
 /**
- * 行字节三态还原测试（消费共享黄金样本 plot-v1.json 的 lineBytesSamples）：
+ * 行字节三态还原测试（消费共享黄金样本 plot-cases.json 的 lineBytesSamples）：
  * 样本同时被 Rust 侧 line_bytes 的测试消费——两侧任一实现漂移即红。
  */
 

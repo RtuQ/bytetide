@@ -1,5 +1,5 @@
-# bytetide 协议黄金样本 v1 — TSV 会话录制/现场捕获格式（parseLogFile ↔ Rust 离线读取）
-# TS 消费: src/composables/__tests__/useLogParser.test.ts；Rust: include_str!（Task 8 离线流化接入）。
+# bytetide 协议黄金样本 — TSV 会话录制/现场捕获格式（parseLogFile ↔ Rust 离线读取）
+# TS 消费: src/composables/__tests__/useLogParser.test.ts；Rust: include_str!。
 # 语义: ts <TAB> DIR <TAB> text（text 可含 tab，仅按前两个 tab 切分）；DIR 非法/缺失归 rx；
 #       # 注释行跳过不计错；空行不计；无 tab 行计 errors；ts 解析失败 epochMillis 回退行序号；
 #       CRLF 与 LF 均合法——本仓库 .gitattributes 规范化行尾为 LF，CRLF 处理由消费方在运行时

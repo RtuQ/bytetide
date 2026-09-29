@@ -2,7 +2,7 @@ import type { Session } from './model'
 import type { ReplayState } from '../../types'
 
 /**
- * 会话注册表（Task 6）：`Record<string, Session>` 规范持有、唯一真相。
+ * 会话注册表：`Record<string, Session>` 规范持有、唯一真相。
  * 门面 Pinia store 的 state 与此形状同构（同一响应式对象），本模块是
  * 注册/移除/活动态的唯一写入口——其他模块不得直接改 sessions/order/activeId。
  * 函数均显式传入注册表状态，不内部调用 useSessionStore。
@@ -112,7 +112,7 @@ export function dropPending(id: string): void {
   pendingError.delete(id)
 }
 
-/** 回放控制面视图落账（Stage 3 Task 7）：replay-state 事件与 replayStatus 轮询
+/** 回放控制面视图落账：replay-state 事件与 replayStatus 轮询
  *  共用一写入点。仅 replay 会话生效；未知/已移除/非回放会话的迟到事件忽略 */
 export function applyReplayView(
   st: RegistryState,
