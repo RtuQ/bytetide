@@ -253,7 +253,8 @@ pub(crate) mod test_support {
     /// `useLogParser.test.ts` 同源消费）：`#` 注释头、坏行、非法 dir、tab text、
     /// epoch 回退、lossy U+FFFD。仓库 `.gitattributes eol=lf` 规范化，拿到的是
     /// LF 版本（CRLF 语义由消费方运行时转换验证）。
-    pub(crate) const TSV_FIXTURE: &str = include_str!("../../../../testdata/protocol/tsv-recording.log");
+    pub(crate) const TSV_FIXTURE: &str =
+        include_str!("../../../../testdata/protocol/tsv-recording.log");
 
     static SEQ: AtomicU32 = AtomicU32::new(0);
 

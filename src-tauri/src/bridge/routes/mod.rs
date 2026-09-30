@@ -941,8 +941,10 @@ mod tests {
 
     fn plot_fixture() -> PlotFixture {
         // 相对本文件 4 级上跳到仓库根（routes → bridge → src → src-tauri → 根）
-        serde_json::from_str(include_str!("../../../../testdata/protocol/plot-cases.json"))
-            .expect("plot-cases.json fixture parses")
+        serde_json::from_str(include_str!(
+            "../../../../testdata/protocol/plot-cases.json"
+        ))
+        .expect("plot-cases.json fixture parses")
     }
 
     #[test]
