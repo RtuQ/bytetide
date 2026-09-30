@@ -190,8 +190,10 @@ body 用 `.panel-body`；需限高滚动的用 `.kw-body` / `.ar-body`（已带 
 
 ### 连接控制（停止 / 重连 / 关闭）
 - **停止**：`store.stopSession(id)` —— 断开串口但保留标签页与日志，状态 → `disconnected`
-- **重连**：`store.reconnectSession(id)` —— 用原配置重连，后端生成新 id，前端把日志/搜索/关键词/自动回复/历史迁移过去
+- **重连**：`store.reconnectSession(id)` —— 用原配置重连，后端生成新 id，前端把日志/搜索/关键词/自动回复/历史迁移过去；**返回新 id**（connect 失败 undefined，旧会话保留置 error）。重连前先对旧 id 走两阶段收尾（disconnect→drainSessionTail→release）——不清理会在后端 sessions 表漏含 ring 的僵尸句柄，且常规拉取对 error 态会话停拉、read_failed 断开的尾批只有这里能补
 - **关闭**：`store.closeTab(id)` —— 断开并删除标签页（彻底丢弃）
+
+**自动重连（V1 仅串口源）**：`PortConfig.autoReconnect`（TS-only 字段，后端 serde 忽略，仿 viewBufCap 先例；随 `serialtool.lastPortConfig`/端口预设持久化，config 'carry' 自动随重连迁移）。控制律在 `composables/autoReconnect.ts`（候选判定+退避账本+用户停止停靠，零 store 依赖），调度在 `useTauriEvents.evalAutoReconnect`（惰性评估：唤醒点=port-changed/session-status/session-error/退避定时器/LogView 开关切换）。语义：意外断开（error 事件路径）后端口名回归即重连；打开失败按 1s→2s→4s→8s→15s→30s 封顶退避；**用户主动停止永不触发**——stopSession 在下发 disconnect 之前 `blockAutoReconnect`（断开状态事件会在 await 期间到达，停靠晚于事件就误判），重开开关（setAutoReconnect true）=改主意解除停靠。reconnectSession 换新 id 后账目经 `rekeyRetry` 迁移保退避连续，connected 事件 `consumeAutoReconnected` 取走并分流「已自动重连」toast。同端口多标签每轮只认领一个（不互殴）。**测试纪律**：mock invoke 时 connect_cmd 须按命令名定向分发（reconnectSession 现在在 connect 前有收尾三连调用，mockResolvedValueOnce 会被 disconnect 消耗）。
 
 **两阶段关闭（丢尾批修复）**：`PortManager::disconnect` 移除句柄后把只读 ring 副本
 留入 `dead_rings` 墓碑（FIFO cap 4）；前端 `drainSessionTail`（useTauriEvents）以
@@ -240,6 +242,20 @@ UI 层与逻辑层严格分离：
 `tsconfig.json` 开了 `noUnusedLocals` + `noUnusedParameters` + `strict`。
 删模板里某变量/常量的最后一处用法时，必须同步删掉它在 `<script>` 里的声明或 import，否则 `vue-tsc` 报错、构建失败。
 （例：把 unicode 状态点换成 CSS 后，删了 TabBar 的 `dot` 映射；搜索框换图标后，删了 SearchPanel 的 `SEARCH_COLOR` import）
+
+### 注释与命名规范
+注释只写代码本身——约束、语义、为什么这么设计。**禁止开发过程性标注**，出现即违规：
+- plan 文档引用（`docs/superpowers/plans/**`、`§x.x` 章节号——plan 文档不入仓库，引用即死链）
+- 任务/阶段/方案编号：`Stage N Task N`、`T7`、`i18n 阶段 2`、`方案 B`、`布局重构 V1`、`parser V1`
+- 评审编号：`评审 P1-x` / `复审 R-Px-x`——编号删、技术理由留（「评审 P1-1：不物化全量快照」→「不物化全量快照」）
+- 迁移史（「自 manager.rs 迁出」）与 bugfix 出处注记
+- 整条注释只剩过程标注 → 整条删；**机制名不算阶段**：「两阶段关闭」的第 1/2 阶段是运行时语义，照常写
+- 本条管代码注释；AGENTS.md 自身的功能存档叙述不在此列
+
+**命名不带阶段性色彩**：
+- 不用 `v1/V1` 当名字或后缀；测试黄金样本用描述性名（`testdata/protocol/` 现为 `tsv-recording.log` / `matcher-cases.json` / `plot-cases.json`）
+- 脚本 ABI 标识 = `bytetide.parser`（无版本号；引擎不校验脚本头串，旧脚本头 `bytetide.parser v1` 仍可导入）
+- 数据格式版本用数值表达：信封 `version: 1` / `SCHEMA_VERSION = 1`，注释措辞叫「版本化信封」不叫「v1 信封」；**已存储的版本数值不可改**（老用户 localStorage 兼容），升版本走 `src/persistence/migrations.ts` 注册链
 
 ---
 

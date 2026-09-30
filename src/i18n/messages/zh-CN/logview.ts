@@ -23,6 +23,8 @@ export const logview = {
   'lv.toolbar.stop': '停止',
   'lv.toolbar.reconnectTitle': '重新连接该串口',
   'lv.toolbar.reconnect': '重连',
+  'lv.toolbar.autoReconnectTitle': '意外断开后端口恢复可用时自动重连（主动停止不触发）',
+  'lv.toolbar.autoReconnect': '自动重连',
   'lv.toolbar.clearTitle': '清屏',
   'lv.toolbar.clear': '清屏',
   'lv.toolbar.exportTitle': '导出日志',

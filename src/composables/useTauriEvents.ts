@@ -9,6 +9,10 @@ import { feedParser } from './useParserEngine'
 import { connectionErrorHint, dismissByTag, toast } from './useToast'
 import { useNotificationPrefs } from './useNotificationPrefs'
 import { consumePortDiff, describePort } from './usePortNotifications'
+import {
+  consumeAutoReconnected, dropRetry, isAutoReconnectBlocked, isAutoReconnectCandidate,
+  nextRetryWake, planRetry, rekeyRetry, retryDueAt, sweepBlocked, sweepRetry,
+} from './autoReconnect'
 import { t, type MessageKey } from '../i18n'
 import { commands } from '../ipc/commands'
 import { PULL_CEIL_MS, PULL_FLOOR_MS, initialPacing, nextPullInterval, type PullOutcome } from './pullPacing'
@@ -138,7 +142,8 @@ async function pullUntilEmpty(sessionId: string, ignoreStatus: boolean): Promise
     } catch {
       return { got, capped: false } // 无后端（浏览器冒烟）或会话已断开，静默
     }
-    if (pulled.length === 0) return { got, capped: false }
+    // 非数组结果（异常环境/mock）与空表同待遇：重连前的收尾拉取不可抛
+    if (!pulled || pulled.length === 0) return { got, capped: false }
     const t0 = performance.now()
     const fresh = store.appendPulled(
       sessionId,
@@ -330,6 +335,85 @@ export function stopPullLoop(): void {
   pacing.clear()
 }
 
+// ── 自动重连调度器 ─────────────────────────────────────────────────────────
+// 惰性评估：唤醒点（端口列表变化 / 会话状态迁移 / 错误事件 / 退避定时器 /
+// 开关切换）都只是扫一遍会话表；候选判定、退避与停靠账本在 autoReconnect.ts。
+// 端口不在场时不重试也不计时（等 port-changed 回归唤醒）；在场但打开失败
+// 才走退避定时链——单链 setTimeout 仿拉取循环，新到期更早则重排。
+
+/** 在途自动重连的会话：防评估与上一跳 attempt 重入（用户手动重连不经此守卫） */
+const retrying = new Set<string>()
+let retryTimer: ReturnType<typeof setTimeout> | null = null
+let retryTimerDue = 0
+
+/** 评估所有会话的自动重连：端口在场且退避已到的候选发起重连，顺手清扫
+ *  失义账目。具名导出供 LogView 开关切换时直接驱动（仿 requestBackfill 先例） */
+export function evalAutoReconnect(): void {
+  const store = useSessionStore()
+  const now = Date.now()
+  const portNames = new Set(store.ports.map((p) => p.name))
+  const existing = new Set(Object.keys(store.sessions))
+  sweepBlocked(existing)
+  sweepRetry(existing)
+  const claimed = new Set<string>()
+  const due: string[] = []
+  for (const id of existing) {
+    const s = store.sessions[id]
+    if (!s) continue
+    // 已连接会话的账目失义：connected 事件侧 consume 先行，这里兜底漏网
+    //（connecting 保留——在途尝试正等 open 结果，靠它保退避连续）
+    if (s.status === 'connected') dropRetry(id)
+    if (!isAutoReconnectCandidate(s) || isAutoReconnectBlocked(id)) continue
+    // 同端口多标签的病态配置不互殴：每轮每端口只认领一个（order 靠前者）
+    if (claimed.has(s.config.name)) continue
+    const dueAt = retryDueAt(id)
+    if (dueAt !== null && dueAt > now) continue // 退避未到，等定时链
+    if (!portNames.has(s.config.name)) continue // 端口不在场：等回归唤醒
+    if (retrying.has(id)) continue
+    claimed.add(s.config.name)
+    due.push(id)
+  }
+  for (const id of due) {
+    // 先记账再发起：无论本次成败，失败路径的下次间隔已排定；
+    // 成功路径经 rekey 迁到新 id，connected 时由 consume 取走
+    planRetry(id, now)
+    void attemptReconnect(id)
+  }
+  scheduleRetryWake(nextRetryWake(Date.now()))
+}
+
+async function attemptReconnect(id: string): Promise<void> {
+  retrying.add(id)
+  try {
+    const store = useSessionStore()
+    const newId = await store.reconnectSession(id)
+    if (newId) rekeyRetry(id, newId)
+  } finally {
+    retrying.delete(id)
+  }
+}
+
+/** 排定定时链下一跳：已在途的唤醒更早则保留（拉取循环同款单链策略） */
+function scheduleRetryWake(wake: number | null): void {
+  if (wake === null) return
+  if (retryTimer !== null && retryTimerDue <= wake) return
+  if (retryTimer !== null) clearTimeout(retryTimer)
+  retryTimerDue = wake
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+    evalAutoReconnect()
+  }, Math.max(0, wake - Date.now()))
+}
+
+/** 停止退避定时链（setupEvents 卸载 / 测试收尾用） */
+export function stopAutoReconnectLoop(): void {
+  if (retryTimer !== null) {
+    clearTimeout(retryTimer)
+    retryTimer = null
+  }
+  retrying.clear()
+}
+
 /** 注册后端事件监听与拉取循环；返回取消函数列表 */
 export async function setupEvents(): Promise<Unlisten[]> {
   const store = useSessionStore()
@@ -340,6 +424,8 @@ export async function setupEvents(): Promise<Unlisten[]> {
   // 调度不再被事件洪水挤占。
   startPullLoop()
   unlistens.push(stopPullLoop)
+  // 自动重连：评估入口在各事件回调尾部（见 autoReconnect.ts 头注释）
+  unlistens.push(stopAutoReconnectLoop)
 
   // 会话状态：live 的连接/断开 toast 提示（断开升级 warning + 6s +
   // 'disconnect' tag，重连成功时按 tag 收掉未过期的断开提示）；replay 的状态事件不打
@@ -354,9 +440,19 @@ export async function setupEvents(): Promise<Unlisten[]> {
         if (p.status === 'disconnected') void drainSessionTail(p.sessionId)
         return
       }
-      if (p.status === 'connected' && notif.enabled) {
-        dismissByTag('disconnect')
-        toast(t('logic.toast.connected'), 'success', 2600, session?.config.name)
+      if (p.status === 'connected') {
+        // 自动重连到账：取走退避账本并换文案（consume 须在通知门控外——
+        // 关通知时账目同样要清，否则残条目会让定时链空转）
+        const auto = consumeAutoReconnected(p.sessionId)
+        if (notif.enabled) {
+          dismissByTag('disconnect')
+          toast(
+            auto ? t('logic.toast.autoReconnected') : t('logic.toast.connected'),
+            'success',
+            2600,
+            session?.config.name,
+          )
+        }
       }
       if (p.status === 'disconnected') {
         if (notif.enabled) {
@@ -364,6 +460,7 @@ export async function setupEvents(): Promise<Unlisten[]> {
         }
         void drainSessionTail(p.sessionId)
       }
+      evalAutoReconnect()
     }),
   )
   unlistens.push(
@@ -372,11 +469,16 @@ export async function setupEvents(): Promise<Unlisten[]> {
       // 正常断连（port_disconnected/net_disconnected 码）hint 返回 null：由 disconnected 状态提示负责，不报 error
       const hint = connectionErrorHint(p.error)
       if (hint) toast(hint.title, 'error', 4500, hint.action)
+      // 错误事件可能在状态事件之前到达（EOF 型先 error 后 disconnected），
+      // 评估放这里兜住「初始 open 失败」等无后续状态事件的路径
+      evalAutoReconnect()
     }),
   )
   unlistens.push(
     await onPortChanged((ports) => {
       store.setPorts(ports)
+      // 端口回归是自动重连的主唤醒源（须在下方通知开关的早退之前）
+      evalAutoReconnect()
       // 热插拔通知：后端轮询 diff 不带方向，前端对前后列表求差；
       // 首帧只建基线（启动时已插着的端口不刷「已接入」），开关在设置弹层「通知」分组
       const diff = consumePortDiff(ports)

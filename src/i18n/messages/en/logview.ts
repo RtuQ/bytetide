@@ -19,6 +19,8 @@ export const logview: Record<keyof typeof logviewZh, string> = {
   'lv.toolbar.stop': 'Stop',
   'lv.toolbar.reconnectTitle': 'Reconnect this port',
   'lv.toolbar.reconnect': 'Reconnect',
+  'lv.toolbar.autoReconnectTitle': 'Reconnect automatically after an unexpected disconnect once the port is back (manual Stop never triggers it)',
+  'lv.toolbar.autoReconnect': 'Auto-reconnect',
   'lv.toolbar.clearTitle': 'Clear the log view',
   'lv.toolbar.clear': 'Clear',
   'lv.toolbar.exportTitle': 'Export the log',

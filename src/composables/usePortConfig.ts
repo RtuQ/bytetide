@@ -17,6 +17,7 @@ const DEFAULT_CFG: PortConfig = {
   parity: 'none',
   stopBits: '1',
   flowControl: 'none',
+  autoReconnect: false,
 }
 const STORAGE_KEY = 'serialtool.lastPortConfig'
 
@@ -32,6 +33,7 @@ const cfgCodec = makeCodec<PortConfig>(
       tcpHost: c.tcpHost ?? '',
       tcpPort: c.tcpPort ?? null,
       udpLocalPort: c.udpLocalPort ?? null,
+      autoReconnect: c.autoReconnect === true,
     }
   },
 )

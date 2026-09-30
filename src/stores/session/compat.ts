@@ -3,6 +3,9 @@ import { commands } from '../../ipc/commands'
 import { ipcErrorDetail } from '../../ipc/errors'
 import { toast } from '../../composables/useToast'
 import { drainSessionTail } from '../../composables/useTauriEvents'
+import {
+  blockAutoReconnect, dropRetry, unblockAutoReconnect,
+} from '../../composables/autoReconnect'
 import { t } from '../../i18n'
 import { openPath } from '@tauri-apps/plugin-opener'
 import type { DecodedFrame } from '../../types/parser'
@@ -326,6 +329,9 @@ export const useSessionStore = defineStore('session', {
       const s = this.sessions[id]
       if (!s) return
       if (s.kind === 'offline') return
+      // 用户主动停止：先停靠自动重连再断开——后端断开状态事件会在 await
+      // 期间到达，停靠晚于事件就会被惰性评估误判为意外断开而自动复活
+      blockAutoReconnect(id)
       try {
         await commands.disconnect(id)
       } catch {
@@ -346,11 +352,24 @@ export const useSessionStore = defineStore('session', {
     },
     /** 用原配置重连：后端生成新会话 id，前端把原会话数据迁移到新 id 下。
      *  仅 live 会话可重连：offline 无连接可重建；replay 拒绝重连（源文件
-     *  重开即可回放），字段策略 replay='runtime' 与此对应 */
-    async reconnectSession(id: string) {
+     *  重开即可回放），字段策略 replay='runtime' 与此对应。
+     *  重连前先按两阶段关闭收尾旧句柄（disconnect→拉空尾批→release）：
+     *  ① 不清理会在后端 sessions 表漏一个含 ring 的僵尸句柄（每次重连一个）；
+     *  ② 常规拉取对 error 态会话停拉，macOS 拔出的 read_failed 路径尾批
+     *  只有这里能补。已停止会话（无句柄/无墓碑）各步均幂等静默。
+     *  返回新会话 id（connect 失败返回 undefined，旧会话保留置 error 态），
+     *  自动重连调度器据此迁移退避账本 */
+    async reconnectSession(id: string): Promise<string | undefined> {
       const s = this.sessions[id]
       if (!s) return
       if (s.kind !== 'live') return
+      try {
+        await commands.disconnect(id)
+      } catch {
+        /* ignore：已停止/已断开的会话无句柄可摘 */
+      }
+      await drainSessionTail(id)
+      commands.releaseSession(id).catch(() => {})
       const config = s.config
       let newId: string
       try {
@@ -368,6 +387,7 @@ export const useSessionStore = defineStore('session', {
       this.pushLiveRules(newId)
       // 新后端会话连接时已默认开录制；沿用原会话的暂停状态
       if (!carried.recOn) this.setRec(newId, false)
+      return newId
     },
     async send(id: string, text: string, mode: 'ascii' | 'hex') {
       const s = this.sessions[id]
@@ -462,6 +482,16 @@ export const useSessionStore = defineStore('session', {
         s.recOn = !on
         alert(String(e))
       }
+    },
+    /** 自动重连开关（会话级，旗标存 config 随重连迁移；V1 仅串口源生效）：
+     *  开=解除用户停止停靠（停止后再开=改主意）；关=丢弃退避账本。
+     *  状态评估的即时唤醒由调用方（LogView）触发 evalAutoReconnect */
+    setAutoReconnect(id: string, on: boolean) {
+      const s = this.sessions[id]
+      if (!s) return
+      s.config = { ...s.config, autoReconnect: on }
+      if (on) unblockAutoReconnect(id)
+      else dropRetry(id)
     },
     /** 日志分段：关闭当前文件，从当前时刻另起 `基准名-YYYYMMDD-HHMMSS.log`
      *  新文件继续录制（旧文件保留）；录制暂停中调用会顺带恢复录制 */

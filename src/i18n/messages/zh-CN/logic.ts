@@ -17,6 +17,7 @@ export const logic = {
 
   // ---- useTauriEvents：连接/断开/热插拔 toast ----
   'logic.toast.connected': '连接成功',
+  'logic.toast.autoReconnected': '已自动重连',
   'logic.toast.disconnected': '连接已断开',
   'logic.toast.portArrived': '串口已接入 · {name}',
   'logic.toast.portRemoved': '串口已移除 · {name}',

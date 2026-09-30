@@ -89,6 +89,8 @@ export const lib = {
   'conn.listenAddr': '监听地址（可空）',
   'conn.hostPlaceholder': '如 192.168.1.50',
   'conn.portPlaceholder': '如 9000',
+  'conn.autoReconnect': '断开后自动重连',
+  'conn.autoReconnectTitle': '串口意外断开（拔出/出错）时，端口恢复可用后自动重连；失败按退避重试（最长间隔 30 秒）。主动「停止」不会触发',
 
   // ---- BridgeSettings（REST 桥接）----
   'bridge.enable': '启用桥服务（外部 AI 经 Bearer 令牌读取/分析日志）',

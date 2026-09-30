@@ -22,6 +22,9 @@ export interface PortConfig {
   tcpPort?: number | null
   /** udp 本地监听端口 */
   udpLocalPort?: number | null
+  /** 串口意外断开后自动重连（TS-only 字段，后端 serde 忽略未知字段——
+   *  仿 LogConfig.viewBufCap 先例；config 经 FIELD_POLICY 'carry' 随重连迁移） */
+  autoReconnect?: boolean | null
 }
 
 export interface PortInfo {

@@ -4,7 +4,9 @@ import { useSessionStore } from '../session'
 import type { PortConfig, SendSequence } from '../../types'
 
 // invoke 全文件打桩：set_signal_cmd / send_cmd 在无 Tauri 后端的测试环境可走通
-const invokeMock = vi.hoisted(() => vi.fn(async () => null as unknown))
+const invokeMock = vi.hoisted(() =>
+  vi.fn(async (_cmd: string, _args?: unknown) => null as unknown),
+)
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }))
 
 const CFG: PortConfig = {
@@ -160,7 +162,10 @@ describe('触发式现场捕获（capture 字段三处同步纪律）', () => {
     s.status = 'connected'
     store.updateCapture(id, { enabled: true, preMs: 30000 })
     invokeMock.mockClear()
-    invokeMock.mockResolvedValueOnce('s-reconnected')
+    // 重连前有两阶段收尾（disconnect→拉空→release），connect 须按命令名定向 mock
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === 'connect_cmd' ? 's-reconnected' : null,
+    )
     await store.reconnectSession(id)
     const carried = store.sessions['s-reconnected']!
     expect(carried.capture.enabled).toBe(true)

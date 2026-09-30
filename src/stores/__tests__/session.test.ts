@@ -3,12 +3,18 @@ import { createPinia, setActivePinia } from 'pinia'
 import { useSessionStore, registerParserOnClear } from '../session'
 import { byteLength } from '../../utils/logLine'
 import { toasts, _resetToasts } from '../../composables/useToast'
+import {
+  blockAutoReconnect, isAutoReconnectBlocked, planRetry, retryDueAt,
+  _resetAutoReconnectForTest,
+} from '../../composables/autoReconnect'
 import { DEFAULT_LOG_CONFIG, DEFAULT_PLOT_CONFIG } from '../../types'
 import type { DecodedFrame } from '../../types/parser'
 import type { PortConfig, RawLogLine } from '../../types'
 
 // invoke 全文件打桩：录制开关/重连等动作在无 Tauri 后端的测试环境可走通
-const invokeMock = vi.hoisted(() => vi.fn(async () => null as unknown))
+const invokeMock = vi.hoisted(() =>
+  vi.fn(async (_cmd: string, _args?: unknown) => null as unknown),
+)
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }))
 // openPath 打桩：openLogPath 的打开行为在无 Tauri 后端可断言
 const openPathMock = vi.hoisted(() => vi.fn(async () => undefined))
@@ -409,11 +415,80 @@ describe('落盘录制 recOn（录制/分段）', () => {
     const store = useSessionStore()
     const id = store.createLocalSession('local-rec-reconn', CFG)
     store.sessions[id]!.recOn = false
-    invokeMock.mockResolvedValueOnce('s99') // connect_cmd 返回新会话 id
+    // 重连前有两阶段收尾（disconnect→拉空→release），connect 须按命令名定向 mock
+    invokeMock.mockImplementation(async (cmd: string) => (cmd === 'connect_cmd' ? 's99' : null))
     await store.reconnectSession(id)
     expect(store.sessions[id]).toBeUndefined()
     expect(store.sessions['s99']!.recOn).toBe(false)
     expect(invokeMock).toHaveBeenCalledWith('set_recording_cmd', { sessionId: 's99', on: false })
+  })
+})
+
+describe('自动重连（autoReconnect）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    invokeMock.mockReset()
+    invokeMock.mockResolvedValue(null)
+    _resetAutoReconnectForTest()
+  })
+
+  it('reconnectSession 返回新 id；connect 前先两阶段收尾旧句柄（disconnect→拉空→release）', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('ar-1', CFG)
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'connect_cmd') return 's77'
+      if (cmd === 'ring_lines_no_cmd') return []
+      return null
+    })
+    const newId = await store.reconnectSession(id)
+    expect(newId).toBe('s77')
+    // 命令顺序：旧句柄收尾三步都在 connect 之前（修后端句柄泄漏）
+    const seq = invokeMock.mock.calls.map((c) => c[0])
+    const iDisc = seq.indexOf('disconnect_cmd')
+    const iRel = seq.indexOf('release_session_cmd')
+    const iConn = seq.indexOf('connect_cmd')
+    expect(iDisc).toBeGreaterThanOrEqual(0)
+    expect(iRel).toBeGreaterThan(iDisc)
+    expect(iConn).toBeGreaterThan(iRel)
+    expect(store.sessions[id]).toBeUndefined()
+    expect(store.sessions['s77']).toBeTruthy()
+  })
+
+  it('connect 失败：返回 undefined，旧会话保留置 error', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('ar-2', CFG)
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'connect_cmd') throw new Error('thread_spawn_failed|spawn fail')
+      if (cmd === 'ring_lines_no_cmd') return []
+      return null
+    })
+    const newId = await store.reconnectSession(id)
+    expect(newId).toBeUndefined()
+    expect(store.sessions[id]).toBeTruthy()
+    expect(store.sessions[id]!.status).toBe('error')
+    expect(store.sessions[id]!.error).toContain('thread_spawn_failed')
+  })
+
+  it('stopSession 停靠自动重连：用户主动停止不被误判为意外断开', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('ar-3', { ...CFG, autoReconnect: true })
+    await store.stopSession(id)
+    expect(store.sessions[id]!.status).toBe('disconnected')
+    expect(isAutoReconnectBlocked(id)).toBe(true)
+  })
+
+  it('setAutoReconnect：写 config 旗标；开=解除停靠（改主意），关=清退避账本', () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('ar-4', CFG)
+    expect(store.sessions[id]!.config.autoReconnect).toBeUndefined()
+    blockAutoReconnect(id)
+    planRetry(id, 0)
+    store.setAutoReconnect(id, true)
+    expect(store.sessions[id]!.config.autoReconnect).toBe(true)
+    expect(isAutoReconnectBlocked(id)).toBe(false)
+    store.setAutoReconnect(id, false)
+    expect(store.sessions[id]!.config.autoReconnect).toBe(false)
+    expect(retryDueAt(id)).toBeNull()
   })
 })
 
@@ -468,7 +543,7 @@ describe('ringDropped ring 缺口检测', () => {
     store.setStatus(id, 'connected')
     store.appendPulled(id, [mkPulled(5)])
     expect(store.sessions[id]!.ringDropped).toBe(4)
-    invokeMock.mockResolvedValueOnce('s88') // connect_cmd 返回新会话 id
+    invokeMock.mockImplementation(async (cmd: string) => (cmd === 'connect_cmd' ? 's88' : null))
     await store.reconnectSession(id)
     expect(store.sessions[id]).toBeUndefined()
     expect(store.sessions['s88']!.ringDropped).toBe(0)

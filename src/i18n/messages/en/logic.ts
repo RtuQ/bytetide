@@ -14,6 +14,7 @@ export const logic: Record<keyof typeof logicZh, string> = {
 
   // ---- useTauriEvents: connect / disconnect / hot-plug toasts ----
   'logic.toast.connected': 'Connected',
+  'logic.toast.autoReconnected': 'Auto-reconnected',
   'logic.toast.disconnected': 'Disconnected',
   'logic.toast.portArrived': 'Serial port plugged in · {name}',
   'logic.toast.portRemoved': 'Serial port unplugged · {name}',

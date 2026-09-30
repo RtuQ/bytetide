@@ -12,7 +12,8 @@ import { lineHexDump, lineHexLen } from '../composables/useHexDump'
 import { selectionTextWithin } from '../composables/selectionText'
 import { lineBytes } from '../parser/lineBytes'
 import { humanizeMs } from '../composables/useRate'
-import { requestBackfill } from '../composables/useTauriEvents'
+import { requestBackfill, evalAutoReconnect } from '../composables/useTauriEvents'
+import { isSerialTransport } from '../composables/autoReconnect'
 import ReplayControls from './ReplayControls.vue'
 import type { LogLine } from '../types'
 import { toast } from '../composables/useToast'
@@ -203,6 +204,17 @@ const recLive = computed(() => {
   const st = s.status
   return st === 'connected' || st === 'connecting'
 })
+
+// 自动重连开关：仅 live 串口会话展示（网络源 V1 无触发源，见 autoReconnect.ts）
+const serialLive = computed(() => {
+  const s = session.value
+  return !!s && s.kind === 'live' && isSerialTransport(s.config)
+})
+function setAutoReconnect(on: boolean) {
+  store.setAutoReconnect(props.sessionId, on)
+  // 切换即评估：停止后再开=改主意，端口在场时立即尝试而非等下一事件
+  evalAutoReconnect()
+}
 
 function deltaMs(item: LogLine, index: number): string {
   if (index <= 0) return '-'
@@ -407,6 +419,17 @@ onBeforeUnmount(() => {
       <div class="bar-spacer"></div>
 
       <div class="bar-group">
+        <label v-if="serialLive" class="check" :title="t('lv.toolbar.autoReconnectTitle')">
+          <input
+            type="checkbox"
+            :checked="session.config.autoReconnect === true"
+            @change="setAutoReconnect(($event.target as HTMLInputElement).checked)"
+          />
+          <span class="box">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </span>
+          <span>{{ t('lv.toolbar.autoReconnect') }}</span>
+        </label>
         <button
           v-if="session.kind !== 'offline' && (session.status === 'connected' || session.status === 'connecting')"
           class="btn btn-sm btn-danger"

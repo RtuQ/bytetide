@@ -86,6 +86,8 @@ export const lib: Record<keyof typeof libZh, string> = {
   'conn.listenAddr': 'Listen address (optional)',
   'conn.hostPlaceholder': 'e.g. 192.168.1.50',
   'conn.portPlaceholder': 'e.g. 9000',
+  'conn.autoReconnect': 'Auto-reconnect on disconnect',
+  'conn.autoReconnectTitle': 'After an unexpected serial disconnect (unplug/error), reconnect automatically once the port is available again; failed attempts back off up to 30 s. Manually pressing Stop never triggers it',
 
   // ---- BridgeSettings ----
   'bridge.enable': 'Enable bridge server (external AI reads and analyzes logs via a Bearer token)',
