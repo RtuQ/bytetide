@@ -129,6 +129,6 @@ jobs:
       # 产物只上传 artifact，由调用方的 release 任务统一挂到同一份草稿 Release
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/') && (github.event_name != 'workflow_call' || inputs.publish)
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: bytetide-*.tar.gz
