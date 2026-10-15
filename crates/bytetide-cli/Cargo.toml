@@ -17,5 +17,5 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 console = "0.15"
-dialoguer = "0.11"
+dialoguer = "0.12"
 ctrlc = { version = "3", features = ["termination"] }
