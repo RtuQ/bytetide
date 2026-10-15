@@ -119,7 +119,7 @@ jobs:
             -C "$GITHUB_WORKSPACE" README-CLI.txt
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bytetide-${{ matrix.target }}
           path: bytetide-${{ matrix.target }}.tar.gz

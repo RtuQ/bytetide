@@ -98,7 +98,7 @@ jobs:
           Copy-Item $exe ByteTide.exe
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-exe
           path: ByteTide.exe
@@ -150,7 +150,7 @@ jobs:
 
       # 工作区化后 bundle 也落在根 target/release/bundle/（不再是 src-tauri/target/）
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-arm64-dmg
           path: target/release/bundle/dmg/ByteTide_*_aarch64.dmg
