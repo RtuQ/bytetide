@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
 
-// 组件交互测试（Stage 3 Task 4）：jsdom + @vue/test-utils 的独立 project。
+// 组件交互测试：jsdom + @vue/test-utils 的独立 project。
 // 主 `npm test`（vitest.config.ts，node 环境）跑纯逻辑单测；本 config 只跑
 // src/components/__tests__/ 的组件挂载测试。组件测试文件另带
 // `@vitest-environment jsdom` docblock——即使被主 config 的 include 通配扫到，

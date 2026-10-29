@@ -235,7 +235,7 @@ fn noop_emit() -> EmitFn {
     Arc::new(|_, _| ())
 }
 
-// ============ Step 2：live 三端等效（桌面命令层） ============
+// ============ live 三端等效（桌面命令层） ============
 
 #[test]
 fn canonical_pair_report_matches_shared_expectations_on_desktop() {
@@ -316,7 +316,7 @@ fn canonical_pair_report_matches_shared_expectations_on_desktop() {
     server.join().expect("server thread");
 }
 
-// ============ Step 3：回放只读场景（T3 守卫放宽后的行为） ============
+// ============ 回放只读场景（只读场景允许跑在回放会话上） ============
 
 #[test]
 fn readonly_scenario_runs_against_replay_session_and_hits_replayed_lines() {
@@ -342,7 +342,7 @@ fn readonly_scenario_runs_against_replay_session_and_hits_replayed_lines() {
     let scenario: Scenario =
         serde_json::from_str(replay_readonly_scenario_json()).expect("readonly scenario");
     let run = start_scenario(&registry, &m, &id, scenario, noop_emit())
-        .expect("readonly scenario must be allowed on replay session (Task 8 Step 3)");
+        .expect("readonly scenario must be allowed on replay session");
     wait_until(30_000, || {
         registry
             .view(&run)

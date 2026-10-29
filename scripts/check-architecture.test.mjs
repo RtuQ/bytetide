@@ -128,8 +128,8 @@ test('src/ipc/** 的 invoke/listen 放行；允许清单已清空，清单外一
     'src/ipc/client.ts': "import { invoke, listen } from '@tauri-apps/api/core'\nawait invoke('x')\nawait listen('y', () => {})\n",
   })
   assert.doesNotThrow(() => checkArchitecture('/fixture', ok))
-  // Task 5 起 ALLOWED_IPC_FILES = []：src/ipc/** 之外的裸 invoke/listen（含旧允许清单
-  // 里的 useTauriEvents.ts / session.ts）都算违规——必须经 src/ipc 命名适配层
+  // ALLOWED_IPC_FILES = []：src/ipc/** 之外的裸 invoke/listen 都算违规——必须经
+  // src/ipc 命名适配层
   const bad = fixture({
     'crates/bytetide-core/Cargo.toml': CLEAN_CORE_TOML,
     'crates/bytetide-core/src/lib.rs': CLEAN_CORE_RS,
