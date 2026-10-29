@@ -126,6 +126,34 @@ describe('自动重连调度器（evalAutoReconnect）', () => {
     expect(connects).toEqual(['COM-TEST'])
   })
 
+  it('主动关闭标签页（closeTab）不自动重连：断开事件在 await 期间到达也不复活', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('a', { ...CFG })
+    store.setStatus(id, 'connected')
+    store.setPorts([portInfo('COM-TEST')])
+    // 模拟后端断开状态事件在 closeTab 的 disconnect await 期间到达：置断开态
+    // 并评估（生产中 onSessionStatus 回调尾部同款）；停靠须先于事件写入
+    invokeMock.mockImplementation(async (cmd: string, args?: unknown) => {
+      calls.push(cmd)
+      if (cmd === 'disconnect_cmd') {
+        store.setStatus((args as { sessionId: string }).sessionId, 'disconnected')
+        evalAutoReconnect()
+        return null
+      }
+      if (cmd === 'connect_cmd') {
+        connectSeq += 1
+        connects.push((args as { config: PortConfig }).config.name)
+        return `s-new-${connectSeq}`
+      }
+      if (cmd === 'ring_lines_no_cmd') return []
+      return null
+    })
+    await store.closeTab(id)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(connects).toEqual([])
+    expect(Object.keys(store.sessions)).toEqual([])
+  })
+
   it('重连成功（connected）后账目清空，不再排定时唤醒', async () => {
     const store = useSessionStore()
     mkBroken('a')
