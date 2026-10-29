@@ -709,7 +709,9 @@ mod tests {
             .unwrap()
             .path();
         let archive = std::fs::read_to_string(&archive_path).unwrap();
-        assert!(archive.starts_with("# bytetide-capture version=1 trigger=disconnect rule=断连 at_ms="));
+        assert!(
+            archive.starts_with("# bytetide-capture version=1 trigger=disconnect rule=断连 at_ms=")
+        );
         assert_eq!(
             data_lines(&archive_path),
             vec!["00:00:00.000\tRX\tboom before crash".to_string()]
