@@ -734,7 +734,7 @@ async fn annotations_backfill_uses_line_by_no() {
     assert_eq!(g.snapshot_calls, 0, "批注回填不得 snapshot");
 }
 
-/// 复审 R-P1-1：选择集分页契约——「先选集、后分页」。
+/// 选择集分页契约——「先选集、后分页」。
 /// last=100&offset=20&limit=10 → 最新 100 行的第 21–30 行（9921..9930），
 /// 而非全局末尾窗口。无过滤路径对照。
 #[tokio::test]
@@ -764,7 +764,7 @@ async fn lines_last_offset_paginates_within_selection() {
     assert_eq!(g.lines_after_calls, vec![(9920, 10)]);
 }
 
-/// 复审 R-P1-1：`no=X&offset>0` 空页但 total 保留；offset 越过选择集末尾
+/// `no=X&offset>0` 空页但 total 保留；offset 越过选择集末尾
 /// 同样空页保 total（不得重置为 0）。
 #[tokio::test]
 async fn lines_offset_beyond_selection_keeps_total() {
@@ -792,7 +792,7 @@ async fn lines_offset_beyond_selection_keeps_total() {
     assert_eq!(v["truncated"], serde_json::json!(false));
 }
 
-/// 复审 R-P1-1：around 窗口下界钳到 first_no（ring 头部已淘汰时不高估 total）。
+/// around 窗口下界钳到 first_no（ring 头部已淘汰时不高估 total）。
 #[tokio::test]
 async fn lines_around_window_clamps_to_first_no() {
     // nos 900..999（first_no=900）：around=905&span=10 → 窗口 [895,915] ∩
@@ -816,7 +816,7 @@ async fn lines_around_window_clamps_to_first_no() {
     assert_eq!(g.snapshot_calls, 0);
 }
 
-/// 复审 R-P1-1：过滤路径同契约——re 命中子集的 last+offset 在选择集内分页。
+/// 过滤路径同契约——re 命中子集的 last+offset 在选择集内分页。
 #[tokio::test]
 async fn lines_filtered_last_offset_paginates_within_selection() {
     let (app, svc) = app(false, FakeService::populated(10_000));

@@ -1,9 +1,6 @@
 // 架构红线预检：core 纯净性 + 前端 IPC 边界 + 文件行数限额。
-// Stage 2（docs/superpowers/plans/2026-09-11-stage-2-architecture-modularization.md）
-// Task 1 落地，后续大重构（Task 2/3/4/5/6）逐级收紧阈值与允许清单：
 // - core（bytetide-core）永不依赖 tauri/axum/tokio——桌面与 CLI 共用的纯逻辑层
-// - 前端直连 Tauri IPC（invoke/listen/core|event import）只允许 src/ipc/** 与
-//   初始允许清单（Task 5 建立类型化 IPC 适配层后清空清单）
+// - 前端直连 Tauri IPC（invoke/listen/core|event import）只允许 src/ipc/**
 // - 单文件行数限额防「继续往大文件里塞」——覆盖表是现实基线，收紧路径见注释
 // CI 在 Rust 测试前跑 `npm run check:architecture`，违规即失败。
 import { readdirSync, readFileSync } from 'node:fs'
@@ -42,10 +39,9 @@ export function cargoDependencyNames(cargoToml) {
 }
 
 // ---------------------------------------------------------------------------
-// 规则 2：前端 IPC 边界（Task 5 起：允许清单已清空，直连只允许 src/ipc/**）
+// 规则 2：前端 IPC 边界（允许清单已清空，直连只允许 src/ipc/**）
 // ---------------------------------------------------------------------------
-// Task 1 时曾列出全部直连文件作过渡基线；Task 5 建立类型化 IPC 适配层
-// （src/ipc/{client,commands,events,types,errors}.ts）并把调用方逐个迁走后，
+// 类型化 IPC 适配层（src/ipc/{client,commands,events,types,errors}.ts）就位后
 // 清单清空。新增任何 invoke/listen/@tauri-apps/api(core|event) 直连都算违规：
 // 一律经 src/ipc 的命名命令/事件适配层（IpcClient 接口可注入假实现做测试）。
 const ALLOWED_IPC_FILES = []
