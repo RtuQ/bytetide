@@ -29,7 +29,7 @@ export interface CandidateSession {
   config: PortConfig
 }
 
-/** 网络源无 port-changed 触发源，V1 只做串口（transport 缺省即串口） */
+/** 网络源无 port-changed 触发源，只做串口（transport 缺省即串口） */
 export function isSerialTransport(c: PortConfig): boolean {
   return c.transport === null || c.transport === undefined || c.transport === 'serial'
 }

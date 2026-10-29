@@ -99,7 +99,7 @@ impl CaptureController {
         if let Some(w) = writer.as_mut() {
             // 头注释行：前端解析按 `#` 跳过，供人肉/工具辨识来源
             w.write_raw_line(&format!(
-                "# bytetide-capture v1 trigger={trigger} rule={} at_ms={at_ms} at={}",
+                "# bytetide-capture version=1 trigger={trigger} rule={} at_ms={at_ms} at={}",
                 rule.replace(['\n', '\r', '\t'], " "),
                 now.format("%Y-%m-%dT%H:%M:%S%.3f%:z"),
             ));
@@ -379,7 +379,7 @@ mod tests {
             entries[0].clone()
         };
         let raw = std::fs::read_to_string(&saved_path).expect("read archive");
-        assert!(raw.starts_with("# bytetide-capture v1 trigger=keyword rule=ERROR at_ms="));
+        assert!(raw.starts_with("# bytetide-capture version=1 trigger=keyword rule=ERROR at_ms="));
 
         // 后续窗口内的行继续入档（BufWriter 批量刷写：快照段在建档时已 flush，
         // 续写段随 64 行批/收尾 flush 落盘——与既有行为一致，这里以 finalize 后读取为准）
@@ -592,7 +592,7 @@ mod tests {
                 .path(),
         )
         .unwrap();
-        assert!(archive.starts_with("# bytetide-capture v1 trigger=alert rule=ERR at_ms="));
+        assert!(archive.starts_with("# bytetide-capture version=1 trigger=alert rule=ERR at_ms="));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -709,7 +709,9 @@ mod tests {
             .unwrap()
             .path();
         let archive = std::fs::read_to_string(&archive_path).unwrap();
-        assert!(archive.starts_with("# bytetide-capture v1 trigger=disconnect rule=断连 at_ms="));
+        assert!(
+            archive.starts_with("# bytetide-capture version=1 trigger=disconnect rule=断连 at_ms=")
+        );
         assert_eq!(
             data_lines(&archive_path),
             vec!["00:00:00.000\tRX\tboom before crash".to_string()]
