@@ -5,7 +5,7 @@ import type { AlertLevel } from '../types'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 
-/** 告警历史（自 AlertPanel 迁出，数据源与行为照搬：告警事件监听 + REST mirror 的内存环形） */
+/** 告警历史（告警事件监听 + REST mirror 的内存环形） */
 const store = useSessionStore()
 const alerts = useAlertStore()
 alerts.load()

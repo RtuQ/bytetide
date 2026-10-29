@@ -74,7 +74,7 @@ describe('parseLogFile', () => {
 
   it('skips # comment lines (capture file headers)', () => {
     const content = [
-      '# bytetide-capture v1 trigger=keyword rule=OVERTEMP at_ms=1757424631123 at=2026-09-09T21:30:31.123+08:00',
+      '# bytetide-capture version=1 trigger=keyword rule=OVERTEMP at_ms=1757424631123 at=2026-09-09T21:30:31.123+08:00',
       '# 注意：更早的行已超出 ring 窗口，部分前置现场缺失',
       '00:00:00.000\tRX\treal line',
     ].join('\n')
