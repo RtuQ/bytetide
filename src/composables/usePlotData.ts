@@ -38,7 +38,7 @@ export function usePlotData(
     points.value = r.points
     frameCount.value = r.frameCount
     lastError.value = r.lastError
-  }, 300)
+  }, 300, false)
 
   // getPrepends（backfillTotal）：头部回补不推进 lineCounter，需独立触发重解析
   watch([configSig, getVersion, getPrepends], () => recompute(), { immediate: true })
