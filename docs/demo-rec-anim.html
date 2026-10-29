@@ -52,7 +52,7 @@
   .ctrl label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
   .ctrl input { accent-color: var(--accent); cursor: pointer; }
 
-  /* ===== 方案卡片 ===== */
+  /* ===== 效果卡片 ===== */
   .card {
     background: var(--bg-surface); border: 1px solid var(--border);
     border-radius: var(--r-lg); padding: 16px 18px; margin-bottom: 16px;
@@ -101,7 +101,7 @@
   .rec-btn.rec-on svg circle { fill: currentColor; }
 
   /* ==========================================================
-     方案 A · 呼吸光晕 —— 红点外发光缓慢呼吸，克制、专业
+     呼吸光晕 —— 红点外发光缓慢呼吸，克制、专业
      接入：styles.css .rec-btn 处 +6 行
      ========================================================== */
   .va.rec-on svg { animation: rec-glow 2s var(--ease) infinite; }
@@ -111,7 +111,7 @@
   }
 
   /* ==========================================================
-     方案 B · 雷达扩散圈 —— 圆点向外扩散涟漪，"正在录"最直观
+     雷达扩散圈 —— 圆点向外扩散涟漪，"正在录"最直观
      接入：styles.css .rec-btn 处 +12 行（伪元素叠在图标上）
      ========================================================== */
   .vb.rec-on { position: relative; }
@@ -130,7 +130,7 @@
   }
 
   /* ==========================================================
-     方案 C · OSD 闪烁点 —— 取景器式硬闪烁，摄像机 REC 惯例
+     OSD 闪烁点 —— 取景器式硬闪烁，摄像机 REC 惯例
      接入：styles.css +4 行（复用已有 @keyframes pulse 1.2s）
      ========================================================== */
   .vc.rec-on svg { animation: pulse 1.2s var(--ease) infinite; }
@@ -140,7 +140,7 @@
   }
 
   /* ==========================================================
-     方案 D · 旋转进度弧 —— 圆点变成旋转圆弧，强调"写入进行中"
+     旋转进度弧 —— 圆点变成旋转圆弧，强调"写入进行中"
      接入：styles.css +9 行
      ========================================================== */
   .vd.rec-on svg circle {
@@ -153,7 +153,7 @@
   @keyframes rec-spin { to { transform: rotate(360deg); } }
 
   /* ==========================================================
-     方案 E · 电平条 —— 图标换成跳动的录音电平条，录音棚风格
+     电平条 —— 图标换成跳动的录音电平条，录音棚风格
      接入：模板图标处 +1 行 <span class="rec-eq">… + CSS 14 行
      ========================================================== */
   .ve.rec-on svg { display: none; }
@@ -178,7 +178,7 @@
     50%      { transform: scaleY(1); }
   }
 
-  /* ===== 组合预览：拟真工具栏（方案 A 上身） ===== */
+  /* ===== 组合预览：拟真工具栏（呼吸光晕上身） ===== */
   .ctxbar {
     display: flex; align-items: center; justify-content: flex-end; gap: 10px;
     padding: 6px 12px; margin-top: 16px;
@@ -294,7 +294,7 @@
 
   <!-- 组合预览 -->
   <div class="card">
-    <div class="card-head"><span class="idx">✓</span><h2>组合预览（方案 A 上身 · 拟真工具栏）</h2></div>
+    <div class="card-head"><span class="idx">✓</span><h2>组合预览（呼吸光晕上身 · 拟真工具栏）</h2></div>
     <p class="desc">按 LogView 工具栏右组的真实按钮排布，看动画放进实际界面的效果。</p>
     <div class="ctxbar">
       <button class="btn btn-ghost btn-sm btn-stop"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></svg><span>停止</span></button>

@@ -313,6 +313,9 @@ export const useSessionStore = defineStore('session', {
       return opened.sessionId
     },
     async closeTab(id: string) {
+      // 用户主动关闭：先停靠自动重连再断开——断开状态事件会在 await 期间到达，
+      // 停靠晚于事件就会被惰性评估误判为意外断开，关掉的标签页自动复活
+      blockAutoReconnect(id)
       try {
         await commands.disconnect(id)
       } catch {
@@ -483,7 +486,7 @@ export const useSessionStore = defineStore('session', {
         alert(String(e))
       }
     },
-    /** 自动重连开关（会话级，旗标存 config 随重连迁移；V1 仅串口源生效）：
+    /** 自动重连开关（会话级，旗标存 config 随重连迁移；仅串口源生效）：
      *  开=解除用户停止停靠（停止后再开=改主意）；关=丢弃退避账本。
      *  状态评估的即时唤醒由调用方（LogView）触发 evalAutoReconnect */
     setAutoReconnect(id: string, on: boolean) {

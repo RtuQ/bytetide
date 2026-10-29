@@ -227,7 +227,7 @@ fn replay_soak_rings_and_events_stay_bounded() {
     // 再灌规则——期望命中以**冻结时刻的 ingest 水位**为锚（ingest 恒跑在 scan
     // 前面，scan 游标不能作锚）
     //
-    // 复审 R-CI-2：deadline 用本次 Pause 的独立起点，不用整测 t0——bulk 相
+    // deadline 用本次 Pause 的独立起点，不用整测 t0——bulk 相
     // 耗时可能已超 5s，全局计时会让暂停控制「零等待即判死」。
     let pause_and_freeze = |tx: &std::sync::mpsc::Sender<ReplayCmd>| {
         let pause_started = Instant::now();
