@@ -633,7 +633,7 @@ describe('logConfig viewBufCap / midnightRotate', () => {
   })
 })
 
-describe('prependBackfill 翻页补旧行（方案 B）', () => {
+describe('prependBackfill 翻页补旧行', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
   function mkPulledBf(ringNo: number, text?: string) {
