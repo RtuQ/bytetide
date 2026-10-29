@@ -3166,7 +3166,7 @@ input[type="color"]:focus-visible {
   white-space: nowrap;
 }
 
-/* ══════════ 布局重构 V1（docs/plan-layout-v1.md）══════════
+/* ══════════ 布局区段 ══════════
    三个区段分工：dock 组件群 / 对比中心视图 / 布局集成（顶栏两行、状态栏、分屏条、侧栏分组）。
    只在各自区段内追加，勿越界。 */
 
@@ -3543,7 +3543,7 @@ body.dock-resizing .dock-resize {
 
 /* ── compare 区段（CompareView）── */
 
-/* 对比中心视图（docs/plan-layout-v1.md §2-②）：占中心区整块。
+/* 对比中心视图：占中心区整块。
    头部行 = 标题 + 会话 A/B 选择 + 容差/范围 + 右侧弱提示；主体 = 时间对齐表格（表头 sticky）。
    类名独立成 cmp-v-* 一族，旧 ComparePanel 的 .cmp-*（「对比面板」区段）退役删除时不影响此处。 */
 
@@ -3791,7 +3791,7 @@ body.dock-resizing .dock-resize {
 .tabs-scroll { display: flex; gap: 4px; flex: 1; min-width: 0; align-items: stretch; overflow-x: auto; scrollbar-width: thin; }
 .tabbar-tail { display: flex; align-items: center; margin-left: 2px; }
 
-/* 视图切换条（布局重构 V1：任何模式下常驻，兼作对比退出） */
+/* 视图切换条（任何模式下常驻，兼作对比退出） */
 .viewbar { display: flex; align-items: center; padding: 6px 10px; background: var(--bg-surface); border-bottom: 1px solid var(--border); flex: none; }
 
 /* 中部 body：日志 / 分割条 / 图表 垂直排布 */
@@ -3808,10 +3808,10 @@ body.dock-resizing .dock-resize {
 body.app-dragging { user-select: none; }
 body.app-dragging * { pointer-events: none !important; }
 
-/* 侧栏分组粘头（布局重构 V1：查找/规则/数据/库） */
+/* 侧栏分组粘头（查找/规则/数据/库） */
 .group-head { position: sticky; top: 0; z-index: 3; padding: 10px 6px 5px; font-size: 10.5px; font-weight: 600; letter-spacing: 1px; color: var(--text-dim); text-transform: uppercase; background: var(--bg-surface); border-bottom: 1px solid var(--border); margin-bottom: 4px; }
 
-/* 底部状态栏（布局重构 V1） */
+/* 底部状态栏 */
 .statusbar { flex: none; height: 25px; display: flex; align-items: center; gap: 14px; padding: 0 12px; background: var(--bg-surface); border-top: 1px solid var(--border); font-size: 11px; color: var(--text-muted); }
 .sb-sect { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .sb-spacer { flex: 1; }

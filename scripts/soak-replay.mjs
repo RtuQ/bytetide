@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 一键复跑回放 soak（Stage 3 Task 8 Step 4）。
+// 一键复跑回放 soak。
 //
 // 用法：
 //   node scripts/soak-replay.mjs [--quick] [--real] [--duration-min N] [--speed N]
@@ -15,7 +15,7 @@
 //                    Linux 采样 RSS 趋势。只在本地显式跑。
 //
 // 输出：Rust 侧打印 `SOAK_SUMMARY {json}`，本脚本解析后把最终摘要 JSON 打到
-// stdout（--out FILE 时同时落盘）。字段（对齐 plan Task 8 接口约定）：
+// stdout（--out FILE 时同时落盘）。字段：
 //   durationMs / producedLines / maxRingLines / completedLoops / errors[]
 //   以及 observedWrapClears / alertHitEvents / alertHits / ringCap / speed /
 //   rssKbMax / rssKbLast（仅 Linux）。

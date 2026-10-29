@@ -205,7 +205,7 @@ const recLive = computed(() => {
   return st === 'connected' || st === 'connecting'
 })
 
-// 自动重连开关：仅 live 串口会话展示（网络源 V1 无触发源，见 autoReconnect.ts）
+// 自动重连开关：仅 live 串口会话展示（网络源无触发源，见 autoReconnect.ts）
 const serialLive = computed(() => {
   const s = session.value
   return !!s && s.kind === 'live' && isSerialTransport(s.config)
