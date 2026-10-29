@@ -10,7 +10,7 @@ permissions:
 jobs:
   verify:
     # 打包前统一门禁：版本/配置预检 + 前后端测试构建 + Rust 测试/fmt/clippy + CLI 冒烟。
-    # 任一步失败即整条 release 失败，不产任何 artifact（Task 7 of stage-1 plan）。
+    # 任一步失败即整条 release 失败，不产任何 artifact。
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7

@@ -70,7 +70,7 @@
 
 ---
 
-## 3. 布局结构（`src/App.vue`，布局重构 V1 起 / `docs/plan-layout-v1.md`）
+## 3. 布局结构（`src/App.vue`）
 
 ```
 .app (column, 100vh)
@@ -193,7 +193,7 @@ body 用 `.panel-body`；需限高滚动的用 `.kw-body` / `.ar-body`（已带 
 - **重连**：`store.reconnectSession(id)` —— 用原配置重连，后端生成新 id，前端把日志/搜索/关键词/自动回复/历史迁移过去；**返回新 id**（connect 失败 undefined，旧会话保留置 error）。重连前先对旧 id 走两阶段收尾（disconnect→drainSessionTail→release）——不清理会在后端 sessions 表漏含 ring 的僵尸句柄，且常规拉取对 error 态会话停拉、read_failed 断开的尾批只有这里能补
 - **关闭**：`store.closeTab(id)` —— 断开并删除标签页（彻底丢弃）
 
-**自动重连（V1 仅串口源）**：`PortConfig.autoReconnect`（TS-only 字段，后端 serde 忽略，仿 viewBufCap 先例；随 `serialtool.lastPortConfig`/端口预设持久化，config 'carry' 自动随重连迁移）。控制律在 `composables/autoReconnect.ts`（候选判定+退避账本+用户停止停靠，零 store 依赖），调度在 `useTauriEvents.evalAutoReconnect`（惰性评估：唤醒点=port-changed/session-status/session-error/退避定时器/LogView 开关切换）。语义：意外断开（error 事件路径）后端口名回归即重连；打开失败按 1s→2s→4s→8s→15s→30s 封顶退避；**用户主动停止永不触发**——stopSession 在下发 disconnect 之前 `blockAutoReconnect`（断开状态事件会在 await 期间到达，停靠晚于事件就误判），重开开关（setAutoReconnect true）=改主意解除停靠。reconnectSession 换新 id 后账目经 `rekeyRetry` 迁移保退避连续，connected 事件 `consumeAutoReconnected` 取走并分流「已自动重连」toast。同端口多标签每轮只认领一个（不互殴）。**测试纪律**：mock invoke 时 connect_cmd 须按命令名定向分发（reconnectSession 现在在 connect 前有收尾三连调用，mockResolvedValueOnce 会被 disconnect 消耗）。
+**自动重连（V1 仅串口源）**：`PortConfig.autoReconnect`（TS-only 字段，后端 serde 忽略，仿 viewBufCap 先例；随 `serialtool.lastPortConfig`/端口预设持久化，config 'carry' 自动随重连迁移）。控制律在 `composables/autoReconnect.ts`（候选判定+退避账本+用户停止停靠，零 store 依赖），调度在 `useTauriEvents.evalAutoReconnect`（惰性评估：唤醒点=port-changed/session-status/session-error/退避定时器/LogView 开关切换）。语义：意外断开（error 事件路径）后端口名回归即重连；打开失败按 1s→2s→4s→8s→15s→30s 封顶退避；**用户主动停止/关闭标签页永不触发**——stopSession 与 closeTab 都在下发 disconnect 之前 `blockAutoReconnect`（断开状态事件会在 await 期间到达，停靠晚于事件就误判），重开开关（setAutoReconnect true）=改主意解除停靠。reconnectSession 换新 id 后账目经 `rekeyRetry` 迁移保退避连续，connected 事件 `consumeAutoReconnected` 取走并分流「已自动重连」toast。同端口多标签每轮只认领一个（不互殴）。**测试纪律**：mock invoke 时 connect_cmd 须按命令名定向分发（reconnectSession 现在在 connect 前有收尾三连调用，mockResolvedValueOnce 会被 disconnect 消耗）。
 
 **两阶段关闭（丢尾批修复）**：`PortManager::disconnect` 移除句柄后把只读 ring 副本
 留入 `dead_rings` 墓碑（FIFO cap 4）；前端 `drainSessionTail`（useTauriEvents）以

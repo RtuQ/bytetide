@@ -1,4 +1,4 @@
-# ByteTide 跨特性验收规范输入（Stage 3 Task 8 Step 1）——回放与场景自动化共用。
+# ByteTide 跨特性验收规范输入——回放与场景自动化共用。
 # 格式：TSV `ts<tab>dir<tab>raw`（text 可含 tab，解析只按前两个 tab 切）；
 # `#` 头注释与空行被解析跳过、不占行号；无 tab 坏行不占行号。
 #
