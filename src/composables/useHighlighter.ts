@@ -236,7 +236,7 @@ export function useHighlighter(
     lastKms = kms
     lastBp = bp
     stats.value = { total: acc.total, matchLines: acc.matchLines, kwCounts: { ...acc.kwCounts } }
-  }, 300)
+  }, 300, false)
   watch([searchMatcher, keywordMatchers, getVersion, getPrepends], () => recompute(), { immediate: true })
   const segmentsFor = (text: string) =>
     segmentsMulti(text, searchMatcher.value, keywordMatchers.value)
