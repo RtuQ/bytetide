@@ -35,7 +35,7 @@ chrono = { workspace = true }
 # 单实例
 single-instance = "0.3"
 # REST 分析桥（进程内 axum server + 正则过滤 + 帧解码）
-axum = "0.7"
+axum = "0.8"
 regex = { workspace = true }
 # 桥 Bearer 令牌的随机源（OS CSPRNG）
 getrandom = { workspace = true }
