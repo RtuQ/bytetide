@@ -445,46 +445,52 @@ pub fn router(service: Arc<dyn BridgeService>, cfg: Arc<RwLock<BridgeConfig>>) -
         .route("/ports", get(super::routes::metadata::ports))
         .route("/sessions", get(super::routes::metadata::sessions))
         .route(
-            "/sessions/:id",
+            "/sessions/{id}",
             get(super::routes::metadata::session_detail),
         )
-        .route("/sessions/:id/stats", get(super::routes::metadata::stats))
+        .route("/sessions/{id}/stats", get(super::routes::metadata::stats))
         .route(
-            "/sessions/:id/plot-config",
+            "/sessions/{id}/plot-config",
             get(super::routes::analysis::plot_config)
                 .post(super::routes::analysis::plot_config_set),
         )
-        .route("/sessions/:id/lines", get(super::routes::lines::lines))
-        .route("/sessions/:id/follow", get(super::routes::lines::follow))
+        .route("/sessions/{id}/lines", get(super::routes::lines::lines))
+        .route("/sessions/{id}/follow", get(super::routes::lines::follow))
         .route(
-            "/sessions/:id/histogram",
+            "/sessions/{id}/histogram",
             get(super::routes::lines::histogram),
         )
-        .route("/sessions/:id/timing", get(super::routes::analysis::timing))
-        .route("/sessions/:id/decode", get(super::routes::analysis::decode))
         .route(
-            "/sessions/:id/value-hist",
+            "/sessions/{id}/timing",
+            get(super::routes::analysis::timing),
+        )
+        .route(
+            "/sessions/{id}/decode",
+            get(super::routes::analysis::decode),
+        )
+        .route(
+            "/sessions/{id}/value-hist",
             get(super::routes::analysis::value_hist),
         )
-        .route("/sessions/:id/infer", get(super::routes::analysis::infer))
+        .route("/sessions/{id}/infer", get(super::routes::analysis::infer))
         .route(
-            "/sessions/:id/bookmarks",
+            "/sessions/{id}/bookmarks",
             get(super::routes::lines::bookmarks),
         )
-        .route("/sessions/:id/alerts", get(super::routes::lines::alerts))
+        .route("/sessions/{id}/alerts", get(super::routes::lines::alerts))
         .route(
-            "/sessions/:id/annotations",
+            "/sessions/{id}/annotations",
             get(super::routes::annotations::annotations_get)
                 .post(super::routes::annotations::annotations_post)
                 .delete(super::routes::annotations::annotations_delete),
         )
         .route(
-            "/sessions/:id/export",
+            "/sessions/{id}/export",
             get(super::routes::lines::export_log),
         )
-        .route("/sessions/:id/send", post(super::routes::exchange::send))
+        .route("/sessions/{id}/send", post(super::routes::exchange::send))
         .route(
-            "/sessions/:id/exchange",
+            "/sessions/{id}/exchange",
             post(super::routes::exchange::exchange),
         )
         .layer(middleware::from_fn_with_state(ctx.clone(), auth_mw))
