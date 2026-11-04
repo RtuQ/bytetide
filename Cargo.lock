@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "bytetide-cli"
-version = "0.7.2"
+version = "0.7.5"
 dependencies = [
  "anyhow",
  "bytetide-core",
@@ -467,7 +467,7 @@ dependencies = [
 
 [[package]]
 name = "bytetide-core"
-version = "0.7.2"
+version = "0.7.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3553,7 +3553,7 @@ dependencies = [
 
 [[package]]
 name = "serial_tool"
-version = "0.7.2"
+version = "0.7.5"
 dependencies = [
  "axum",
  "bytetide-core",
