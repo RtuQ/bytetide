@@ -4,7 +4,7 @@ import LogScroller from './LogScroller.vue'
 import { useThrottleFn } from '@vueuse/core'
 import { save } from '@tauri-apps/plugin-dialog'
 import { commands } from '../ipc/commands'
-import { useSessionStore, type Session } from '../stores/session'
+import { useSessionStore, isSessionReconnecting, type Session } from '../stores/session'
 import { HIGHLIGHTER_KEY, buildTestMatcher, hlStyle } from '../composables/useHighlighter'
 import { parseAnsi, stripAnsi, type AnsiStyle } from '../composables/useAnsi'
 import { anchoredTop } from '../composables/useScrollAnchor'
@@ -15,6 +15,7 @@ import { humanizeMs } from '../composables/useRate'
 import { requestBackfill, evalAutoReconnect } from '../composables/useTauriEvents'
 import { isSerialTransport } from '../composables/autoReconnect'
 import ReplayControls from './ReplayControls.vue'
+import ConnectionConfigPopover from './ConnectionConfigPopover.vue'
 import type { LogLine } from '../types'
 import { toast } from '../composables/useToast'
 import { t } from '../i18n'
@@ -214,6 +215,22 @@ function setAutoReconnect(on: boolean) {
   store.setAutoReconnect(props.sessionId, on)
   // 切换即评估：停止后再开=改主意，端口在场时立即尝试而非等下一事件
   evalAutoReconnect()
+}
+
+const configBusy = ref(false)
+const configApplyError = ref('')
+const configPopover = ref<InstanceType<typeof ConnectionConfigPopover> | null>(null)
+async function applyConnectionConfig(config: Session['config']) {
+  if (configBusy.value) return
+  configBusy.value = true
+  configApplyError.value = ''
+  try {
+    const newId = await store.reconnectSession(props.sessionId, config)
+    if (newId) configPopover.value?.close()
+    else if (session.value?.error) configApplyError.value = errorMessage(session.value.error)
+  } finally {
+    configBusy.value = false
+  }
 }
 
 function deltaMs(item: LogLine, index: number): string {
@@ -448,6 +465,17 @@ onBeforeUnmount(() => {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h0a4 4 0 0 1-4-4V8Z"/></svg>
           <span>{{ t('lv.toolbar.reconnect') }}</span>
         </button>
+        <ConnectionConfigPopover
+          v-if="serialLive && session.kind === 'live'"
+          ref="configPopover"
+          :config="session.config"
+          :session-id="props.sessionId"
+          :connected="session.status === 'connected' || session.status === 'connecting'"
+          :busy="configBusy || session.status === 'connecting' || isSessionReconnecting(props.sessionId)"
+          :error="configApplyError"
+          @opened="configApplyError = ''"
+          @apply="applyConnectionConfig"
+        />
         <button class="btn btn-ghost btn-sm" :title="t('lv.toolbar.clearTitle')" @click="store.clearLog(props.sessionId)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg>
           <span>{{ t('lv.toolbar.clear') }}</span>

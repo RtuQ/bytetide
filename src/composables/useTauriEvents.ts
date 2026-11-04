@@ -386,7 +386,7 @@ async function attemptReconnect(id: string): Promise<void> {
   retrying.add(id)
   try {
     const store = useSessionStore()
-    const newId = await store.reconnectSession(id)
+    const newId = await store.reconnectSession(id, undefined, 'auto')
     if (newId) rekeyRetry(id, newId)
   } finally {
     retrying.delete(id)
