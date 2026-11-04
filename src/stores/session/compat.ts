@@ -1,10 +1,11 @@
 import { defineStore } from 'pinia'
+import { shallowReactive } from 'vue'
 import { commands } from '../../ipc/commands'
 import { ipcErrorDetail } from '../../ipc/errors'
 import { toast } from '../../composables/useToast'
 import { drainSessionTail } from '../../composables/useTauriEvents'
 import {
-  blockAutoReconnect, dropRetry, unblockAutoReconnect,
+  blockAutoReconnect, dropRetry, isAutoReconnectBlocked, unblockAutoReconnect,
 } from '../../composables/autoReconnect'
 import { t } from '../../i18n'
 import { openPath } from '@tauri-apps/plugin-opener'
@@ -64,6 +65,14 @@ const OFFLINE_FIRST_PAGE = 5000
 
 /** 当前运行的停止旗标（模块级：无需响应式，run 循环内轮询；停止走 presets.sleepInterruptible） */
 let seqStopFlag: { stopped: boolean } | null = null
+const reconnectingSessions = shallowReactive(new Map<string, { cancelled: boolean }>())
+export function isSessionReconnecting(id: string): boolean {
+  return reconnectingSessions.has(id)
+}
+function cancelReconnect(id: string) {
+  const task = reconnectingSessions.get(id)
+  if (task) task.cancelled = true
+}
 
 /**
  * useSessionStore 兼容门面：对外签名/响应式语义保持不变，
@@ -315,6 +324,7 @@ export const useSessionStore = defineStore('session', {
     async closeTab(id: string) {
       // 用户主动关闭：先停靠自动重连再断开——断开状态事件会在 await 期间到达，
       // 停靠晚于事件就会被惰性评估误判为意外断开，关掉的标签页自动复活
+      cancelReconnect(id)
       blockAutoReconnect(id)
       try {
         await commands.disconnect(id)
@@ -324,6 +334,7 @@ export const useSessionStore = defineStore('session', {
       // 关闭=彻底丢弃：无需补拉尾批，直接释放停止墓碑（未留墓碑时幂等 no-op）
       commands.releaseSession(id).catch(() => {})
       removeSession(this as unknown as RegistryState, id)
+      dropPending(id)
       // 对比依赖 ≥2 会话：关到只剩一个时自动退出对比态，别把用户困在死界面里
       autoExitCompareAfterClose(this as unknown as LayoutState, this.order.length)
     },
@@ -332,6 +343,7 @@ export const useSessionStore = defineStore('session', {
       const s = this.sessions[id]
       if (!s) return
       if (s.kind === 'offline') return
+      cancelReconnect(id)
       // 用户主动停止：先停靠自动重连再断开——后端断开状态事件会在 await
       // 期间到达，停靠晚于事件就会被惰性评估误判为意外断开而自动复活
       blockAutoReconnect(id)
@@ -353,7 +365,7 @@ export const useSessionStore = defineStore('session', {
         s.replay = { ...s.replay, state: 'stopped' }
       }
     },
-    /** 用原配置重连：后端生成新会话 id，前端把原会话数据迁移到新 id 下。
+    /** 用选定配置重连：后端生成新会话 id，前端把原会话数据迁移到新 id 下。
      *  仅 live 会话可重连：offline 无连接可重建；replay 拒绝重连（源文件
      *  重开即可回放），字段策略 replay='runtime' 与此对应。
      *  重连前先按两阶段关闭收尾旧句柄（disconnect→拉空尾批→release）：
@@ -362,35 +374,61 @@ export const useSessionStore = defineStore('session', {
      *  只有这里能补。已停止会话（无句柄/无墓碑）各步均幂等静默。
      *  返回新会话 id（connect 失败返回 undefined，旧会话保留置 error 态），
      *  自动重连调度器据此迁移退避账本 */
-    async reconnectSession(id: string): Promise<string | undefined> {
+    async reconnectSession(
+      id: string,
+      nextConfig?: PortConfig,
+      source: 'manual' | 'auto' = 'manual',
+    ): Promise<string | undefined> {
       const s = this.sessions[id]
       if (!s) return
-      if (s.kind !== 'live') return
+      if (s.kind !== 'live' || reconnectingSessions.has(id)) return
+      const task = { cancelled: false }
+      reconnectingSessions.set(id, task)
+      // 人工重连暂时停靠旧 id，避免自动调度并发接管；自动尝试保留退避调度语义。
+      const wasBlocked = isAutoReconnectBlocked(id)
+      if (source === 'manual') blockAutoReconnect(id)
+      const config = { ...(nextConfig ?? s.config), name: s.config.name }
+      // 失败时也保留表单参数，旧会话及其日志仍可恢复。
+      s.config = config
+      s.status = 'connecting'
       try {
-        await commands.disconnect(id)
-      } catch {
-        /* ignore：已停止/已断开的会话无句柄可摘 */
+        try {
+          await commands.disconnect(id)
+        } catch {
+          /* ignore：已停止/已断开的会话无句柄可摘 */
+        }
+        await drainSessionTail(id)
+        commands.releaseSession(id).catch(() => {})
+        if (task.cancelled || this.sessions[id] !== s) return
+        s.status = 'connecting'
+        let newId: string
+        try {
+          newId = await commands.connect(config, this.logConfig)
+        } catch (e: unknown) {
+          if (task.cancelled || this.sessions[id] !== s) return
+          s.error = ipcErrorDetail(e)
+          s.status = 'error'
+          if (source === 'manual' && !wasBlocked) unblockAutoReconnect(id)
+          return
+        }
+        if (task.cancelled || this.sessions[id] !== s) {
+          try { await commands.disconnect(newId) } catch { /* ignore cancelled connection */ }
+          dropPending(newId)
+          commands.releaseSession(newId).catch(() => {})
+          return
+        }
+        const carried = carrySessionForReconnect(s, newId)
+        replaceSession(this as unknown as RegistryState, id, carried)
+        // 旧 id 的积压事件已无意义，新 id 回放建账竞态期间的状态
+        dropPending(id)
+        this.flushPending(newId)
+        this.pushLiveRules(newId)
+        // 新后端会话连接时已默认开录制；沿用原会话的暂停状态
+        if (!carried.recOn) this.setRec(newId, false)
+        return newId
+      } finally {
+        if (reconnectingSessions.get(id) === task) reconnectingSessions.delete(id)
       }
-      await drainSessionTail(id)
-      commands.releaseSession(id).catch(() => {})
-      const config = s.config
-      let newId: string
-      try {
-        newId = await commands.connect(config, this.logConfig)
-      } catch (e: unknown) {
-        s.error = ipcErrorDetail(e)
-        s.status = 'error'
-        return
-      }
-      const carried = carrySessionForReconnect(s, newId)
-      replaceSession(this as unknown as RegistryState, id, carried)
-      // 旧 id 的积压事件已无意义，新 id 回放建账竞态期间的状态
-      dropPending(id)
-      this.flushPending(newId)
-      this.pushLiveRules(newId)
-      // 新后端会话连接时已默认开录制；沿用原会话的暂停状态
-      if (!carried.recOn) this.setRec(newId, false)
-      return newId
     },
     async send(id: string, text: string, mode: 'ascii' | 'hex') {
       const s = this.sessions[id]

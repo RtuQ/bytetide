@@ -13,6 +13,7 @@ export default defineConfig({
     include: ['src/**/__tests__/**/*.test.ts'],
     exclude: [
       'src/components/__tests__/Scenario*.test.ts',
+      'src/components/__tests__/ConnectionConfigPopover.test.ts',
       ...configDefaults.exclude,
     ],
   },

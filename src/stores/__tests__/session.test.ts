@@ -454,6 +454,97 @@ describe('自动重连（autoReconnect）', () => {
     expect(store.sessions['s77']).toBeTruthy()
   })
 
+  it('带编辑后的串口参数重连：串口名固定且成功会话携带新配置', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('ar-config', { ...CFG, autoReconnect: true })
+    const edited = { ...CFG, name: 'OTHER-PORT', baudRate: 57600, dataBits: 7, parity: 'even', stopBits: '2', flowControl: 'hardware' }
+    invokeMock.mockImplementation(async (cmd: string) => (cmd === 'connect_cmd' ? 's-config' : null))
+
+    const newId = await store.reconnectSession(id, edited)
+
+    expect(newId).toBe('s-config')
+    expect(invokeMock).toHaveBeenCalledWith('connect_cmd', {
+      config: { ...edited, name: CFG.name },
+      logSettings: store.logConfig,
+    })
+    expect(store.sessions['s-config']!.config).toEqual({ ...edited, name: CFG.name })
+    expect(isAutoReconnectBlocked(id)).toBe(true)
+  })
+
+  it('编辑参数重连失败：旧会话和新参数都保留供恢复', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('ar-config-fail', CFG)
+    const edited = { ...CFG, baudRate: 38400 }
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'connect_cmd') throw new Error('open_failed|busy')
+      return null
+    })
+
+    const newId = await store.reconnectSession(id, edited)
+
+    expect(newId).toBeUndefined()
+    expect(store.sessions[id]!.config).toEqual(edited)
+    expect(store.sessions[id]!.status).toBe('error')
+    expect(store.sessions[id]!.lines).toBeDefined()
+    expect(isAutoReconnectBlocked(id)).toBe(false)
+  })
+
+  it('自动重连失败不创建人工停靠，退避流程仍可继续', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('ar-auto-source', { ...CFG, autoReconnect: true })
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'connect_cmd') throw new Error('open_failed|busy')
+      return null
+    })
+
+    await store.reconnectSession(id, undefined, 'auto')
+
+    expect(store.sessions[id]!.status).toBe('error')
+    expect(isAutoReconnectBlocked(id)).toBe(false)
+  })
+
+  it('重连途中主动停止：新连接句柄被清理且旧会话不复活', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('ar-stop-race', CFG)
+    let resolveConnect!: (value: unknown) => void
+    const connectWait = new Promise<unknown>((resolve) => { resolveConnect = resolve })
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'connect_cmd') return connectWait
+      return null
+    })
+
+    const reconnect = store.reconnectSession(id)
+    await vi.waitFor(() => expect(invokeMock.mock.calls.some(([cmd]) => cmd === 'connect_cmd')).toBe(true))
+    await store.stopSession(id)
+    resolveConnect('new-after-stop')
+    await reconnect
+
+    expect(store.sessions[id]).toBeTruthy()
+    expect(store.sessions[id]!.status).toBe('disconnected')
+    expect(store.sessions['new-after-stop']).toBeUndefined()
+    expect(invokeMock).toHaveBeenCalledWith('disconnect_cmd', { sessionId: 'new-after-stop' })
+    expect(invokeMock).toHaveBeenCalledWith('release_session_cmd', { sessionId: 'new-after-stop' })
+  })
+
+  it('重连途中关闭标签：不会重新创建已关闭会话', async () => {
+    const store = useSessionStore()
+    const id = store.createLocalSession('ar-close-race', CFG)
+    let resolveConnect!: (value: unknown) => void
+    const connectWait = new Promise<unknown>((resolve) => { resolveConnect = resolve })
+    invokeMock.mockImplementation(async (cmd: string) => (cmd === 'connect_cmd' ? connectWait : null))
+
+    const reconnect = store.reconnectSession(id)
+    await vi.waitFor(() => expect(invokeMock.mock.calls.some(([cmd]) => cmd === 'connect_cmd')).toBe(true))
+    await store.closeTab(id)
+    resolveConnect('new-after-close')
+    await reconnect
+
+    expect(store.sessions[id]).toBeUndefined()
+    expect(store.sessions['new-after-close']).toBeUndefined()
+    expect(store.order).not.toContain(id)
+    expect(invokeMock).toHaveBeenCalledWith('disconnect_cmd', { sessionId: 'new-after-close' })
+  })
+
   it('connect 失败：返回 undefined，旧会话保留置 error', async () => {
     const store = useSessionStore()
     const id = store.createLocalSession('ar-2', CFG)
