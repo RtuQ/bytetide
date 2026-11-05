@@ -3,6 +3,7 @@ pub mod commands;
 mod gui_sink;
 mod hotplug;
 mod state;
+mod desktop_update;
 
 use single_instance::SingleInstance;
 use tauri::{Listener, Manager};
@@ -137,6 +138,7 @@ fn round_window_corners(window: &tauri::WebviewWindow) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if desktop_update::early_entry() { return; }
     // 单实例：若已有实例运行则静默退出；锁创建失败则放行，不阻断启动
     let instance = SingleInstance::new("serial_tool-single-instance-lock");
     if let Ok(ref i) = instance {
@@ -149,6 +151,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(desktop_update::DesktopUpdater::default())
         .manage(AppState {
             manager: std::sync::Arc::new(bytetide_core::serial::PortManager::new()),
             replays: commands::ReplayRegistry::default(),
@@ -175,11 +179,15 @@ pub fn run() {
                 app.listen("app-ready", move |_| {
                     let _ = w.show();
                     let _ = w.set_focus();
+                    desktop_update::acknowledge_ready();
                 });
             }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            desktop_update::desktop_update_info_cmd,
+            desktop_update::desktop_update_download_cmd,
+            desktop_update::desktop_update_install_cmd,
             commands::list_ports_cmd,
             commands::connect_cmd,
             commands::disconnect_cmd,

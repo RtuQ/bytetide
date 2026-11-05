@@ -31,6 +31,9 @@ jobs:
       - name: Release version check
         run: npm run check:version
 
+      - name: Desktop update manifest tests
+        run: node --test scripts/desktop-update-manifest.test.mjs
+
       # Tauri 配置预检：Windows 后台节流 flag 必须齐全且为独立参数
       - name: Tauri config check
         run: npm run check:tauri-config
@@ -74,3 +77,28 @@ jobs:
       # 组件测试（jsdom + @vue/test-utils，独立 vitest project）
       - name: Component tests
         run: npm run test:components
+
+  desktop-update-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Resolve dependencies and format Rust
+        run: |
+          cargo metadata --format-version 1 > /dev/null
+          cargo fmt --all
+      - name: Capture resolved Rust files
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-resolved-rust
+          path: |
+            Cargo.lock
+            src-tauri/src/desktop_update
+            src-tauri/src/lib.rs
+      - name: Rust workspace tests
+        run: cargo test --workspace
+      - name: Rust clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings

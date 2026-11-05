@@ -106,3 +106,14 @@ describe('parseRelease', () => {
     expect(parseRelease('oops')).toBeNull()
   })
 })
+
+describe('desktop release filtering', () => {
+  it('rejects CLI tags, drafts and prereleases', () => {
+    for (const release of [
+      { tag_name: 'cli-v1.0.0' },
+      { tag_name: 'v1.0.0-beta' },
+      { tag_name: 'v1.0.0', draft: true },
+      { tag_name: 'v1.0.0', prerelease: true },
+    ]) expect(parseRelease({ html_url: 'https://example.com', ...release })).toBeNull()
+  })
+})
