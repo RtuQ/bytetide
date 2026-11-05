@@ -203,34 +203,36 @@ fn wait_ready(child: &mut Child, ack: &Path) -> Result<(), String> {
 }
 pub(super) fn acknowledge_ready() {
     let args: Vec<_> = std::env::args_os().collect();
-    if let Some(i) = args.iter().position(|a| a == ACK_FLAG) {
-        if let Some(path) = args.get(i + 1) {
-            let path = Path::new(path);
-            // Only accept the private staging directory next to this executable.
-            if let (Some(parent), Ok(exe)) = (path.parent(), std::env::current_exe()) {
-                if parent.parent() == exe.parent()
-                    && path.file_name().is_some_and(|n| n == "app-ready")
-                {
-                    if sync_write(path, b"ready").is_ok() {
-                        let dir = parent.to_path_buf();
-                        // The helper cannot unlink its own mapped image on Windows.
-                        // The new process removes it only after the backup is gone.
-                        std::thread::spawn(move || {
-                            for _ in 0..120 {
-                                if !dir.join("backup.exe").exists()
-                                    && !dir.join("job.json").exists()
-                                {
-                                    if fs::remove_file(dir.join("helper.exe")).is_ok() {
-                                        let _ = fs::remove_dir(&dir);
-                                        return;
-                                    }
-                                }
-                                std::thread::sleep(Duration::from_millis(500));
-                            }
-                        });
-                    }
-                }
-            }
-        }
+    let Some(index) = args.iter().position(|argument| argument == ACK_FLAG) else {
+        return;
+    };
+    let Some(path) = args.get(index + 1) else {
+        return;
+    };
+    let path = Path::new(path);
+    let (Some(parent), Ok(exe)) = (path.parent(), std::env::current_exe()) else {
+        return;
+    };
+    // Only acknowledge the private staging directory next to this executable.
+    if parent.parent() != exe.parent()
+        || path.file_name() != Some(std::ffi::OsStr::new("app-ready"))
+        || sync_write(path, b"ready").is_err()
+    {
+        return;
     }
+    let dir = parent.to_path_buf();
+    // The helper cannot unlink its own mapped image on Windows.
+    // The new process removes it only after the backup is gone.
+    std::thread::spawn(move || {
+        for _ in 0..120 {
+            if !dir.join("backup.exe").exists()
+                && !dir.join("job.json").exists()
+                && fs::remove_file(dir.join("helper.exe")).is_ok()
+            {
+                let _ = fs::remove_dir(&dir);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    });
 }
