@@ -243,3 +243,7 @@ MIT，详见 [LICENSE](./LICENSE)。
 ### 桌面端软件内更新
 
 Windows 便携版和 macOS Apple Silicon 支持手动下载更新、显示进度，并在确认后重启安装。签名未配置或旧发布不具备更新产物时，保留 GitHub 手动下载入口。发布者配置与首次升级说明见 [桌面更新说明](docs/desktop-updates.md)。
+
+### 从 tag 发布版本
+
+发版只需提交功能改动后创建并推送 `v0.8.0`（桌面版）或 `cli-v0.8.1`（独立 CLI）标签，无需手动修改版本文件。CI 在各构建任务的临时 checkout 中同步清单与锁文件，不创建版本提交、不回写仓库。示例与细节见 [发布说明](docs/releasing.md)。

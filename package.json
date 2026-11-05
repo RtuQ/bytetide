@@ -20,7 +20,9 @@
     "check:architecture": "node scripts/check-architecture.mjs",
     "test:architecture": "node --test scripts/check-architecture.test.mjs",
     "probe:offline": "node scripts/probe-offline-1g.mjs",
-    "commit": "cz"
+    "commit": "cz",
+    "release:prepare": "node scripts/prepare-release-version.mjs",
+    "test:release-version": "node --test scripts/prepare-release-version.test.mjs scripts/bump-version.test.mjs scripts/check-release-version.test.mjs"
   },
   "config": {
     "commitizen": {

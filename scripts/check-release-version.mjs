@@ -4,6 +4,7 @@
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
+import { versionFromTag } from './release-tag.mjs'
 
 /** 读取仓库根下四份清单的版本号，返回 { npm, workspace, desktop, tauri }。 */
 export async function readVersions(root) {
@@ -41,8 +42,8 @@ export function checkVersions(v, tag) {
     )
   }
   const version = Object.values(v)[0]
-  const tagVersion = tag?.startsWith('cli-v') ? tag.slice(5) : tag?.startsWith('v') ? tag.slice(1) : null
-  if (tagVersion !== null && tagVersion !== version) {
+  const releaseTag = tag?.startsWith('v') || tag?.startsWith('cli-v')
+  if (releaseTag && versionFromTag(tag) !== version) {
     throw new Error(`tag version ${tag} does not match manifests version ${version}`)
   }
   return version
@@ -53,7 +54,7 @@ async function main() {
   const versions = await readVersions(root)
   const tag = process.env.GITHUB_REF_NAME
   const version = checkVersions(versions, tag)
-  console.log(`check:version ok — all manifests at ${version}${tag?.startsWith('v') ? ` (tag ${tag})` : ''}`)
+  console.log(`check:version ok — all manifests at ${version}${tag?.startsWith('v') || tag?.startsWith('cli-v') ? ` (tag ${tag})` : ''}`)
 }
 
 const invokedDirectly =

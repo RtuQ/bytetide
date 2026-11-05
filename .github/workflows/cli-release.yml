@@ -36,13 +36,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
       - name: Add cross-compile target
         run: rustup target add ${{ matrix.target }}
 
-      # 发布预检：四份清单版本一致（v* / cli-v* 均须匹配 workspace）
+      # workflow_call 继承调用方的 v* ref；独立发布使用 cli-v*，两者都从 tag 同步版本。
+      - name: Prepare version from release tag
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: node scripts/prepare-release-version.mjs
+
+      # 发布预检：四份清单与 v* / cli-v* 标签保持一致。
       - name: Release preflight
         run: node scripts/check-release-version.mjs
 
@@ -139,8 +150,10 @@ jobs:
 
       # 独立 cli-v* 推送照旧直接建 Release；被 v* 桌面流程调用时 publish=false，
       # 产物只上传 artifact，由调用方的 release 任务统一挂到同一份草稿 Release
+      # 复用工作流继承调用方 event_name，不能据此识别 workflow_call；
+      # JSON 字符串比较区分显式 false 与直接 push 时缺失的 input。
       - name: Create GitHub release
-        if: startsWith(github.ref, 'refs/tags/') && (github.event_name != 'workflow_call' || inputs.publish)
+        if: startsWith(github.ref, 'refs/tags/') && toJSON(inputs.publish) != 'false'
         uses: softprops/action-gh-release@v3
         with:
           files: |

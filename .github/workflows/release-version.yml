@@ -1,0 +1,32 @@
+name: Release version from tag
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  release-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Version preparation tests, including real offline Cargo lock refresh
+        run: npm run test:release-version
+      - name: Prepare a disposable checkout from a tag
+        shell: bash
+        run: |
+          release_dir=$(mktemp -d)
+          trap 'rm -rf "$release_dir"' EXIT
+          git archive HEAD | tar -x -C "$release_dir"
+          node "$release_dir/scripts/prepare-release-version.mjs" v9.9.9-ci.1
+          GITHUB_REF_NAME=v9.9.9-ci.1 node "$release_dir/scripts/check-release-version.mjs"
+          cargo metadata --locked --no-deps --format-version 1 --manifest-path "$release_dir/Cargo.toml" > /dev/null
+          git diff --exit-code
