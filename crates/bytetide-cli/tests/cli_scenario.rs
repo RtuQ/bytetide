@@ -9,6 +9,8 @@
 //! 2. **loopback TCP**：测试内起临时 TCP server 注入响应行，覆盖真实 transport
 //!    的 pass 路径（退出码 0 + 报告 passed）。
 
+mod support;
+
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -67,7 +69,7 @@ fn run_cli(args: &[&str], env: Option<(&str, &str)>) -> Output {
     if let Some((k, v)) = env {
         cmd.env(k, v);
     }
-    cmd.output().expect("spawn bytetide binary")
+    support::output(&mut cmd)
 }
 
 fn code(out: &Output) -> i32 {
@@ -467,6 +469,7 @@ fn fake_host_bad_env_json_exits_2() {
 
 #[test]
 fn tcp_loopback_roundtrip_passes() {
+    let started = std::time::Instant::now();
     let (port, server) = spawn_pong_server();
     let dir = TempDir::new("tcploop");
     let s = dir.write("s.json", PASS_SCENARIO);
@@ -485,6 +488,7 @@ fn tcp_loopback_roundtrip_passes() {
     );
     assert_eq!(code(&out), 0, "stderr: {}", stderr_of(&out));
     server.join().expect("pong server thread");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
     let body = std::fs::read_to_string(&report).expect("report file written");
     assert!(body.contains(r#""status": "passed""#), "{body}");
     assert!(body.contains("cli-pass"), "{body}");

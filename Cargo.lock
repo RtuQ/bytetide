@@ -486,6 +486,7 @@ dependencies = [
  "ctrlc",
  "dialoguer",
  "flate2",
+ "parking_lot 0.13.0",
  "reqwest 0.13.4",
  "semver",
  "serde",
