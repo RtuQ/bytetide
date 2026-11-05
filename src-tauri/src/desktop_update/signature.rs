@@ -3,11 +3,13 @@ use minisign_verify::{PublicKey, Signature};
 
 pub(super) fn verify(bytes: &[u8], signature: &str, key: &str) -> Result<(), String> {
     let decode = |value: &str| -> Result<String, String> {
-        String::from_utf8(STANDARD.decode(value.trim()).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+        String::from_utf8(STANDARD.decode(value.trim()).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())
     };
     let key = PublicKey::decode(&decode(key)?).map_err(|e| e.to_string())?;
     let signature = Signature::decode(&decode(signature)?).map_err(|e| e.to_string())?;
-    key.verify(bytes, &signature, true).map_err(|e| e.to_string())?;
+    key.verify(bytes, &signature, true)
+        .map_err(|e| e.to_string())?;
 
     Ok(())
 }

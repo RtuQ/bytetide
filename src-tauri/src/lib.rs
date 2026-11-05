@@ -1,9 +1,9 @@
 pub mod bridge;
 pub mod commands;
+mod desktop_update;
 mod gui_sink;
 mod hotplug;
 mod state;
-mod desktop_update;
 
 use single_instance::SingleInstance;
 use tauri::{Listener, Manager};
@@ -138,7 +138,9 @@ fn round_window_corners(window: &tauri::WebviewWindow) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    if desktop_update::early_entry() { return; }
+    if desktop_update::early_entry() {
+        return;
+    }
     // 单实例：若已有实例运行则静默退出；锁创建失败则放行，不阻断启动
     let instance = SingleInstance::new("serial_tool-single-instance-lock");
     if let Ok(ref i) = instance {

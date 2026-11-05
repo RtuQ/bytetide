@@ -25,7 +25,7 @@ use super::ring::RingBuf;
 use super::rules::{
     alert_eval, auto_reply_payload, capture_eval, AlertCfg, AlertWinState, AutoReplyCfg, CaptureCfg,
 };
-use super::transport::{describe_transport, is_net_transport, open_transport, Transport};
+use super::transport::{describe_transport, is_net_transport, open_transport_cancellable, Transport};
 use super::{now_ms, BridgeAlert, PortCmd, SendMode, SendRequest};
 use crate::errors::err_msg;
 use crate::logfmt;
@@ -270,7 +270,7 @@ pub(crate) fn session_thread(
         midnight_rotate,
     );
 
-    let mut transport = match open_transport(&config) {
+    let mut transport = match open_transport_cancellable(&config, &stop) {
         Ok(t) => t,
         Err(e) => {
             // 错误且终止：状态置 Error 并保留（finish 不会被走到，也不得回落 disconnected）

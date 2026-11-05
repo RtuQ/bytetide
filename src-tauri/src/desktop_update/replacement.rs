@@ -3,7 +3,12 @@ use std::{fs, path::Path};
 pub(super) fn replace(target: &Path, staged: &Path, backup: &Path) -> Result<(), String> {
     fs::rename(target, backup).map_err(|e| e.to_string())?;
     if let Err(e) = fs::rename(staged, target) {
-        fs::rename(backup, target).map_err(|rollback| format!("replace: {e}; rollback: {rollback}; backup: {}", backup.display()))?;
+        fs::rename(backup, target).map_err(|rollback| {
+            format!(
+                "replace: {e}; rollback: {rollback}; backup: {}",
+                backup.display()
+            )
+        })?;
         return Err(e.to_string());
     }
     Ok(())

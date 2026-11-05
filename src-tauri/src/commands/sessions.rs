@@ -25,6 +25,8 @@ pub fn connect_cmd(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<String, String> {
+    let updates = app.state::<crate::desktop_update::DesktopUpdater>();
+    let _start_permit = updates.start_guard()?;
     // 默认录制目录：app_data_dir()/sessions（与抽取前行为一致，失败回退 ./logs）
     let sessions_dir = app
         .path()
@@ -36,7 +38,7 @@ pub fn connect_cmd(
         .connect(
             config,
             log_settings,
-            std::sync::Arc::new(GuiSink(app)),
+            std::sync::Arc::new(GuiSink(app.clone())),
             sessions_dir,
         )
         .map_err(|e| e.to_string())

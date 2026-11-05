@@ -48,7 +48,7 @@ use bytetide_core::serial::manager::{BridgeLine, Pin, SendMode, SendRequest};
 use bytetide_core::serial::PortManager;
 use parking_lot::Mutex;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::state::AppState;
 
@@ -623,12 +623,14 @@ pub fn scenario_start_cmd(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<String, String> {
+    let updates = app.state::<crate::desktop_update::DesktopUpdater>();
+    let _start_permit = updates.start_guard()?;
     start_scenario(
         &state.automation,
         &state.manager,
         &session_id,
         scenario,
-        app_emit(app),
+        app_emit(app.clone()),
     )
 }
 

@@ -98,6 +98,8 @@ jobs:
             Cargo.lock
             src-tauri/src/desktop_update
             src-tauri/src/lib.rs
+            src-tauri/src/commands
+            crates/bytetide-core/src/serial
       - name: Rust workspace tests
         run: cargo test --workspace
       - name: Rust clippy
