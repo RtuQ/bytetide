@@ -30,7 +30,7 @@ function anchoredCargoVersion(cargoToml) {
   return m[1]
 }
 
-/** 四处版本必须一致；tag 以 v 开头时还须与之一致。返回统一版本号。 */
+/** 四处版本必须一致；v* / cli-v* 发布标签还须与之一致。返回统一版本号。 */
 export function checkVersions(v, tag) {
   const distinct = new Set(Object.values(v))
   if (distinct.size !== 1) {
@@ -41,7 +41,8 @@ export function checkVersions(v, tag) {
     )
   }
   const version = Object.values(v)[0]
-  if (tag?.startsWith('v') && tag.slice(1) !== version) {
+  const tagVersion = tag?.startsWith('cli-v') ? tag.slice(5) : tag?.startsWith('v') ? tag.slice(1) : null
+  if (tagVersion !== null && tagVersion !== version) {
     throw new Error(`tag version ${tag} does not match manifests version ${version}`)
   }
   return version
