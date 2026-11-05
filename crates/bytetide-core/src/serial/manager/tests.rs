@@ -241,7 +241,10 @@ fn shutdown_for_exit_detaches_pending_links_and_joins_recordings() {
         runtime.set_status(status);
         let (write_tx, _write_rx) = mpsc::channel();
         SessionHandle {
-            config: PortConfig { transport: Some("tcp-client".into()), ..PortConfig::default() },
+            config: PortConfig {
+                transport: Some("tcp-client".into()),
+                ..PortConfig::default()
+            },
             kind: SessionKind::Live,
             stop,
             write_tx,
@@ -259,11 +262,19 @@ fn shutdown_for_exit_detaches_pending_links_and_joins_recordings() {
     };
     manager.sessions.write().insert(
         "pending".into(),
-        make_handle(SessionStatus::Connecting, pending_stop.clone(), pending_worker),
+        make_handle(
+            SessionStatus::Connecting,
+            pending_stop.clone(),
+            pending_worker,
+        ),
     );
     manager.sessions.write().insert(
         "recording".into(),
-        make_handle(SessionStatus::Connected, recording_stop.clone(), recording_worker),
+        make_handle(
+            SessionStatus::Connected,
+            recording_stop.clone(),
+            recording_worker,
+        ),
     );
     let worker_manager = manager.clone();
     let (shutdown_done_tx, shutdown_done_rx) = mpsc::channel();
@@ -276,14 +287,22 @@ fn shutdown_for_exit_detaches_pending_links_and_joins_recordings() {
     let result = shutdown_done_rx.recv_timeout(Duration::from_secs(2));
     // Release the deliberately blocked thread even if shutdown incorrectly joins it.
     release_pending_tx.send(()).unwrap();
-    pending_done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    pending_done_rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap();
     shutdown_worker.join().unwrap();
-    assert!(matches!(before_flush, Err(mpsc::RecvTimeoutError::Timeout)), "shutdown must wait for the connected recording worker");
+    assert!(
+        matches!(before_flush, Err(mpsc::RecvTimeoutError::Timeout)),
+        "shutdown must wait for the connected recording worker"
+    );
     result.expect("pending OS link establishment must not block process exit");
     assert!(pending_stop.load(Ordering::Relaxed));
     assert!(recording_stop.load(Ordering::Relaxed));
     recording_flushed_rx.try_recv().unwrap();
-    assert_eq!(std::fs::read(&recording_path).unwrap(), b"last recording frame\n");
+    assert_eq!(
+        std::fs::read(&recording_path).unwrap(),
+        b"last recording frame\n"
+    );
     assert!(manager.sessions.read().is_empty());
     std::fs::remove_dir_all(dir).unwrap();
 }

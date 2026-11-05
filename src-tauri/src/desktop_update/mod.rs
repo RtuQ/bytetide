@@ -325,7 +325,10 @@ mod tests {
         updates.0.lock().busy = true;
         assert!(updates.start_guard().is_ok());
         updates.begin_shutdown();
-        assert!(updates.start_guard().unwrap_err().starts_with("desktop_update_failed|"));
+        assert!(updates
+            .start_guard()
+            .unwrap_err()
+            .starts_with("desktop_update_failed|"));
         updates.reopen_starts();
         assert!(updates.start_guard().is_ok());
     }
@@ -345,7 +348,10 @@ mod tests {
             closed_tx.send(()).unwrap();
         });
         attempted_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert!(matches!(closed_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            closed_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
         drop(permit);
         closed_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         worker.join().unwrap();
@@ -367,7 +373,10 @@ mod tests {
             started_tx.send(()).unwrap();
         });
         attempted_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert!(matches!(started_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            started_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
         drop(permit);
         started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         worker.join().unwrap();

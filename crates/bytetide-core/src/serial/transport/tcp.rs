@@ -36,7 +36,10 @@ impl TcpTransport {
         stop: &AtomicBool,
     ) -> io::Result<Self> {
         if stop.load(Ordering::Relaxed) {
-            return Err(io::Error::new(io::ErrorKind::Interrupted, "TCP accept cancelled"));
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "TCP accept cancelled",
+            ));
         }
         let listener = TcpListener::bind((bind_host.as_str(), port))?;
         Self::accept_listener(listener, desc, stop)
@@ -47,7 +50,10 @@ impl TcpTransport {
         loop {
             // Check before accept even when a peer is already waiting.
             if stop.load(Ordering::Relaxed) {
-                return Err(io::Error::new(io::ErrorKind::Interrupted, "TCP accept cancelled"));
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "TCP accept cancelled",
+                ));
             }
             match listener.accept() {
                 Ok((stream, _peer)) => {
@@ -91,7 +97,6 @@ impl Transport for TcpTransport {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,11 +111,19 @@ mod tests {
         let (done_tx, done_rx) = mpsc::channel();
         let worker = std::thread::spawn(move || {
             let result = TcpTransport::accept_listener(listener, "test".into(), &worker_stop);
-            done_tx.send(result.err().map(|error| error.kind())).unwrap();
+            done_tx
+                .send(result.err().map(|error| error.kind()))
+                .unwrap();
         });
-        assert!(matches!(done_rx.recv_timeout(Duration::from_millis(50)), Err(mpsc::RecvTimeoutError::Timeout)));
+        assert!(matches!(
+            done_rx.recv_timeout(Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
         stop.store(true, Ordering::Relaxed);
-        assert_eq!(done_rx.recv_timeout(Duration::from_secs(2)).unwrap(), Some(io::ErrorKind::Interrupted));
+        assert_eq!(
+            done_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Some(io::ErrorKind::Interrupted)
+        );
         worker.join().unwrap();
         let rebound = TcpListener::bind(address).unwrap();
         assert_eq!(rebound.local_addr().unwrap(), address);

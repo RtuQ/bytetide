@@ -25,7 +25,9 @@ use super::ring::RingBuf;
 use super::rules::{
     alert_eval, auto_reply_payload, capture_eval, AlertCfg, AlertWinState, AutoReplyCfg, CaptureCfg,
 };
-use super::transport::{describe_transport, is_net_transport, open_transport_cancellable, Transport};
+use super::transport::{
+    describe_transport, is_net_transport, open_transport_cancellable, Transport,
+};
 use super::{now_ms, BridgeAlert, PortCmd, SendMode, SendRequest};
 use crate::errors::err_msg;
 use crate::logfmt;
