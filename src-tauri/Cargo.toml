@@ -40,6 +40,12 @@ regex = { workspace = true }
 # 桥 Bearer 令牌的随机源（OS CSPRNG）
 getrandom = { workspace = true }
 tauri-plugin-notification = "2"
+tauri-plugin-updater = "2"
+base64 = "0.22"
+minisign-verify = "0.2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+semver = "1"
+tempfile = "3"
 
 # Windows：退出 EcoQoS 能效限流（后台/锁屏时系统会把进程丢进节能队列，
 # 导致 IPC 派发延迟数十秒——长挂监控必须显式禁用）

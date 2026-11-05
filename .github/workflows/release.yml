@@ -91,8 +91,20 @@ jobs:
       - name: Install JS deps
         run: npm ci
 
+      - name: Validate updater signing configuration
+        shell: pwsh
+        env:
+          UPDATE_PUBLIC_KEY: ${{ vars.BYTETIDE_UPDATER_PUBLIC_KEY }}
+          UPDATE_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if ([bool]$env:UPDATE_PUBLIC_KEY -ne [bool]$env:UPDATE_PRIVATE_KEY) {
+            throw 'Configure both BYTETIDE_UPDATER_PUBLIC_KEY and TAURI_SIGNING_PRIVATE_KEY, or neither.'
+          }
+
       # --no-bundle：跳过 NSIS/MSI 打包，只编译裸 exe
       - name: Build app
+        env:
+          BYTETIDE_UPDATER_PUBLIC_KEY: ${{ vars.BYTETIDE_UPDATER_PUBLIC_KEY }}
         run: npx tauri build --no-bundle
 
       - name: Collect artifact
@@ -107,11 +119,24 @@ jobs:
           }
           Copy-Item $exe ByteTide.exe
 
+      - name: Sign portable update
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if ($env:TAURI_SIGNING_PRIVATE_KEY) {
+            npx tauri signer sign ByteTide.exe
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: windows-exe
-          path: ByteTide.exe
+          path: |
+            ByteTide.exe
+            ByteTide.exe.sig
           if-no-files-found: error
 
   build-macos:
@@ -146,13 +171,36 @@ jobs:
       # --bundles app：只出 .app。DMG 不交给 tauri 打（signingIdentity "-" 下
       # tauri 打出的 DMG 内 app 缺 _CodeSignature 封签，Gatekeeper 报「已损坏」），
       # 改为下方显式封签 + hdiutil 自制，行为确定
+      - name: Validate updater signing configuration
+        env:
+          UPDATE_PUBLIC_KEY: ${{ vars.BYTETIDE_UPDATER_PUBLIC_KEY }}
+          UPDATE_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if { [ -n "$UPDATE_PUBLIC_KEY" ] && [ -z "$UPDATE_PRIVATE_KEY" ]; } ||
+             { [ -z "$UPDATE_PUBLIC_KEY" ] && [ -n "$UPDATE_PRIVATE_KEY" ]; }; then
+            echo 'Configure both BYTETIDE_UPDATER_PUBLIC_KEY and TAURI_SIGNING_PRIVATE_KEY, or neither.' >&2
+            exit 1
+          fi
+
       - name: Build app
+        env:
+          BYTETIDE_UPDATER_PUBLIC_KEY: ${{ vars.BYTETIDE_UPDATER_PUBLIC_KEY }}
         run: npx tauri build --bundles app
 
       - name: Seal app (ad-hoc) and verify
         run: |
           codesign --force --deep --sign - target/release/bundle/macos/ByteTide.app
           codesign --verify --deep --strict target/release/bundle/macos/ByteTide.app
+
+      - name: Package and sign macOS update
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            tar -czf ByteTide.app.tar.gz -C target/release/bundle/macos ByteTide.app
+            npx tauri signer sign ByteTide.app.tar.gz
+          fi
 
       - name: Create DMG
         run: |
@@ -163,12 +211,20 @@ jobs:
           hdiutil create -volname "ByteTide" -srcfolder dmg-staging -ov -format UDZO \
             "target/release/bundle/dmg/ByteTide_${VERSION}_aarch64.dmg"
 
+      - name: Collect macOS artifacts
+        run: |
+          mkdir -p desktop-macos-artifacts
+          cp target/release/bundle/dmg/ByteTide_*_aarch64.dmg desktop-macos-artifacts/
+          if [ -f ByteTide.app.tar.gz ]; then
+            cp ByteTide.app.tar.gz ByteTide.app.tar.gz.sig desktop-macos-artifacts/
+          fi
+
       # 工作区化后 bundle 也落在根 target/release/bundle/（不再是 src-tauri/target/）
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: macos-arm64-dmg
-          path: target/release/bundle/dmg/ByteTide_*_aarch64.dmg
+          path: desktop-macos-artifacts/*
           if-no-files-found: error
 
   build-cli:
@@ -183,11 +239,27 @@ jobs:
     needs: [build-windows, build-macos, build-cli]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
       - name: Download artifacts
         uses: actions/download-artifact@v8
         with:
           merge-multiple: true
           path: dist
+
+      - name: Create signed desktop update manifest
+        env:
+          UPDATE_PUBLIC_KEY: ${{ vars.BYTETIDE_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$UPDATE_PUBLIC_KEY" ]; then
+            npm ci
+            node scripts/desktop-update-manifest.mjs dist "$GITHUB_REF_NAME"
+            npx tauri signer sign dist/desktop-update.json
+          fi
 
       - name: Create draft release
         uses: softprops/action-gh-release@v3

@@ -39,6 +39,7 @@ function makeFakeClient() {
 
 /** 各命名订阅对应的后端事件名（gui_sink 转发的既有事件，不可改动） */
 const EVENT_NAMES: [keyof ReturnType<typeof createEventSubscriptions>, string][] = [
+  ['onDesktopUpdateProgress', 'desktop-update-progress'],
   ['onSessionStatus', 'session-status'],
   ['onSessionError', 'session-error'],
   ['onPortChanged', 'port-changed'],

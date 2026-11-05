@@ -149,6 +149,24 @@
 
 ## CLI（bytetide）：无头监控
 
+### 安装与更新 CLI
+
+Linux x86_64 / ARM64 和 macOS Apple Silicon 可使用安装脚本。首次安装需要 `curl` 和 Python 3.9+，不需要 Rust：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RtuQ/bytetide/main/scripts/install.sh | sh
+# 自定义目录或固定版本（版本须已提供 SHA-256 校验文件）：
+# 下载脚本到本地后执行：sh install.sh --install-dir "$HOME/.local/bin" --version 0.8.0
+bytetide update --check             # 联网检查，不安装
+bytetide update                     # 联网检查并安装新版本
+bytetide update --version 0.8.0     # 指定稳定版本，允许显式降级
+```
+
+脚本默认安装到 `~/.local/bin`；若该目录不在 PATH，会提示手动添加，不自动修改 shell 配置或使用 sudo。后续 `update` 直接更新当前运行的二进制（符号链接解析后的目标），无需 Python。安装、更新都会校验 SHA-256 和二进制版本，再在同一目录原子替换；失败保留旧程序。安装目录必须可写。
+
+只有显式执行 `update` 才会访问更新服务，普通启动、`list`、`monitor`、`run` 不检查更新；监控命令原有的 TCP/UDP 数据源联网行为不受影响。没有后台检查或自动重启。更新只选择同时包含对应平台压缩包和 `.sha256` 文件的正式 `v*` / `cli-v*` 发布，按语义版本排序，同版本优先 `cli-v*`；旧发布若无校验文件不会被选中。CLI 发布标签版本必须与 workspace 一致。Windows CLI 自动更新暂不支持。
+
+
 适用于无法运行桌面环境的服务器、树莓派 / ARM 工控板。GitHub Releases 的桌面版 `v*` 发布与 CLI 专用 `cli-v*` 标签均提供 aarch64 / x86_64 的 **musl 静态二进制** tarball，单文件部署，无运行时依赖；本地从源码构建：`cargo build -p bytetide-cli --release`。
 
 ```bash
@@ -221,6 +239,10 @@ bytetide/
 ## 许可证
 
 MIT，详见 [LICENSE](./LICENSE)。
+
+### 桌面端软件内更新
+
+Windows 便携版和 macOS Apple Silicon 支持手动下载更新、显示进度，并在确认后重启安装。签名未配置或旧发布不具备更新产物时，保留 GitHub 手动下载入口。发布者配置与首次升级说明见 [桌面更新说明](docs/desktop-updates.md)。
 
 ### 从 tag 发布版本
 

@@ -5,6 +5,7 @@
 export const CMD_ERROR_CODES = [
   // 兜底：无合法 code|detail 前缀的旧格式 / 异常对象
   'generic',
+  'desktop_update_failed',
 
   // ---- core 事件面（EventSink::error → toast/横幅：serial/runtime.rs）----
   'open_port_failed', // 打开串口失败          detail: {端口名}: {io 文本}

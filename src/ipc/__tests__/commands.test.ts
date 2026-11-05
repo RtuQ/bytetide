@@ -275,3 +275,19 @@ describe('commands 适配层：命令字符串与 camelCase 参数键', () => {
     expect(typeof commands.appendPerfDiagnostic).toBe('function')
   })
 })
+
+
+describe('desktop update commands', () => {
+  it('passes only the selected release tag and returns backend DTOs', async () => {
+    const { client, calls } = makeFakeClient([{ supported: true }, { version: '1.0.0' }, undefined])
+    const commands = createCommands(client)
+    expect(await commands.desktopUpdateInfo()).toEqual({ supported: true })
+    expect(await commands.desktopUpdateDownload('v1.0.0')).toEqual({ version: '1.0.0' })
+    await commands.desktopUpdateInstall()
+    expect(calls).toEqual([
+      { command: 'desktop_update_info_cmd', args: {} },
+      { command: 'desktop_update_download_cmd', args: { tag: 'v1.0.0' } },
+      { command: 'desktop_update_install_cmd', args: {} },
+    ])
+  })
+})

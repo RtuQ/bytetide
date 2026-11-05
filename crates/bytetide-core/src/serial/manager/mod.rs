@@ -854,6 +854,46 @@ impl PortManager {
             .map(|h| h.annotations.read().clone())
     }
 
+    /// Stop and flush sessions immediately before exiting the process.
+    /// Link establishment may block in an OS connect/accept call. A live thread
+    /// still Connecting has consumed no device data. TCP listeners are cancellable;
+    /// only other unfinished link-establishment workers may be detached here.
+    /// Their stop flag prevents reads if the link
+    /// completes. Ordinary disconnect must keep its joining semantics.
+    pub fn shutdown_for_exit(&self) {
+        let mut handles: Vec<(SessionHandle, bool)> = self
+            .sessions
+            .write()
+            .drain()
+            .map(|(_, handle)| {
+                // Coordinate with the worker's Connected transition: either it
+                // already entered stream processing and must be joined, or its
+                // next status lock observes the stop before stream_loop starts.
+                let connecting = {
+                    let state = handle.runtime.state.write();
+                    handle.stop.store(true, Ordering::Relaxed);
+                    matches!(handle.kind, SessionKind::Live)
+                        && state.status == SessionStatus::Connecting
+                        && handle.config.transport.as_deref() != Some("tcp-server")
+                };
+                (handle, connecting)
+            })
+            .collect();
+        // Signal every session before waiting on any worker's final flush.
+        for (handle, _) in &mut handles {
+            if let Some(tx) = handle.replay_tx.take() {
+                let _ = tx.send(ReplayCmd::Stop);
+            }
+        }
+        for (mut handle, connecting) in handles {
+            if let Some(join) = handle.join.take() {
+                if !connecting || join.is_finished() {
+                    let _ = join.join();
+                }
+            }
+        }
+    }
+
     #[allow(dead_code)]
     pub fn disconnect_all(&self) {
         let handles: Vec<(String, SessionHandle)> = self.sessions.write().drain().collect();

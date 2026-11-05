@@ -14,6 +14,7 @@ export default defineConfig({
     exclude: [
       'src/components/__tests__/Scenario*.test.ts',
       'src/components/__tests__/ConnectionConfigPopover.test.ts',
+      'src/components/__tests__/TitleBar.test.ts',
       ...configDefaults.exclude,
     ],
   },

@@ -222,6 +222,26 @@ bytetide/
 
 MIT — see [LICENSE](./LICENSE).
 
+### In-app desktop updates
+
+Windows portable and macOS Apple Silicon builds support explicit downloads, progress and confirmed restart/install. Unsigned or legacy releases retain the manual download fallback. See [desktop update setup](docs/desktop-updates.md) for signing configuration and first-upgrade requirements.
+
+### CLI installation and updates
+
+For Linux x86_64/ARM64 and macOS Apple Silicon, install without Rust (bootstrap requires curl and Python 3.9+):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RtuQ/bytetide/main/scripts/install.sh | sh
+bytetide update --check
+bytetide update
+# Pin a published stable version, including an explicit downgrade:
+bytetide update --version 0.8.0
+```
+
+The installer defaults to `~/.local/bin`. Download the script first to pass `--install-dir DIR` or `--version VERSION`. It reports missing PATH entries without editing shell profiles or invoking sudo. Subsequent Rust updates do not require Python. Both paths verify SHA-256 and the binary version before atomic replacement in the destination directory; failures preserve the old executable. The directory must be writable; symlinks are resolved to their target.
+
+Only an explicit `update` command contacts the update service. Other commands never check for updates; their existing TCP/UDP data-source connections are unaffected. No background polling or automatic restart. Selection uses the highest stable semantic version across published `v*` and `cli-v*` releases containing both the platform archive and its `.sha256` sidecar, preferring `cli-v*` on ties. Legacy releases without checksums are ineligible. CLI release tags must match the workspace version. Windows CLI self-update is not supported yet.
+
 ### Release versions from tags
 
 Push a `v0.8.0` desktop tag or `cli-v0.8.1` standalone CLI tag on the desired source commit. CI updates version manifests and lockfiles only in its temporary build checkouts; no version commit or repository writeback is created. See [releasing](docs/releasing.md).
