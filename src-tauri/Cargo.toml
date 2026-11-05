@@ -50,7 +50,7 @@ tempfile = "3"
 # Windows：退出 EcoQoS 能效限流（后台/锁屏时系统会把进程丢进节能队列，
 # 导致 IPC 派发延迟数十秒——长挂监控必须显式禁用）
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_Foundation"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_Foundation"] }
 
 # 集成测试（tests/bridge_routes.rs）：tower::ServiceExt::oneshot 把 Request 直接喂给
 # axum Router（与 axum 0.7 共享 tower-service 0.3 的 Service trait）
