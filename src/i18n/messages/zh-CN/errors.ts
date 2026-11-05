@@ -6,6 +6,7 @@
  */
 export const errors = {
   // 兜底：无合法 code|detail 前缀的旧格式 / 异常对象
+  'errors.desktop_update_failed': '桌面更新失败',
   'errors.generic': '操作失败',
 
   // ---- core 事件面（EventSink::error → toast/横幅）----

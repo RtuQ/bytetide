@@ -222,6 +222,9 @@ bytetide/
 
 MIT — see [LICENSE](./LICENSE).
 
+### In-app desktop updates
+
+Windows portable and macOS Apple Silicon builds support explicit downloads, progress and confirmed restart/install. Unsigned or legacy releases retain the manual download fallback. See [desktop update setup](docs/desktop-updates.md) for signing configuration and first-upgrade requirements.
 
 ### CLI installation and updates
 

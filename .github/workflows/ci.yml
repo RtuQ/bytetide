@@ -31,6 +31,9 @@ jobs:
       - name: Release version check
         run: npm run check:version
 
+      - name: Desktop update manifest tests
+        run: node --test scripts/desktop-update-manifest.test.mjs
+
       # Tauri 配置预检：Windows 后台节流 flag 必须齐全且为独立参数
       - name: Tauri config check
         run: npm run check:tauri-config
@@ -41,7 +44,7 @@ jobs:
 
       # Rust：单元测试 + 编译检查（覆盖 bytetide-core / bytetide-cli / src-tauri 全工作区）
       - name: Rust tests
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
 
       # REST 桥路由层集成测试（fake service + oneshot 直喂 Router，不含真实串口/网络）
       - name: Bridge route tests
@@ -53,13 +56,13 @@ jobs:
         run: cargo test -p bytetide-core --test replay_soak -- --ignored
 
       - name: Rust check
-        run: cargo check --workspace
+        run: cargo check --locked --workspace
 
       - name: Rust fmt
         run: cargo fmt --all -- --check
 
       - name: Rust clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       # 前端：类型检查 + 构建
       - name: Install JS deps
@@ -74,6 +77,21 @@ jobs:
       # 组件测试（jsdom + @vue/test-utils，独立 vitest project）
       - name: Component tests
         run: npm run test:components
+
+  desktop-update-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Rust formatting check
+        run: cargo fmt --all -- --check
+      - name: Rust workspace tests
+        run: cargo test --locked --workspace
+      - name: Rust clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
   cli-install-and-update:
     strategy:

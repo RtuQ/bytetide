@@ -1,9 +1,12 @@
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { makeCodec } from '../persistence/schema'
 import { loadStored, saveStored } from '../persistence/storage'
 import { t } from '../i18n'
+import { commands } from '../ipc/commands'
+import { onDesktopUpdateProgress } from '../ipc/events'
+import { errorMessage } from '../ipc/errors'
 
 /** 更新检查的 GitHub 仓库；改动需同步 scripts/portable-README.txt 的主页链接 */
 const UPDATE_REPO = 'RtuQ/bytetide'
@@ -30,6 +33,9 @@ const dismissedCodec = makeCodec<string>('update.dismissedVersion', (raw) => {
 export type UpdateStatus =
   | 'idle' // 初始 / 已忽略
   | 'checking' // 检查中
+  | 'downloading'
+  | 'ready'
+  | 'installing'
   | 'available' // 有新版本
   | 'latest' // 已是最新
   | 'error' // 检查失败（网络 / 接口）
@@ -79,6 +85,7 @@ export function parseRelease(json: unknown): UpdateInfo | null {
   if (typeof json !== 'object' || json === null) return null
   const r = json as Record<string, unknown>
   if (typeof r.tag_name !== 'string' || typeof r.html_url !== 'string') return null
+  if (!/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(r.tag_name) || r.draft === true || r.prerelease === true) return null
   return {
     tagName: r.tag_name,
     version: normalizeTag(r.tag_name),
@@ -106,14 +113,64 @@ const status = ref<UpdateStatus>('idle')
 const updateInfo = ref<UpdateInfo | null>(null)
 const currentVersion = ref('')
 const errorMsg = ref('')
+const supported = ref(false)
+const downloaded = ref(0)
+const total = ref<number | null>(null)
+const progressPercent = computed(() => total.value && total.value > 0
+  ? Math.min(100, Math.floor(downloaded.value / total.value * 100)) : null)
+const errorAction = ref<'check' | 'download' | 'install'>('check')
+let staged = false
 let inited = false
+
+async function refreshSupport(): Promise<void> {
+  try { supported.value = (await commands.desktopUpdateInfo()).supported }
+  catch { supported.value = false }
+}
+
+async function downloadUpdate(): Promise<void> {
+  if (!supported.value || !updateInfo.value || !['available', 'error'].includes(status.value) || staged) return
+  const tag = updateInfo.value.tagName
+  status.value = 'downloading'
+  errorMsg.value = ''
+  downloaded.value = 0
+  total.value = null
+  let dispose: (() => void) | undefined
+  try {
+    dispose = await onDesktopUpdateProgress((progress) => {
+      downloaded.value = Math.max(0, progress.downloaded)
+      total.value = progress.total && progress.total > 0 ? progress.total : null
+    })
+    await commands.desktopUpdateDownload(tag)
+    staged = true
+    status.value = 'ready'
+  } catch (e) {
+    errorAction.value = 'download'
+    errorMsg.value = errorMessage(e)
+    status.value = 'error'
+  } finally { dispose?.() }
+}
+
+async function installUpdate(confirm: () => boolean | Promise<boolean>): Promise<void> {
+  if (!staged || !['ready', 'error'].includes(status.value)) return
+  // Lock before awaiting confirmation so repeated clicks cannot open duplicate prompts.
+  status.value = 'installing'
+  try {
+    if (!await confirm()) { status.value = 'ready'; return }
+    errorMsg.value = ''
+    await commands.desktopUpdateInstall()
+  } catch (e) {
+    errorAction.value = 'install'
+    errorMsg.value = errorMessage(e)
+    status.value = 'error'
+  }
+}
 
 /**
  * 检查更新。force=false 为静默检查（24h 节流、被忽略的版本不再提示）；
  * force=true 为手动检查（绕过节流，重新显示已忽略版本）。
  */
 async function checkNow(force = false): Promise<void> {
-  if (status.value === 'checking') return
+  if (['checking', 'downloading', 'ready', 'installing'].includes(status.value) || staged) return
   if (!force && !isCheckDue(Date.now(), readLastCheck(), CHECK_INTERVAL_MS)) return
 
   if (!UPDATE_REPO) {
@@ -126,16 +183,19 @@ async function checkNow(force = false): Promise<void> {
   status.value = 'checking'
   errorMsg.value = ''
   try {
-    const res = await fetch(`https://api.github.com/repos/${UPDATE_REPO}/releases/latest`, {
-      headers: { Accept: 'application/vnd.github+json' },
-      signal: AbortSignal.timeout(API_TIMEOUT_MS),
-    })
-    if (!res.ok) {
-      // throw 点求值（errorMsg 随后展示原文，不随语言切换重译）
-      throw new Error(res.status === 404 ? t('logic.update.noReleases') : t('logic.update.apiStatus', { status: res.status }))
+    let info: UpdateInfo | null = null
+    for (let page = 1; page <= 10 && !info; page++) {
+      const res = await fetch(`https://api.github.com/repos/${UPDATE_REPO}/releases?per_page=100&page=${page}`, {
+        headers: { Accept: 'application/vnd.github+json' },
+        signal: AbortSignal.timeout(API_TIMEOUT_MS),
+      })
+      if (!res.ok) throw new Error(res.status === 404 ? t('logic.update.noReleases') : t('logic.update.apiStatus', { status: res.status }))
+      const releases: unknown = await res.json()
+      if (!Array.isArray(releases)) throw new Error(t('logic.update.badResponse'))
+      info = releases.map(parseRelease).find((release) => release !== null) ?? null
+      if (releases.length < 100) break
     }
-    const info = parseRelease(await res.json())
-    if (!info) throw new Error(t('logic.update.badResponse'))
+    if (!info) throw new Error(t('logic.update.noReleases'))
     updateInfo.value = info
     if (!isNewer(currentVersion.value, info.version)) {
       status.value = 'latest'
@@ -145,6 +205,7 @@ async function checkNow(force = false): Promise<void> {
       status.value = 'available'
     }
   } catch (e) {
+    errorAction.value = 'check'
     status.value = 'error'
     errorMsg.value = e instanceof Error ? e.message : String(e)
   }
@@ -154,6 +215,7 @@ async function checkNow(force = false): Promise<void> {
 function init(): void {
   if (inited) return
   inited = true
+  void refreshSupport()
   getVersion()
     .then(async (v) => {
       currentVersion.value = v
@@ -188,6 +250,8 @@ async function openReleasePage(): Promise<void> {
 export function useUpdateChecker() {
   return {
     status,
+    supported, downloaded, total, progressPercent, errorAction,
+    refreshSupport, downloadUpdate, installUpdate,
     updateInfo,
     currentVersion,
     errorMsg,

@@ -202,3 +202,107 @@ fn disconnect_parks_readonly_tombstone_for_final_drain() {
 // serial/runtime.rs 测试——被测主循环在该文件；离线分页会话（load_offline_indexed）
 // 的虚拟 ring 查询路由端到端用例在 offline 模块单测与 src-tauri/tests/offline_pages.rs。
 // 本文件只保留编排面，行数受架构检查器 1000 行限额约束（scripts/check-architecture.mjs）。
+
+#[test]
+fn shutdown_for_exit_detaches_pending_links_and_joins_recordings() {
+    use std::io::Write;
+    use std::time::Duration;
+
+    let manager = Arc::new(PortManager::new());
+    let pending_stop = Arc::new(AtomicBool::new(false));
+    let recording_stop = Arc::new(AtomicBool::new(false));
+    let (release_pending_tx, release_pending_rx) = mpsc::channel();
+    let (pending_done_tx, pending_done_rx) = mpsc::channel();
+    let pending_worker = thread::spawn(move || {
+        release_pending_rx.recv().unwrap();
+        pending_done_tx.send(()).unwrap();
+    });
+    let dir = crate::offline::test_support::temp_dir("shutdown-for-exit");
+    let recording_path = dir.join("recording.log");
+    let recording_file = std::fs::File::create(&recording_path).unwrap();
+    let worker_pending_stop = pending_stop.clone();
+    let worker_recording_stop = recording_stop.clone();
+    let (recording_flushed_tx, recording_flushed_rx) = mpsc::channel();
+    let (release_recording_tx, release_recording_rx) = mpsc::channel();
+    let recording_worker = thread::spawn(move || {
+        let mut writer = std::io::BufWriter::new(recording_file);
+        writer.write_all(b"last recording frame\n").unwrap();
+        while !worker_pending_stop.load(Ordering::Relaxed)
+            || !worker_recording_stop.load(Ordering::Relaxed)
+        {
+            thread::yield_now();
+        }
+        release_recording_rx.recv().unwrap();
+        writer.flush().unwrap();
+        recording_flushed_tx.send(()).unwrap();
+    });
+    let make_handle = |status, stop, join| {
+        let runtime = Arc::new(SessionRuntime::new());
+        runtime.set_status(status);
+        let (write_tx, _write_rx) = mpsc::channel();
+        SessionHandle {
+            config: PortConfig {
+                transport: Some("tcp-client".into()),
+                ..PortConfig::default()
+            },
+            kind: SessionKind::Live,
+            stop,
+            write_tx,
+            log_path: Arc::new(RwLock::new(PathBuf::new())),
+            log_base: PathBuf::new(),
+            join: Some(join),
+            runtime,
+            plot: Arc::new(RwLock::new(PlotConfig::default())),
+            bookmarks: Arc::new(RwLock::new(Vec::new())),
+            alerts: Arc::new(RwLock::new(Vec::new())),
+            annotations: Arc::new(RwLock::new(Vec::new())),
+            offline: None,
+            replay_tx: None,
+        }
+    };
+    manager.sessions.write().insert(
+        "pending".into(),
+        make_handle(
+            SessionStatus::Connecting,
+            pending_stop.clone(),
+            pending_worker,
+        ),
+    );
+    manager.sessions.write().insert(
+        "recording".into(),
+        make_handle(
+            SessionStatus::Connected,
+            recording_stop.clone(),
+            recording_worker,
+        ),
+    );
+    let worker_manager = manager.clone();
+    let (shutdown_done_tx, shutdown_done_rx) = mpsc::channel();
+    let shutdown_worker = thread::spawn(move || {
+        worker_manager.shutdown_for_exit();
+        shutdown_done_tx.send(()).unwrap();
+    });
+    let before_flush = shutdown_done_rx.recv_timeout(Duration::from_millis(50));
+    release_recording_tx.send(()).unwrap();
+    let result = shutdown_done_rx.recv_timeout(Duration::from_secs(2));
+    // Release the deliberately blocked thread even if shutdown incorrectly joins it.
+    release_pending_tx.send(()).unwrap();
+    pending_done_rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap();
+    shutdown_worker.join().unwrap();
+    assert!(
+        matches!(before_flush, Err(mpsc::RecvTimeoutError::Timeout)),
+        "shutdown must wait for the connected recording worker"
+    );
+    result.expect("pending OS link establishment must not block process exit");
+    assert!(pending_stop.load(Ordering::Relaxed));
+    assert!(recording_stop.load(Ordering::Relaxed));
+    recording_flushed_rx.try_recv().unwrap();
+    assert_eq!(
+        std::fs::read(&recording_path).unwrap(),
+        b"last recording frame\n"
+    );
+    assert!(manager.sessions.read().is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}

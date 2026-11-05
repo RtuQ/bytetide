@@ -45,6 +45,24 @@ pub fn open_transport(config: &PortConfig) -> io::Result<Box<dyn Transport>> {
     }
 }
 
+/// Runtime opening path: TCP listeners can release their bound port on stop.
+/// Client connection and name resolution retain their platform behavior.
+pub(crate) fn open_transport_cancellable(
+    config: &PortConfig,
+    stop: &std::sync::atomic::AtomicBool,
+) -> io::Result<Box<dyn Transport>> {
+    if config.transport.as_deref() == Some("tcp-server") {
+        Ok(Box::new(tcp::TcpTransport::accept_cancellable(
+            bind_host_of(config),
+            config.tcp_port.unwrap_or(9000),
+            describe_transport(config),
+            stop,
+        )?))
+    } else {
+        open_transport(config)
+    }
+}
+
 fn open_net(config: &PortConfig) -> io::Result<Box<dyn Transport>> {
     let desc = describe_transport(config);
     match config.transport.as_deref() {

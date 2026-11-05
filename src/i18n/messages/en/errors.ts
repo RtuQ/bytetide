@@ -6,6 +6,7 @@ import type { errors as errorsZh } from '../zh-CN/errors'
  */
 export const errors: Record<keyof typeof errorsZh, string> = {
   // Fallback: legacy format without a valid code|detail prefix / thrown objects
+  'errors.desktop_update_failed': 'Desktop update failed',
   'errors.generic': 'Operation failed',
 
   // ---- core event surface (EventSink::error → toast/banner) ----

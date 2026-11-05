@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { confirm } from '@tauri-apps/plugin-dialog'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useUpdateChecker } from '../composables/useUpdateChecker'
 import { usePortCfg, useOpenLog } from '../composables/usePortConfig'
@@ -29,13 +30,31 @@ const {
   updateInfo,
   currentVersion,
   errorMsg,
+  supported, downloaded, total, progressPercent, errorAction, downloadUpdate, installUpdate,
   init: initUpdateChecker,
   checkNow,
   dismiss,
   openReleasePage,
 } = useUpdateChecker()
 const updateOpen = ref(false)
-const showUpdateBadge = computed(() => updateStatus.value === 'available')
+const showUpdateBadge = computed(() => ['available', 'downloading', 'ready'].includes(updateStatus.value))
+
+function restartUpdate() {
+  return installUpdate(async () => {
+    const message = t('app.update.confirmRestart')
+    try {
+      return await confirm(message, { title: t('app.update.restart'), kind: 'warning' })
+    } catch {
+      return window.confirm(message)
+    }
+  })
+}
+
+function retryUpdate() {
+  if (errorAction.value === 'install') return restartUpdate()
+  if (errorAction.value === 'download') return downloadUpdate()
+  return checkNow(true)
+}
 
 function dismissUpdate() {
   dismiss()
@@ -136,9 +155,25 @@ async function close() {
             </p>
             <pre v-if="updateInfo.notes" class="update-notes">{{ updateInfo.notes }}</pre>
             <div class="update-actions">
-              <button class="btn btn-primary btn-sm" @click="openReleasePage">{{ t('app.update.goDownload') }}</button>
+              <button v-if="supported" class="btn btn-primary btn-sm" @click="downloadUpdate">{{ t('app.update.download') }}</button>
+              <button class="btn btn-ghost btn-sm" @click="openReleasePage">{{ t('app.update.goDownload') }}</button>
               <button class="btn btn-ghost btn-sm" @click="dismissUpdate">{{ t('app.update.dismiss') }}</button>
             </div>
+          </template>
+          <template v-else-if="updateStatus === 'downloading'">
+            <p class="update-line" role="status">{{ t('app.update.downloading') }}</p>
+            <p class="update-line">{{ downloaded.toLocaleString() }} / {{ total === null ? t('app.update.unknownTotal') : total.toLocaleString() }} {{ t('app.update.bytes') }}<span v-if="progressPercent !== null"> ({{ progressPercent }}%)</span></p>
+            <progress v-if="progressPercent !== null" :value="progressPercent" max="100" :aria-label="t('app.update.downloading')"></progress>
+            <button class="btn btn-primary btn-sm" disabled>{{ t('app.update.downloading') }}</button>
+          </template>
+          <template v-else-if="updateStatus === 'ready'">
+            <p class="update-line">{{ t('app.update.ready') }}</p>
+            <p class="update-line">{{ t('app.update.confirmRestart') }}</p>
+            <button class="btn btn-primary btn-sm" @click="restartUpdate">{{ t('app.update.restart') }}</button>
+          </template>
+          <template v-else-if="updateStatus === 'installing'">
+            <p class="update-line" role="status">{{ t('app.update.installing') }}</p>
+            <button class="btn btn-primary btn-sm" disabled>{{ t('app.update.installing') }}</button>
           </template>
           <template v-else-if="updateStatus === 'checking'">
             <p class="update-line">{{ t('app.update.checking') }}</p>
@@ -149,7 +184,7 @@ async function close() {
           <template v-else-if="updateStatus === 'error'">
             <p class="update-line update-err">{{ t('app.update.errorPrefix', { msg: errorMsg || t('app.update.netUnavailable') }) }}</p>
             <div class="update-actions">
-              <button class="btn btn-primary btn-sm" @click="checkNow(true)">{{ t('app.update.retry') }}</button>
+              <button class="btn btn-primary btn-sm" @click="retryUpdate">{{ t('app.update.retry') }}</button>
               <button class="btn btn-ghost btn-sm" @click="openReleasePage">{{ t('app.update.goReleases') }}</button>
             </div>
           </template>

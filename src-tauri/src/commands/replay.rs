@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use bytetide_core::replay::{valid_speed, ReplayCmd, ReplayConfig, ReplayState};
 use bytetide_core::serial::manager::PortManager;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::gui_sink::GuiSink;
 use crate::state::AppState;
@@ -237,6 +237,8 @@ pub fn open_replay_session_cmd(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<ReplayOpenView, String> {
+    let updates = app.state::<crate::desktop_update::DesktopUpdater>();
+    let _start_permit = updates.start_guard()?;
     let config = ReplayConfig {
         speed,
         looped,

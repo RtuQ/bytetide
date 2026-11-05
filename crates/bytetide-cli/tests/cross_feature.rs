@@ -9,11 +9,9 @@
 //! 服务器脚本与桌面同款（放行门=accept 后 300ms——CLI 进程 connect 后随即取
 //! 基线，300ms ≫ 起跑延迟；失败模式为 wait 超时，可见不静默）。
 //!
-//! # 已知慢路径（预先存在，非本 fixture 引入）
-//! CliHost 的读线程持 io 互斥做 200ms 读循环，send 只能在锁竞争间歇完成——
-//! 真 TCP 路径的 send 普遍有秒级延迟（既有 cli_scenario::tcp_loopback 同象，
-//! ~12s/步）。正确性不受影响（wait 超时只约束本步起点之后；send 延迟只推移
-//! 进度），本用例整体 ~1 分钟内稳定通过。
+//! 公平读写锁允许发送方在读超时后取得链路，不依赖操作系统互斥锁的调度偏好。
+
+mod support;
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
@@ -125,13 +123,13 @@ fn spawn_dialogue_server(lines: Vec<String>) -> (u16, JoinHandle<()>) {
 }
 
 fn run_cli(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_bytetide"))
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .expect("spawn bytetide binary")
+    support::output(
+        Command::new(env!("CARGO_BIN_EXE_bytetide"))
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
 }
 
 // ============ 规范输入对 × 真实 run 子进程 ============

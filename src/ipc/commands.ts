@@ -34,6 +34,15 @@ import type {
 /** 按业务域命名的命令对象；工厂形式便于测试注入假 IpcClient */
 export function createCommands(client: IpcClient) {
   return {
+    desktopUpdateInfo(): Promise<{ supported: boolean }> {
+      return client.invoke('desktop_update_info_cmd')
+    },
+    desktopUpdateDownload(tag: string): Promise<{ version: string }> {
+      return client.invoke('desktop_update_download_cmd', { tag })
+    },
+    desktopUpdateInstall(): Promise<void> {
+      return client.invoke('desktop_update_install_cmd')
+    },
     // ---- 会话连接 / 数据通道（commands/sessions.rs）----
     listPorts(): Promise<PortInfo[]> {
       return client.invoke<PortInfo[]>('list_ports_cmd')

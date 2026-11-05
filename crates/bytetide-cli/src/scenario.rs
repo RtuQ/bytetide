@@ -11,8 +11,8 @@
 //! - 行缓冲：后台读线程按 core `stream_loop` 同款语义切行（`\n` 分割、行尾 `\r`
 //!   剥离、空闲 150ms 刷出半行），行进 `Arc<Shared>`（`VecDeque<BridgeLine>` +
 //!   单调 `no`），容量对齐 core `RING_CAP`（满了淘汰最旧行，游标语义与 ring 一致）。
-//! - 读写分权：`Box<dyn Transport>` 挂 `Arc<Mutex<..>>`，读线程与 host 的
-//!   send/signal 互斥借用（read timeout 200ms 保证写侧等待有界）。
+//! - 读写分权：`Box<dyn Transport>` 挂 `Arc<FairMutex<..>>`，读线程与 host 的
+//!   send/signal 互斥借用（公平交接防止读线程反复抢锁，读超时约束单次占用）。
 //! - TX 本地回显：send 成功后把原文作为 dir=tx 行入缓冲（对齐桌面端 TX 回显入
 //!   ring 语义，`wait dir:tx` 可用）；HEX 模式 host 侧严格解码（runner 只做变量
 //!   替换，合法性按宿主契约归 host）。
@@ -50,6 +50,7 @@ use bytetide_core::serial::manager::BridgeLine;
 use bytetide_core::serial::port::{Dir, PortConfig};
 use bytetide_core::serial::ring::RING_CAP;
 use bytetide_core::serial::transport::{self, Pin, Transport};
+use parking_lot::FairMutex;
 
 use crate::args::RunArgs;
 use crate::input::parse_hex_pairs;
@@ -369,7 +370,7 @@ impl Shared {
 /// CLI 场景宿主：后台读线程积累 RX 行缓冲，send/signal 走 `Transport`。
 /// Drop 时停读线程并 join（经 `Box<dyn ScenarioHost>` 的 vtable drop 仍会执行）。
 pub struct CliHost {
-    io: Arc<Mutex<Box<dyn Transport>>>,
+    io: Arc<FairMutex<Box<dyn Transport>>>,
     shared: Arc<Shared>,
     stop: Arc<AtomicBool>,
     reader: Option<std::thread::JoinHandle<()>>,
@@ -379,7 +380,7 @@ impl CliHost {
     /// 打开数据源链路并启动读线程（链路建立失败原样上抛 io::Error）。
     pub fn open(config: &PortConfig) -> io::Result<Self> {
         let transport = transport::open_transport(config)?;
-        let io = Arc::new(Mutex::new(transport));
+        let io = Arc::new(FairMutex::new(transport));
         let shared = Arc::new(Shared::new());
         let stop = Arc::new(AtomicBool::new(false));
         let reader = {
@@ -426,7 +427,7 @@ impl ScenarioHost for CliHost {
                 .map_err(|e| HostError::Transport(format!("HEX 发送解码失败: {e}")))?,
         };
         {
-            let mut io = self.io.lock().unwrap_or_else(|e| e.into_inner());
+            let mut io = self.io.lock();
             io.write_all(&bytes)
                 .and_then(|()| io.flush())
                 .map_err(|e| HostError::Transport(format!("发送失败: {e}")))?;
@@ -441,7 +442,7 @@ impl ScenarioHost for CliHost {
             PinDef::Dtr => Pin::Dtr,
             PinDef::Rts => Pin::Rts,
         };
-        let mut io = self.io.lock().unwrap_or_else(|e| e.into_inner());
+        let mut io = self.io.lock();
         // 网络源在链路层报「网络源无信号线」→ HostError::Transport（场景 failed → 1）
         io.set_signal(pin, level)
             .map_err(|e| HostError::Transport(e.to_string()))
@@ -480,7 +481,7 @@ impl ScenarioHost for CliHost {
 }
 
 /// 读线程主循环（对齐 core stream_loop 的行切分与空闲刷出；EOF/硬错误置 dead）。
-fn read_loop(io: Arc<Mutex<Box<dyn Transport>>>, stop: Arc<AtomicBool>, shared: Arc<Shared>) {
+fn read_loop(io: Arc<FairMutex<Box<dyn Transport>>>, stop: Arc<AtomicBool>, shared: Arc<Shared>) {
     let mut asm = LineAssembler::new();
     let mut buf = [0u8; 4096];
     let mut last_data = Instant::now();
@@ -489,8 +490,8 @@ fn read_loop(io: Arc<Mutex<Box<dyn Transport>>>, stop: Arc<AtomicBool>, shared: 
         if stop.load(Ordering::Relaxed) {
             return;
         }
-        // 锁 scoped：读超时 200ms 保证 send/signal 的等待有界
-        let read = io.lock().unwrap_or_else(|e| e.into_inner()).read(&mut buf);
+        // 公平锁在有等待者时交接所有权，避免读线程超时后立即重新抢占写侧。
+        let read = io.lock().read(&mut buf);
         match read {
             Ok(0) => {
                 shared.mark_dead("连接已断开（对端关闭）".into());

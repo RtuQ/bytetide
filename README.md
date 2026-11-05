@@ -239,3 +239,7 @@ bytetide/
 ## 许可证
 
 MIT，详见 [LICENSE](./LICENSE)。
+
+### 桌面端软件内更新
+
+Windows 便携版和 macOS Apple Silicon 支持手动下载更新、显示进度，并在确认后重启安装。签名未配置或旧发布不具备更新产物时，保留 GitHub 手动下载入口。发布者配置与首次升级说明见 [桌面更新说明](docs/desktop-updates.md)。

@@ -63,9 +63,17 @@ export type ScenarioProgressEvent = ScenarioProgressPayload
 /** scenario-finished 载荷：恰一次，= ScenarioRunView */
 export type ScenarioFinishedEvent = ScenarioRunView
 
+export interface DesktopUpdateProgress {
+  downloaded: number
+  total?: number | null
+}
+
 /** 按业务域命名的事件订阅；工厂形式便于测试注入假 IpcClient */
 export function createEventSubscriptions(client: IpcClient) {
   return {
+    onDesktopUpdateProgress(handler: (payload: DesktopUpdateProgress) => void): Promise<Unlisten> {
+      return client.listen<DesktopUpdateProgress>('desktop-update-progress', handler)
+    },
     onSessionStatus(handler: (payload: StatusPayload) => void): Promise<Unlisten> {
       return client.listen<StatusPayload>('session-status', handler)
     },
@@ -108,6 +116,7 @@ export type EventSubscriptions = ReturnType<typeof createEventSubscriptions>
 
 /** 应用默认订阅对象（绑定 Tauri 实现），逐个具名导出 */
 const tauriEvents: EventSubscriptions = createEventSubscriptions(tauriClient)
+export const onDesktopUpdateProgress = tauriEvents.onDesktopUpdateProgress
 export const onSessionStatus = tauriEvents.onSessionStatus
 export const onSessionError = tauriEvents.onSessionError
 export const onPortChanged = tauriEvents.onPortChanged
