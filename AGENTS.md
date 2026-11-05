@@ -280,5 +280,4 @@ UI 层与逻辑层严格分离：
 图标源图在 `scripts/brand-icon.png`（`make_icon.py` 生成 -> `npx tauri icon scripts/brand-icon.png` 出全套）。README 预览图（原 `docs/preview.png`）已应作者要求移除，待其自行补充新截图后恢复引用。
 
 ### 发版流程（勿手改版本号文件）
-版本号散在四处：`package.json` / 根 `Cargo.toml [workspace.package]`（src-tauri 经 `version.workspace` 继承）/ `src-tauri/tauri.conf.json`（release workflow 打 DMG 直接读它命名，**不可删此字段**）。升版本一律走 `npm run bump -- 0.x.y`（`scripts/bump-version.mjs`：一条命令同步四处清单 + `cargo update --workspace` 刷 Cargo.lock，幂等，脚本只改文件不碰 git 并打印后续命令）。随后：`chore(release): 版本升至 0.x.y` 提交 → `git tag -a v0.x.y` → push 提交与 tag（触发 release workflow 出草稿 Release）→ GitHub 补说明后发布。CI `check:version` 门禁兜底四处一致性（`npm run test:bump` 是脚本自身单测）。
-
+版本号来源为发布 tag：`v0.x.y`（桌面及随附 CLI）或 `cli-v0.x.y`（独立 CLI）。正常发版只需提交功能改动后创建并推送 tag，无需提前修改或提交版本号文件。Release 的 verify、Windows/macOS 构建任务与可复用 CLI 构建任务均运行 `scripts/prepare-release-version.mjs`，在各自临时 checkout 中同步 `package.json`、根 `[workspace.package]`、`tauri.conf.json`、`package-lock.json` 的两处根版本，并严格执行 `cargo update --workspace` 刷新 `Cargo.lock`；`src-tauri` / core / CLI 经 workspace 继承。脚本不执行 git commit/push，不回写仓库。构建版本、DMG 文件名和程序内版本取同步后的清单；更新清单从同一个 tag 提取版本。任何无效 tag 或锁文件刷新失败都阻止发布。普通分支 CI 仍检查仓库清单自身一致性。`npm run bump` 仅保留为可选本地开发工具，不是发版前置步骤。脚本测试：`npm run test:release-version`；完整说明见 `docs/releasing.md`。

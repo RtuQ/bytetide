@@ -221,3 +221,7 @@ bytetide/
 ## License
 
 MIT — see [LICENSE](./LICENSE).
+
+### Release versions from tags
+
+Push a `v0.8.0` desktop tag or `cli-v0.8.1` standalone CLI tag on the desired source commit. CI updates version manifests and lockfiles only in its temporary build checkouts; no version commit or repository writeback is created. See [releasing](docs/releasing.md).
