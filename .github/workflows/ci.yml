@@ -77,6 +77,7 @@ jobs:
 
   cli-install-and-update:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
@@ -95,23 +96,11 @@ jobs:
         run: |
           sh -n scripts/install.sh
           sh scripts/install.sh --help
-      - name: Resolve CLI dependencies and format Rust
-        run: |
-          cargo metadata --format-version 1 > /dev/null
-          cargo fmt --all
-      - name: Upload resolved Rust files
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v7
-        with:
-          name: cli-resolved-rust
-          path: |
-            Cargo.lock
-            crates/bytetide-cli/src/update.rs
-            crates/bytetide-cli/src/args.rs
-            crates/bytetide-cli/tests/cli_update.rs
+      - name: Rust formatting check
+        run: cargo fmt --all -- --check
       - name: CLI tests and smoke
         run: |
-          cargo test -p bytetide-cli
-          cargo run -p bytetide-cli -- update --help
+          cargo test --locked -p bytetide-cli
+          cargo run --locked -p bytetide-cli -- update --help
       - name: CLI clippy
-        run: cargo clippy -p bytetide-cli --all-targets -- -D warnings
+        run: cargo clippy --locked -p bytetide-cli --all-targets -- -D warnings

@@ -34,7 +34,11 @@ struct Release {
 
 /// 将发布标签解析为稳定语义版本，忽略不属于 CLI/桌面命名空间的标签。
 fn release_version(tag: &str) -> Option<Version> {
-    let version = Version::parse(tag.strip_prefix("cli-v").or_else(|| tag.strip_prefix('v'))?).ok()?;
+    let version = Version::parse(
+        tag.strip_prefix("cli-v")
+            .or_else(|| tag.strip_prefix('v'))?,
+    )
+    .ok()?;
     (version.pre.is_empty() && version.build.is_empty()).then_some(version)
 }
 
@@ -57,7 +61,9 @@ fn select_release<'a>(
         })
         .max_by(|(a, av), (b, bv)| {
             av.cmp(bv).then_with(|| {
-                a.tag_name.starts_with("cli-v").cmp(&b.tag_name.starts_with("cli-v"))
+                a.tag_name
+                    .starts_with("cli-v")
+                    .cmp(&b.tag_name.starts_with("cli-v"))
             })
         })
 }
@@ -126,7 +132,10 @@ fn extract_binary(archive: &[u8]) -> Result<Vec<u8>> {
             bail!("更新包内的 bytetide 文件无效");
         }
         let mut bytes = Vec::new();
-        entry.by_ref().take(MAX_BINARY + 1).read_to_end(&mut bytes)?;
+        entry
+            .by_ref()
+            .take(MAX_BINARY + 1)
+            .read_to_end(&mut bytes)?;
         if bytes.is_empty() || bytes.len() as u64 > MAX_BINARY {
             bail!("更新二进制为空或超过大小限制");
         }
@@ -145,11 +154,13 @@ fn install(binary: &[u8], destination: &Path, version: &Version) -> Result<()> {
     let mut temporary = tempfile::NamedTempFile::new_in(parent)
         .context("安装目录不可写，请以拥有该目录写权限的用户更新")?;
     temporary.write_all(binary)?;
-    temporary.as_file().set_permissions(std::fs::Permissions::from_mode(mode))?;
+    temporary
+        .as_file()
+        .set_permissions(std::fs::Permissions::from_mode(mode))?;
     temporary.as_file().sync_all()?;
     // macOS/Linux 执行验证前先关闭写句柄，避免 ETXTBSY。
     let temporary = temporary.into_temp_path();
-    let mut child = std::process::Command::new(temporary.to_path_buf())
+    let mut child = std::process::Command::new(&temporary)
         .arg("--version")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -169,7 +180,9 @@ fn install(binary: &[u8], destination: &Path, version: &Version) -> Result<()> {
     {
         bail!("新程序版本验证失败，原程序未修改");
     }
-    temporary.persist(&destination).map_err(|error| anyhow!("替换失败: {error}"))?;
+    temporary
+        .persist(&destination)
+        .map_err(|error| anyhow!("替换失败: {error}"))?;
     Ok(())
 }
 
@@ -181,13 +194,17 @@ fn install(_binary: &[u8], _destination: &Path, _version: &Version) -> Result<()
 /// 更新命令的唯一联网入口；未显式指定版本时不降级。
 fn run(args: &UpdateArgs) -> Result<()> {
     let archive = format!("bytetide-{}.tar.gz", target()?);
-    let pinned = args.version.as_deref().map(|text| -> Result<Version> {
-        let version = Version::parse(text.strip_prefix('v').unwrap_or(text))?;
-        if !version.pre.is_empty() || !version.build.is_empty() {
-            bail!("仅支持稳定版本");
-        }
-        Ok(version)
-    }).transpose()?;
+    let pinned = args
+        .version
+        .as_deref()
+        .map(|text| -> Result<Version> {
+            let version = Version::parse(text.strip_prefix('v').unwrap_or(text))?;
+            if !version.pre.is_empty() || !version.build.is_empty() {
+                bail!("仅支持稳定版本");
+            }
+            Ok(version)
+        })
+        .transpose()?;
     let client = Client::builder()
         .user_agent(concat!("bytetide/", env!("CARGO_PKG_VERSION")))
         .https_only(true)
@@ -196,12 +213,20 @@ fn run(args: &UpdateArgs) -> Result<()> {
         .build()?;
     let mut releases = Vec::new();
     for page in 1.. {
-        let bytes = download(&client, &format!("{API}?per_page=100&page={page}"), 16 * 1024 * 1024)?;
+        let bytes = download(
+            &client,
+            &format!("{API}?per_page=100&page={page}"),
+            16 * 1024 * 1024,
+        )?;
         let batch: Vec<Release> = serde_json::from_slice(&bytes)?;
         let done = batch.len() < 100;
         releases.extend(batch);
-        if done { break; }
-        if page >= 100 { bail!("发布列表超过分页限制，请指定手动下载"); }
+        if done {
+            break;
+        }
+        if page >= 100 {
+            bail!("发布列表超过分页限制，请指定手动下载");
+        }
     }
     let (release, version) = select_release(&releases, &archive, pinned.as_ref())
         .context("没有包含当前平台程序及 SHA-256 校验文件的正式发布")?;
@@ -211,9 +236,14 @@ fn run(args: &UpdateArgs) -> Result<()> {
         return Ok(());
     }
     eprintln!("ByteTide CLI：{current} → {version}");
-    if args.check { return Ok(()); }
+    if args.check {
+        return Ok(());
+    }
     let asset_url = |name: &str| -> Result<&str> {
-        release.assets.iter().find(|asset| asset.name == name)
+        release
+            .assets
+            .iter()
+            .find(|asset| asset.name == name)
             .map(|asset| asset.browser_download_url.as_str())
             .context("发布产物缺失")
     };
@@ -231,7 +261,10 @@ fn run(args: &UpdateArgs) -> Result<()> {
 pub fn cmd_update(args: &UpdateArgs) -> i32 {
     match run(args) {
         Ok(()) => 0,
-        Err(error) => { eprintln!("更新失败：{error:#}"); 1 }
+        Err(error) => {
+            eprintln!("更新失败：{error:#}");
+            1
+        }
     }
 }
 
@@ -241,26 +274,57 @@ mod tests {
 
     fn release(tag: &str, complete: bool) -> Release {
         Release {
-            tag_name: tag.into(), draft: false, prerelease: false,
-            assets: if complete { vec![
-                Asset { name: "test.tar.gz".into(), browser_download_url: "https://example.com/a".into() },
-                Asset { name: "test.tar.gz.sha256".into(), browser_download_url: "https://example.com/b".into() },
-            ] } else { vec![] },
+            tag_name: tag.into(),
+            draft: false,
+            prerelease: false,
+            assets: if complete {
+                vec![
+                    Asset {
+                        name: "test.tar.gz".into(),
+                        browser_download_url: "https://example.com/a".into(),
+                    },
+                    Asset {
+                        name: "test.tar.gz.sha256".into(),
+                        browser_download_url: "https://example.com/b".into(),
+                    },
+                ]
+            } else {
+                vec![]
+            },
         }
     }
 
     #[test]
     fn selection_uses_semver_and_complete_assets() {
-        let releases = vec![release("v0.10.0", true), release("cli-v0.9.0", true), release("v0.11.0", false)];
-        assert_eq!(select_release(&releases, "test.tar.gz", None).unwrap().1, Version::new(0, 10, 0));
+        let releases = vec![
+            release("v0.10.0", true),
+            release("cli-v0.9.0", true),
+            release("v0.11.0", false),
+        ];
+        assert_eq!(
+            select_release(&releases, "test.tar.gz", None).unwrap().1,
+            Version::new(0, 10, 0)
+        );
         assert!(select_release(&releases, "other.tar.gz", None).is_none());
     }
 
     #[test]
     fn selection_prefers_cli_and_excludes_unstable_releases() {
-        let mut draft = release("v9.0.0", true); draft.draft = true;
-        let releases = vec![draft, release("v1.0.0", true), release("cli-v1.0.0", true), release("v2.0.0-rc.1", true)];
-        assert_eq!(select_release(&releases, "test.tar.gz", None).unwrap().0.tag_name, "cli-v1.0.0");
+        let mut draft = release("v9.0.0", true);
+        draft.draft = true;
+        let releases = vec![
+            draft,
+            release("v1.0.0", true),
+            release("cli-v1.0.0", true),
+            release("v2.0.0-rc.1", true),
+        ];
+        assert_eq!(
+            select_release(&releases, "test.tar.gz", None)
+                .unwrap()
+                .0
+                .tag_name,
+            "cli-v1.0.0"
+        );
         assert!(select_release(&releases, "test.tar.gz", Some(&Version::new(0, 1, 0))).is_none());
     }
 
@@ -277,8 +341,11 @@ mod tests {
         let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         let mut tar = tar::Builder::new(encoder);
         let mut header = tar::Header::new_gnu();
-        header.set_size(4); header.set_mode(0o755); header.set_cksum();
-        tar.append_data(&mut header, "bytetide", &b"test"[..]).unwrap();
+        header.set_size(4);
+        header.set_mode(0o755);
+        header.set_cksum();
+        tar.append_data(&mut header, "bytetide", &b"test"[..])
+            .unwrap();
         let bytes = tar.into_inner().unwrap().finish().unwrap();
         assert_eq!(extract_binary(&bytes).unwrap(), b"test");
         assert!(extract_binary(b"corrupt").is_err());
@@ -314,7 +381,9 @@ mod tests {
         assert_eq!(std::fs::read(&target).unwrap(), b"old binary");
         install(binary, &link, &Version::new(1, 0, 0)).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), binary);
-        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
-
 }
