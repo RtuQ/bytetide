@@ -8,6 +8,7 @@ mod input;
 mod ports;
 mod render;
 mod scenario;
+mod update;
 
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;
@@ -31,6 +32,7 @@ const PULL_MAX: usize = 5000;
 fn main() {
     let cli = Cli::parse();
     let code = match cli.command {
+        Command::Update(a) => update::cmd_update(&a),
         Command::List => cmd_list(),
         Command::Monitor(a) => cmd_monitor(&a),
         Command::Run(a) => scenario::cmd_run(&a),

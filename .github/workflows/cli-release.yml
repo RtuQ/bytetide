@@ -42,7 +42,7 @@ jobs:
       - name: Add cross-compile target
         run: rustup target add ${{ matrix.target }}
 
-      # 发布预检：四份清单版本一致（cli-v* 命名空间不以 v 开头，checker 按设计忽略）
+      # 发布预检：四份清单版本一致（v* / cli-v* 均须匹配 workspace）
       - name: Release preflight
         run: node scripts/check-release-version.mjs
 
@@ -118,11 +118,23 @@ jobs:
             -C target/${{ matrix.target }}/release bytetide \
             -C "$GITHUB_WORKSPACE" README-CLI.txt
 
+      - name: Checksum archive
+        shell: bash
+        run: |
+          archive="bytetide-${{ matrix.target }}.tar.gz"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$archive" > "$archive.sha256"
+          else
+            shasum -a 256 "$archive" > "$archive.sha256"
+          fi
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: bytetide-${{ matrix.target }}
-          path: bytetide-${{ matrix.target }}.tar.gz
+          path: |
+            bytetide-${{ matrix.target }}.tar.gz
+            bytetide-${{ matrix.target }}.tar.gz.sha256
           if-no-files-found: error
 
       # 独立 cli-v* 推送照旧直接建 Release；被 v* 桌面流程调用时 publish=false，
@@ -131,4 +143,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') && (github.event_name != 'workflow_call' || inputs.publish)
         uses: softprops/action-gh-release@v3
         with:
-          files: bytetide-*.tar.gz
+          files: |
+            bytetide-*.tar.gz
+            bytetide-*.tar.gz.sha256

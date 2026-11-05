@@ -19,6 +19,8 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 #[allow(clippy::large_enum_variant)] // Monitor/Run Args 仅一个变体持有，装箱无收益
 pub enum Command {
+    /// 显式检查并更新 CLI（仅此命令访问更新服务）
+    Update(UpdateArgs),
     /// 列出可用串口
     List,
     /// 监控数据源（串口 / TCP / UDP），Ctrl-C 或 /quit 退出
@@ -469,4 +471,15 @@ mod tests {
         assert_eq!(c.transport.as_deref(), Some("tcp-client"));
         assert_eq!(c.tcp_port, Some(9000));
     }
+}
+
+/// 显式更新选项；不参与 monitor/run 的初始化。
+#[derive(clap::Args, Debug)]
+pub struct UpdateArgs {
+    /// 只检查，不下载和安装
+    #[arg(long)]
+    pub check: bool,
+    /// 指定稳定版本（允许显式降级），例如 0.8.0
+    #[arg(long, value_name = "VERSION")]
+    pub version: Option<String>,
 }
