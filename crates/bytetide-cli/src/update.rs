@@ -68,29 +68,56 @@ fn select_release<'a>(
         })
 }
 
+fn available_release<'a>(
+    releases: &'a [Release],
+    archive: &str,
+    pinned: Option<&Version>,
+) -> Result<Option<(&'a Release, Version)>> {
+    let release = select_release(releases, archive, pinned);
+    if release.is_none() && pinned.is_some() {
+        bail!(crate::i18n::text(
+            "指定版本没有适用于当前平台的完整发布包",
+            "The requested version has no complete package for this platform"
+        ));
+    }
+    Ok(release)
+}
+
 /// 将编译平台映射到现有发布产物；GNU Linux 也使用静态 musl 包。
 fn target() -> Result<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => Ok("x86_64-unknown-linux-musl"),
         ("linux", "aarch64") => Ok("aarch64-unknown-linux-musl"),
         ("macos", "aarch64") => Ok("aarch64-apple-darwin"),
-        _ => bail!("此平台暂不支持 CLI 自动更新，请手动下载安装"),
+        _ => bail!(crate::i18n::text(
+            "此平台暂不支持 CLI 自动更新，请手动下载安装",
+            "CLI updates are not supported on this platform; install manually"
+        )),
     }
 }
 
 /// HTTPS 下载带总超时和大小上限；禁止通过重定向降级到 HTTP。
 fn download(client: &Client, url: &str, limit: u64) -> Result<Vec<u8>> {
     if !url.starts_with("https://") {
-        bail!("拒绝非 HTTPS 更新地址");
+        bail!(crate::i18n::text(
+            "拒绝非 HTTPS 更新地址",
+            "Non-HTTPS update URL rejected"
+        ));
     }
     let response = client.get(url).send()?.error_for_status()?;
     if response.content_length().is_some_and(|size| size > limit) {
-        bail!("更新响应超过大小限制");
+        bail!(crate::i18n::text(
+            "更新响应超过大小限制",
+            "Update response exceeds the size limit"
+        ));
     }
     let mut bytes = Vec::new();
     response.take(limit + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > limit {
-        bail!("更新响应超过大小限制");
+        bail!(crate::i18n::text(
+            "更新响应超过大小限制",
+            "Update response exceeds the size limit"
+        ));
     }
     Ok(bytes)
 }
@@ -100,14 +127,23 @@ fn verify_checksum(bytes: &[u8], sidecar: &[u8], name: &str) -> Result<()> {
     let text = std::str::from_utf8(sidecar)?;
     let fields: Vec<_> = text.split_whitespace().collect();
     if fields.len() != 2 || fields[1].trim_start_matches('*') != name {
-        bail!("校验文件格式或文件名错误");
+        bail!(crate::i18n::text(
+            "校验文件格式或文件名错误",
+            "Invalid checksum file or filename"
+        ));
     }
     let expected = fields[0];
     if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
-        bail!("无效 SHA-256 校验值");
+        bail!(crate::i18n::text(
+            "无效 SHA-256 校验值",
+            "Invalid SHA-256 checksum"
+        ));
     }
     if format!("{:x}", Sha256::digest(bytes)) != expected.to_ascii_lowercase() {
-        bail!("SHA-256 校验失败，原程序未修改");
+        bail!(crate::i18n::text(
+            "SHA-256 校验失败，原程序未修改",
+            "SHA-256 verification failed; the existing program was not changed"
+        ));
     }
     Ok(())
 }
@@ -119,7 +155,10 @@ fn extract_binary(archive: &[u8]) -> Result<Vec<u8>> {
     let mut unpacked = Vec::new();
     decoder.take(limit + 1).read_to_end(&mut unpacked)?;
     if unpacked.len() as u64 > limit {
-        bail!("解压后的更新包超过大小限制");
+        bail!(crate::i18n::text(
+            "解压后的更新包超过大小限制",
+            "Extracted update exceeds the size limit"
+        ));
     }
     let mut tar = tar::Archive::new(std::io::Cursor::new(unpacked));
     let mut binary = None;
@@ -129,7 +168,10 @@ fn extract_binary(archive: &[u8]) -> Result<Vec<u8>> {
             continue;
         }
         if binary.is_some() || !entry.header().entry_type().is_file() || entry.size() > MAX_BINARY {
-            bail!("更新包内的 bytetide 文件无效");
+            bail!(crate::i18n::text(
+                "更新包内的 bytetide 文件无效",
+                "Invalid bytetide file in the update archive"
+            ));
         }
         let mut bytes = Vec::new();
         entry
@@ -137,11 +179,19 @@ fn extract_binary(archive: &[u8]) -> Result<Vec<u8>> {
             .take(MAX_BINARY + 1)
             .read_to_end(&mut bytes)?;
         if bytes.is_empty() || bytes.len() as u64 > MAX_BINARY {
-            bail!("更新二进制为空或超过大小限制");
+            bail!(crate::i18n::text(
+                "更新二进制为空或超过大小限制",
+                "Update binary is empty or exceeds the size limit"
+            ));
         }
         binary = Some(bytes);
     }
-    binary.ok_or_else(|| anyhow!("更新包缺少 bytetide"))
+    binary.ok_or_else(|| {
+        anyhow!(crate::i18n::text(
+            "更新包缺少 bytetide",
+            "Update archive does not contain bytetide"
+        ))
+    })
 }
 
 /// 同目录暂存、验证版本后原子替换；失败自动清理临时文件，保留旧程序。
@@ -149,10 +199,15 @@ fn extract_binary(archive: &[u8]) -> Result<Vec<u8>> {
 fn install(binary: &[u8], destination: &Path, version: &Version) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let destination = destination.canonicalize()?;
-    let parent = destination.parent().context("安装目录无效")?;
+    let parent = destination.parent().context(crate::i18n::text(
+        "安装目录无效",
+        "Invalid installation directory",
+    ))?;
     let mode = std::fs::metadata(&destination)?.permissions().mode() & 0o777;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)
-        .context("安装目录不可写，请以拥有该目录写权限的用户更新")?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent).context(crate::i18n::text(
+        "安装目录不可写，请以拥有该目录写权限的用户更新",
+        "Installation directory is not writable",
+    ))?;
     temporary.write_all(binary)?;
     temporary
         .as_file()
@@ -170,7 +225,10 @@ fn install(binary: &[u8], destination: &Path, version: &Version) -> Result<()> {
         if std::time::Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            bail!("新程序版本验证超时，原程序未修改");
+            bail!(crate::i18n::text(
+                "新程序版本验证超时，原程序未修改",
+                "Version verification timed out; the existing program was not changed"
+            ));
         }
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -178,17 +236,26 @@ fn install(binary: &[u8], destination: &Path, version: &Version) -> Result<()> {
     if !output.status.success()
         || String::from_utf8_lossy(&output.stdout).trim() != format!("bytetide {version}")
     {
-        bail!("新程序版本验证失败，原程序未修改");
+        bail!(crate::i18n::text(
+            "新程序版本验证失败，原程序未修改",
+            "Version verification failed; the existing program was not changed"
+        ));
     }
-    temporary
-        .persist(&destination)
-        .map_err(|error| anyhow!("替换失败: {error}"))?;
+    temporary.persist(&destination).map_err(|error| {
+        anyhow!(
+            "{}: {error}",
+            crate::i18n::text("替换失败", "Replacement failed")
+        )
+    })?;
     Ok(())
 }
 
 #[cfg(not(unix))]
 fn install(_binary: &[u8], _destination: &Path, _version: &Version) -> Result<()> {
-    bail!("此平台暂不支持 CLI 自动更新")
+    bail!(crate::i18n::text(
+        "此平台暂不支持 CLI 自动更新",
+        "CLI updates are not supported on this platform"
+    ))
 }
 
 /// 更新命令的唯一联网入口；未显式指定版本时不降级。
@@ -200,7 +267,10 @@ fn run(args: &UpdateArgs) -> Result<()> {
         .map(|text| -> Result<Version> {
             let version = Version::parse(text.strip_prefix('v').unwrap_or(text))?;
             if !version.pre.is_empty() || !version.build.is_empty() {
-                bail!("仅支持稳定版本");
+                bail!(crate::i18n::text(
+                    "仅支持稳定版本",
+                    "Only stable versions are supported"
+                ));
             }
             Ok(version)
         })
@@ -225,14 +295,28 @@ fn run(args: &UpdateArgs) -> Result<()> {
             break;
         }
         if page >= 100 {
-            bail!("发布列表超过分页限制，请指定手动下载");
+            bail!(crate::i18n::text(
+                "发布列表超过分页限制，请指定手动下载",
+                "Release list exceeds pagination limit; download manually"
+            ));
         }
     }
-    let (release, version) = select_release(&releases, &archive, pinned.as_ref())
-        .context("没有包含当前平台程序及 SHA-256 校验文件的正式发布")?;
+    let Some((release, version)) = available_release(&releases, &archive, pinned.as_ref())? else {
+        eprintln!(
+            "{}",
+            crate::i18n::text("暂无可用更新", "No updates available")
+        );
+        return Ok(());
+    };
     let current = Version::parse(env!("CARGO_PKG_VERSION"))?;
     if version == current || (pinned.is_none() && version < current) {
-        eprintln!("当前已是最新版或指定版本：{current}");
+        eprintln!(
+            "{} {current}",
+            crate::i18n::text(
+                "当前已是最新版或指定版本：",
+                "Already at the latest or requested version:"
+            )
+        );
         return Ok(());
     }
     eprintln!("ByteTide CLI：{current} → {version}");
@@ -245,15 +329,23 @@ fn run(args: &UpdateArgs) -> Result<()> {
             .iter()
             .find(|asset| asset.name == name)
             .map(|asset| asset.browser_download_url.as_str())
-            .context("发布产物缺失")
+            .context(crate::i18n::text("发布产物缺失", "Release asset missing"))
     };
     let checksum = download(&client, asset_url(&format!("{archive}.sha256"))?, 4096)?;
-    eprintln!("正在下载 {}…", release.tag_name);
+    eprintln!(
+        "{} {}…",
+        crate::i18n::text("正在下载", "Downloading"),
+        release.tag_name
+    );
     let bytes = download(&client, asset_url(&archive)?, MAX_ARCHIVE)?;
     verify_checksum(&bytes, &checksum, &archive)?;
     let binary = extract_binary(&bytes)?;
     install(&binary, &std::env::current_exe()?, &version)?;
-    eprintln!("已更新至 {version}，下次运行生效");
+    eprintln!(
+        "{} {version}{}",
+        crate::i18n::text("已更新至", "Updated to"),
+        crate::i18n::text("，下次运行生效", "; takes effect on next run")
+    );
     Ok(())
 }
 
@@ -262,7 +354,10 @@ pub fn cmd_update(args: &UpdateArgs) -> i32 {
     match run(args) {
         Ok(()) => 0,
         Err(error) => {
-            eprintln!("更新失败：{error:#}");
+            eprintln!(
+                "{} {error:#}",
+                crate::i18n::text("更新失败：", "Update failed:")
+            );
             1
         }
     }
@@ -306,6 +401,15 @@ mod tests {
             Version::new(0, 10, 0)
         );
         assert!(select_release(&releases, "other.tar.gz", None).is_none());
+    }
+
+    #[test]
+    fn missing_release_is_only_an_error_for_pinned_versions() {
+        let releases = vec![release("v1.0.0", false)];
+        assert!(available_release(&releases, "test.tar.gz", None)
+            .unwrap()
+            .is_none());
+        assert!(available_release(&releases, "test.tar.gz", Some(&Version::new(1, 0, 0))).is_err());
     }
 
     #[test]

@@ -4,6 +4,7 @@
 
 mod args;
 mod clisink;
+mod i18n;
 mod input;
 mod ports;
 mod render;

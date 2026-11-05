@@ -9,7 +9,7 @@ use clap::{ArgGroup, Parser, Subcommand};
 #[command(
     name = "bytetide",
     version,
-    about = "ByteTide CLI：无 UI 的串口/网络日志监控（数据行走 stdout，提示走 stderr）"
+    about = crate::i18n::text("ByteTide CLI：无 UI 的串口/网络日志监控（数据行走 stdout，提示走 stderr）", "ByteTide CLI: serial and network monitoring (data on stdout, messages on stderr)")
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -20,14 +20,16 @@ pub struct Cli {
 #[allow(clippy::large_enum_variant)] // Monitor/Run Args 仅一个变体持有，装箱无收益
 pub enum Command {
     /// 显式检查并更新 CLI（仅此命令访问更新服务）
+    #[command(about = crate::i18n::text("显式检查并更新 CLI（仅此命令访问更新服务）", "Check for and install CLI updates"))]
     Update(UpdateArgs),
     /// 列出可用串口
+    #[command(about = crate::i18n::text("列出可用串口", "List available serial ports"))]
     List,
     /// 监控数据源（串口 / TCP / UDP），Ctrl-C 或 /quit 退出
-    #[command(after_help = AFTER_HELP)]
+    #[command(about = crate::i18n::text("监控数据源（串口 / TCP / UDP），Ctrl-C 或 /quit 退出", "Monitor a serial, TCP, or UDP source; exit with Ctrl-C or /quit"), after_help = crate::i18n::text(AFTER_HELP, AFTER_HELP_EN))]
     Monitor(MonitorArgs),
     /// 执行自动化场景（进度/错误走 stderr，报告只写 --report 文件）
-    #[command(after_help = RUN_AFTER_HELP)]
+    #[command(about = crate::i18n::text("执行自动化场景（进度/错误走 stderr，报告只写 --report 文件）", "Run an automation scenario"), after_help = crate::i18n::text(RUN_AFTER_HELP, RUN_AFTER_HELP_EN))]
     Run(RunArgs),
 }
 
@@ -51,38 +53,41 @@ pub const RUN_AFTER_HELP: &str =
 报告只写入 --report 文件（--report - 时写 stdout，此为唯一 stdout 输出）；
 进度与错误始终走 stderr。格式：--report-format json|junit（默认 json）。";
 
+const AFTER_HELP_EN: &str = "Without a data source, interactive terminals prompt for a serial port.\n\nInteractive commands: Enter sends text; /hex sends hex; /mode selects ASCII or HEX; /quit exits.\nRecording templates support %Y %M %D %H %h %m %s %t and %%. --retry reconnects after disconnection.";
+const RUN_AFTER_HELP_EN: &str = "A data source is required. Exit codes: 0 passed, 1 runtime error, 2 invalid input, 3 assertion failure, 130 interrupted. Reports are written only with --report; --report - writes to stdout.";
+
 /// 数据源与串口参数（monitor / run 共用，flate 进两者；arg id 供互斥组引用）。
 #[derive(clap::Args, Debug)]
 pub struct SourceArgs {
     /// 串口路径（如 COM3、/dev/ttyUSB0）
-    #[arg(short, long, value_name = "PATH")]
+    #[arg(short, long, value_name = "PATH", help = crate::i18n::text("串口路径（如 COM3、/dev/ttyUSB0）", "Serial port path (e.g. COM3 or /dev/ttyUSB0)"))]
     pub port: Option<String>,
     /// 波特率
-    #[arg(long, default_value_t = 115200)]
+    #[arg(long, default_value_t = 115200, help = crate::i18n::text("波特率", "Baud rate"))]
     pub baud: u32,
     /// 数据位 5-8
-    #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u8).range(5..=8))]
+    #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u8).range(5..=8), help = crate::i18n::text("数据位 5-8", "Data bits (5–8)"))]
     pub data: u8,
     /// 校验位
-    #[arg(long, default_value = "none", value_parser = ["none", "odd", "even"])]
+    #[arg(long, default_value = "none", value_parser = ["none", "odd", "even"], help = crate::i18n::text("校验位", "Parity"))]
     pub parity: String,
     /// 停止位
-    #[arg(long, default_value = "1", value_parser = ["1", "2"])]
+    #[arg(long, default_value = "1", value_parser = ["1", "2"], help = crate::i18n::text("停止位", "Stop bits"))]
     pub stop: String,
     /// 流控
-    #[arg(long, default_value = "none", value_parser = ["none", "software", "hardware"])]
+    #[arg(long, default_value = "none", value_parser = ["none", "software", "hardware"], help = crate::i18n::text("流控", "Flow control"))]
     pub flow: String,
     /// TCP 客户端，连接 HOST:PORT
-    #[arg(long, value_name = "HOST:PORT")]
+    #[arg(long, value_name = "HOST:PORT", help = crate::i18n::text("TCP 客户端，连接 HOST:PORT", "TCP client endpoint HOST:PORT"))]
     pub tcp: Option<String>,
     /// TCP 服务端监听端口（绑定 0.0.0.0，接受首个接入）
-    #[arg(long, value_name = "PORT")]
+    #[arg(long, value_name = "PORT", help = crate::i18n::text("TCP 服务端监听端口（绑定 0.0.0.0，接受首个接入）", "TCP server port (binds 0.0.0.0; accepts the first client)"))]
     pub tcp_listen: Option<u16>,
     /// UDP 监听端口
-    #[arg(long, value_name = "PORT")]
+    #[arg(long, value_name = "PORT", help = crate::i18n::text("UDP 监听端口", "UDP listen port"))]
     pub udp: Option<u16>,
     /// 会话名（网络源用作录制模板 %H 与提示）
-    #[arg(long, value_name = "NAME")]
+    #[arg(long, value_name = "NAME", help = crate::i18n::text("会话名（网络源用作录制模板 %H 与提示）", "Session name (used in the recording template and messages)"))]
     pub id: Option<String>,
 }
 
@@ -94,28 +99,28 @@ pub struct MonitorArgs {
     #[command(flatten)]
     pub source: SourceArgs,
     /// 录制文件路径/模板（缺省不录制；token 见帮助尾注）
-    #[arg(short = 'o', long, value_name = "PATH|TEMPLATE")]
+    #[arg(short = 'o', long, value_name = "PATH|TEMPLATE", help = crate::i18n::text("录制文件路径/模板（缺省不录制；token 见帮助尾注）", "Recording path or template (disabled by default)"))]
     pub record: Option<String>,
     /// 每行显示时间戳（默认关）
-    #[arg(long)]
+    #[arg(long, help = crate::i18n::text("每行显示时间戳（默认关）", "Show timestamps"))]
     pub ts: bool,
     /// 时间戳格式 token（如 %h:%m:%s.%t；隐含 --ts）
-    #[arg(long, value_name = "FMT")]
+    #[arg(long, value_name = "FMT", help = crate::i18n::text("时间戳格式 token（如 %h:%m:%s.%t；隐含 --ts）", "Timestamp format (implies --ts)"))]
     pub ts_format: Option<String>,
     /// JSON Lines 输出（每行一个 JSON 对象，忽略 --ts）
-    #[arg(long)]
+    #[arg(long, help = crate::i18n::text("JSON Lines 输出（每行一个 JSON 对象，忽略 --ts）", "Output JSON Lines (ignores --ts)"))]
     pub json: bool,
     /// 禁用颜色（NO_COLOR 环境变量与非终端 stdout 同样生效）
-    #[arg(long)]
+    #[arg(long, help = crate::i18n::text("禁用颜色（NO_COLOR 环境变量与非终端 stdout 同样生效）", "Disable colors"))]
     pub no_color: bool,
     /// 意外断开后的重连次数（间隔 1 秒）
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, default_value_t = 0, help = crate::i18n::text("意外断开后的重连次数（间隔 1 秒）", "Retry count after unexpected disconnection (1 second apart)"))]
     pub retry: u32,
     /// ASCII 发送追加换行（默认行为，显式写法；与 --no-newline 同给时优先）
-    #[arg(long)]
+    #[arg(long, help = crate::i18n::text("ASCII 发送追加换行（默认行为，显式写法；与 --no-newline 同给时优先）", "Append newline to ASCII sends (default)"))]
     pub newline: bool,
     /// ASCII 发送不追加换行
-    #[arg(long)]
+    #[arg(long, help = crate::i18n::text("ASCII 发送不追加换行", "Do not append newline to ASCII sends"))]
     pub no_newline: bool,
 }
 
@@ -129,16 +134,16 @@ pub struct MonitorArgs {
 ))]
 pub struct RunArgs {
     /// 场景 JSON 文件路径
-    #[arg(short, long, value_name = "FILE")]
+    #[arg(short, long, value_name = "FILE", help = crate::i18n::text("场景 JSON 文件路径", "Scenario JSON file"))]
     pub scenario: PathBuf,
     /// 数据源与串口参数
     #[command(flatten)]
     pub source: SourceArgs,
     /// 报告输出文件（"-" = stdout；缺省不写报告文件）
-    #[arg(long, value_name = "FILE")]
+    #[arg(long, value_name = "FILE", help = crate::i18n::text("报告输出文件（\"-\" = stdout；缺省不写报告文件）", "Report file (\"-\" writes to stdout)"))]
     pub report: Option<String>,
     /// 报告格式
-    #[arg(long, value_name = "FORMAT", default_value = "json", value_parser = ["json", "junit"])]
+    #[arg(long, value_name = "FORMAT", default_value = "json", value_parser = ["json", "junit"], help = crate::i18n::text("报告格式", "Report format"))]
     pub report_format: String,
 }
 
@@ -477,9 +482,9 @@ mod tests {
 #[derive(clap::Args, Debug)]
 pub struct UpdateArgs {
     /// 只检查，不下载和安装
-    #[arg(long)]
+    #[arg(long, help = crate::i18n::text("只检查，不下载和安装", "Check for updates without installing"))]
     pub check: bool,
     /// 指定稳定版本（允许显式降级），例如 0.8.0
-    #[arg(long, value_name = "VERSION")]
+    #[arg(long, value_name = "VERSION", help = crate::i18n::text("指定稳定版本（允许显式降级），例如 0.8.0", "Install a specific stable version (downgrades allowed), e.g. 0.8.0"))]
     pub version: Option<String>,
 }
