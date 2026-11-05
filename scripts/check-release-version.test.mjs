@@ -29,6 +29,12 @@ test('accepts four equal versions without a tag', () => {
   assert.equal(checkVersions({ npm: '0.5.1', workspace: '0.5.1', desktop: '0.5.1', tauri: '0.5.1' }), '0.5.1')
 })
 
-test('ignores a tag that does not start with v', () => {
-  assert.equal(checkVersions({ npm: '0.5.1', workspace: '0.5.1', desktop: '0.5.1', tauri: '0.5.1' }, 'cli-v0.1.0'), '0.5.1')
+test('ignores an unrelated tag', () => {
+  assert.equal(checkVersions({ npm: '0.5.1', workspace: '0.5.1', desktop: '0.5.1', tauri: '0.5.1' }, 'docs-0.1.0'), '0.5.1')
+})
+
+test('CLI release tag must match workspace version', () => {
+  const versions = { npm: '0.5.1', workspace: '0.5.1', desktop: '0.5.1', tauri: '0.5.1' }
+  assert.equal(checkVersions(versions, 'cli-v0.5.1'), '0.5.1')
+  assert.throws(() => checkVersions(versions, 'cli-v0.6.0'), /tag version/)
 })

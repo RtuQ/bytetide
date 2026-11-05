@@ -74,3 +74,44 @@ jobs:
       # 组件测试（jsdom + @vue/test-utils，独立 vitest project）
       - name: Component tests
         run: npm run test:components
+
+  cli-install-and-update:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Bootstrap installer tests
+        run: python3 scripts/test-cli-install.py
+      - name: Shell syntax and offline help
+        run: |
+          sh -n scripts/install.sh
+          sh scripts/install.sh --help
+      - name: Resolve CLI dependencies and format Rust
+        run: |
+          cargo metadata --format-version 1 > /dev/null
+          cargo fmt --all
+      - name: Upload resolved Rust files
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli-resolved-rust
+          path: |
+            Cargo.lock
+            crates/bytetide-cli/src/update.rs
+            crates/bytetide-cli/src/args.rs
+            crates/bytetide-cli/tests/cli_update.rs
+      - name: CLI tests and smoke
+        run: |
+          cargo test -p bytetide-cli
+          cargo run -p bytetide-cli -- update --help
+      - name: CLI clippy
+        run: cargo clippy -p bytetide-cli --all-targets -- -D warnings
