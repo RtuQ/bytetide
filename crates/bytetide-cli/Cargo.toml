@@ -27,3 +27,4 @@ sha2 = "0.10"
 flate2 = "1"
 tar = "0.4"
 tempfile = "3"
+parking_lot = { workspace = true }
